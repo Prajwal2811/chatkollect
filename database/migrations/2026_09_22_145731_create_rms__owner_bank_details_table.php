@@ -10,11 +10,9 @@ return new class extends Migration
     {
         Schema::create('rms_owner_bank_details', function (Blueprint $table) {
             $table->id();
-
             $table->foreignId('owner_id')
                 ->constrained('rms_owners')
                 ->cascadeOnDelete();
-
             $table->string('account_holder_name');
             $table->string('bank_name');
             $table->string('account_number');
