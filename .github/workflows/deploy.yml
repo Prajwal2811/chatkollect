@@ -17,6 +17,22 @@ jobs:
           echo "GitHub Actions is working!"
           echo "Deploying commit: $GITHUB_SHA"
 
+      - name: Check SSH Key
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          echo "Checking SSH key..."
+
+          if [ -z "$SSH_KEY" ]; then
+            echo "ERROR: SERVER_SSH_KEY is EMPTY"
+            exit 1
+          fi
+
+          echo "$SSH_KEY" | head -n 1
+          echo "$SSH_KEY" | tail -n 1
+
+          echo "SSH key secret is present."
+
       - name: Deploy to CloudPanel Server
         uses: appleboy/ssh-action@v1.2.0
         with:
