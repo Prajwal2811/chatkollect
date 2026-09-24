@@ -2878,7 +2878,26 @@ class OwnerController extends Controller
         $validator = Validator::make($request->all(), [
             'id'            => 'required|integer|exists:rms_tally_ledgers,id',
             'under'         => 'required|string|in:Sundry Debtors,Sundry Creditors',
-            'mobile'        => 'nullable|string|max:20',
+            'mobile'        => ['nullable', 'string', 'max:255', function ($attribute, $value, $fail) {
+                if (empty($value)) {
+                    return;
+                }
+
+                // Mobile numbers arrive as a comma-separated string,
+                // e.g. "9876543210,9123456780". Validate each piece.
+                $numbers = array_filter(array_map('trim', explode(',', $value)));
+
+                if (empty($numbers)) {
+                    return;
+                }
+
+                foreach ($numbers as $number) {
+                    if (!preg_match('/^\d{10}$/', $number)) {
+                        $fail("\"{$number}\" is not a valid mobile number. It must be exactly 10 digits.");
+                        return;
+                    }
+                }
+            }],
             'balance_limit' => 'nullable|numeric|min:0',
             'overlimit'     => 'nullable|string',
             'mark'          => 'nullable|in:red,green,unmarked',
@@ -2900,6 +2919,13 @@ class OwnerController extends Controller
                 'success' => false,
                 'errors'  => ['red_reason' => ['Reason is required when marked red.']],
             ], 422);
+        }
+
+        // Normalize the mobile number list: trim, drop duplicates, rejoin with a
+        // single comma and no stray spaces, so what's stored is always clean.
+        if (!empty($data['mobile'])) {
+            $numbers = array_filter(array_map('trim', explode(',', $data['mobile'])));
+            $data['mobile'] = implode(',', array_values(array_unique($numbers)));
         }
 
         $tallyCompany = TallyCompany::where('owner_id', $owner->id)

@@ -105,6 +105,32 @@
                 font-size: 13px;
                 cursor: help;
             }
+
+            /* Multi mobile number rows in the edit modal */
+            .mobile-number-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 8px;
+            }
+            .mobile-number-row .mobile-number-input {
+                flex: 1 1 auto;
+            }
+            .remove-mobile-row {
+                flex: 0 0 auto;
+                line-height: 1;
+            }
+
+            /* Each mobile number on its own line in the table cell */
+            .cell-mobile {
+                word-break: break-word;
+            }
+            .cell-mobile .mobile-line {
+                white-space: nowrap;
+            }
+            .cell-mobile .mobile-line + .mobile-line {
+                margin-top: 2px;
+            }
         </style>
 
         <div class="container-fluid">
@@ -226,7 +252,18 @@
                                                     <tr data-credit-source="{{ $creditSrc }}">
                                                         <td>{{ $index + 1 }}</td>
                                                         <td>{{ $l['name'] }}</td>
-                                                        <td class="cell-mobile">{{ $l['mobile'] ?? '-' }}</td>
+                                                        <td class="cell-mobile">
+                                                            @php
+                                                                $mobileNumbers = !empty($l['mobile'])
+                                                                    ? array_filter(array_map('trim', explode(',', $l['mobile'])))
+                                                                    : [];
+                                                            @endphp
+                                                            @forelse($mobileNumbers as $num)
+                                                                <div class="mobile-line">{{ $num }}</div>
+                                                            @empty
+                                                                -
+                                                            @endforelse
+                                                        </td>
                                                         <td>
                                                             {{ !empty($l['credit_period']) ? $l['credit_period'] : '-' }}
                                                             @if(!empty($l['credit_period']))
@@ -292,7 +329,18 @@
                                                     <tr data-credit-source="{{ $creditSrc }}">
                                                         <td>{{ $index + 1 }}</td>
                                                         <td>{{ $l['name'] }}</td>
-                                                        <td class="cell-mobile">{{ $l['mobile'] ?? '-' }}</td>
+                                                        <td class="cell-mobile">
+                                                            @php
+                                                                $mobileNumbers = !empty($l['mobile'])
+                                                                    ? array_filter(array_map('trim', explode(',', $l['mobile'])))
+                                                                    : [];
+                                                            @endphp
+                                                            @forelse($mobileNumbers as $num)
+                                                                <div class="mobile-line">{{ $num }}</div>
+                                                            @empty
+                                                                -
+                                                            @endforelse
+                                                        </td>
                                                         <td>
                                                             {{ !empty($l['credit_period']) ? $l['credit_period'] : '-' }}
                                                             @if(!empty($l['credit_period']))
@@ -344,8 +392,12 @@
                     <input type="hidden" id="modal_under">
 
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Mobile Number</label>
-                        <input type="text" class="form-control" id="modal_mobile" placeholder="Enter mobile number">
+                        <label class="form-label fw-semibold">Mobile Number(s)</label>
+                        <div id="modal_mobile_container"></div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary mt-1" id="addMobileFieldBtn">
+                            <i class="fa fa-plus"></i> Add another number
+                        </button>
+                        <small class="form-text text-muted d-block mt-1">You can add more than one mobile number.</small>
                     </div>
 
                     <!-- Full fields (debtors only) -->
@@ -389,6 +441,78 @@
     <script>
         let currentMode = 'full';
 
+        // ---------- Multi mobile-number field helpers ----------
+
+        function updateRemoveButtonsVisibility() {
+            const $rows = $('#modal_mobile_container .mobile-number-row');
+            $rows.find('.remove-mobile-row').toggle($rows.length > 1);
+        }
+
+        function addMobileRow(value = '') {
+            let $row = $(`
+                <div class="mobile-number-row">
+                    <input type="text" class="form-control mobile-number-input" placeholder="e.g. 9876543210" inputmode="numeric" pattern="[0-9]*" maxlength="10">
+                    <button type="button" class="btn btn-sm btn-outline-danger remove-mobile-row" title="Remove">&times;</button>
+                </div>
+            `);
+            $row.find('.mobile-number-input').val(value);
+            $('#modal_mobile_container').append($row);
+            updateRemoveButtonsVisibility();
+        }
+
+        // Splits a stored "9876543210,9123456780" string into one input row per number.
+        function renderMobileFields(mobileString) {
+            $('#modal_mobile_container').empty();
+
+            let numbers = (mobileString || '')
+                .split(',')
+                .map(n => n.trim())
+                .filter(n => n.length > 0);
+
+            if (numbers.length === 0) {
+                numbers = [''];
+            }
+
+            numbers.forEach(num => addMobileRow(num));
+        }
+
+        $(document).on('click', '#addMobileFieldBtn', function () {
+            addMobileRow('');
+            $('#modal_mobile_container .mobile-number-input').last().trigger('focus');
+        });
+
+        $(document).on('click', '.remove-mobile-row', function () {
+            $(this).closest('.mobile-number-row').remove();
+            updateRemoveButtonsVisibility();
+        });
+
+        // Strip anything that isn't a digit as the user types (blocks letters, symbols, spaces).
+        $(document).on('input', '.mobile-number-input', function () {
+            let digitsOnly = $(this).val().replace(/\D/g, '');
+            if (digitsOnly !== $(this).val()) {
+                $(this).val(digitsOnly);
+            }
+        });
+
+        // Builds the same "one number per line" markup the Blade view renders,
+        // used when refreshing a row's cell after a successful save.
+        function formatMobileCellHtml(mobileString) {
+            let numbers = (mobileString || '')
+                .split(',')
+                .map(n => n.trim())
+                .filter(Boolean);
+
+            if (numbers.length === 0) {
+                return '-';
+            }
+
+            return numbers
+                .map(n => `<div class="mobile-line">${$('<div>').text(n).html()}</div>`)
+                .join('');
+        }
+
+        // ---------- Edit modal open/save ----------
+
         $(document).on('click', '.edit-ledger-row', function () {
             
             $('.modal-backdrop').remove();
@@ -404,7 +528,7 @@
             $('#modal_id').val($btn.data('id'));
             $('#modal_company').val($btn.data('company'));
             $('#modal_under').val($btn.data('under'));
-            $('#modal_mobile').val($btn.data('mobile'));
+            renderMobileFields($btn.data('mobile'));
 
             if (currentMode === 'full') {
                 $('#modal_full_fields').show();
@@ -431,10 +555,24 @@
         $(document).on('click', '#modalSaveBtn', function () {
             let $btn = $(this);
 
+            // Collect non-empty mobile numbers, de-duplicated, in the order entered.
+            let mobileNumbers = $('#modal_mobile_container .mobile-number-input')
+                .map(function () { return $(this).val().trim(); })
+                .get()
+                .filter(Boolean);
+
+            mobileNumbers = mobileNumbers.filter((num, idx) => mobileNumbers.indexOf(num) === idx);
+
+            let invalidNumber = mobileNumbers.find(num => !/^\d{10}$/.test(num));
+            if (invalidNumber) {
+                showAjaxAlert('danger', `"${invalidNumber}" is not a valid mobile number. It must be exactly 10 digits.`);
+                return;
+            }
+
             let payload = {
                 id:      $('#modal_id').val(),
                 under:   $('#modal_under').val(),
-                mobile:  $('#modal_mobile').val(),
+                mobile:  mobileNumbers.join(','),
                 _token:  "{{ csrf_token() }}"
             };
 
@@ -497,7 +635,7 @@
 
             let $row = $rowBtn.closest('tr');
 
-            $row.find('.cell-mobile').text(payload.mobile || '-');
+            $row.find('.cell-mobile').html(formatMobileCellHtml(payload.mobile));
             $rowBtn.data('mobile', payload.mobile);
             $rowBtn.attr('data-mobile', payload.mobile);
 
