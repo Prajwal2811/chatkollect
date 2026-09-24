@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Test GitHub Actions
+        run: |
+          echo "GitHub Actions is working!"
+          echo "Deploying commit: $GITHUB_SHA"
+
       - name: Deploy to CloudPanel Server
         uses: appleboy/ssh-action@v1.2.0
         with:
