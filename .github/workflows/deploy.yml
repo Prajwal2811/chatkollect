@@ -1,0 +1,46 @@
+name: Deploy ChatKollect
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to CloudPanel Server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /home/chatkollect/htdocs/chatkollect.com
+
+            echo "Fetching latest code..."
+            git fetch origin main
+
+            echo "Resetting to latest main..."
+            git reset --hard origin/main
+
+            echo "Installing Composer dependencies..."
+            /usr/bin/php8.3 $(which composer) install --no-dev --optimize-autoloader
+
+            echo "Running migrations..."
+            /usr/bin/php8.3 artisan migrate --force
+
+            echo "Clearing Laravel cache..."
+            /usr/bin/php8.3 artisan optimize:clear
+
+            echo "Caching config..."
+            /usr/bin/php8.3 artisan config:cache
+
+            echo "Caching routes..."
+            /usr/bin/php8.3 artisan route:cache
+
+            echo "Caching views..."
+            /usr/bin/php8.3 artisan view:cache
+
+            echo "Deployment completed successfully!"
