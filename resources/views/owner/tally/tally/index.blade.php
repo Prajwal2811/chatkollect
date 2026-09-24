@@ -680,45 +680,66 @@
 		{{-- ================= /SYNC LOADING MODAL ================= --}}
 
 		{{-- ================= SYNC DEFAULTS MODAL (Credit Period / Interest Rate) ================= --}}
-		{{-- Sync complete hone ke baad ye modal khulta hai. Sirf un ledgers par apply hoga
-			 jinke credit_period / interest_rate Tally se fetch NAHI hue (source null hai) —
-			 jo already 'tally' se aaye hain unhe kabhi overwrite nahi kiya jaayega. Applied
-			 values ka source 'default' set hoga. --}}
 		<div class="modal fade" id="syncDefaultsModal" tabindex="-1"
-			data-bs-backdrop="static"
-			data-bs-keyboard="false"
+			data-bs-backdrop="static" data-bs-keyboard="false"
 			aria-labelledby="syncDefaultsModalLabel" aria-hidden="true">
-			<div class="modal-dialog modal-dialog-centered">
+			<div class="modal-dialog modal-dialog-centered modal-lg">
 				<div class="modal-content">
 
 					<div class="modal-header">
 						<h5 class="modal-title" id="syncDefaultsModalLabel">
 							<i class="fas fa-sliders-h text-primary me-2"></i>
-							Set Default Credit Period &amp; Interest Rate
+							Set Default Values
 						</h5>
 					</div>
 
 					<div class="modal-body">
 						<p class="text-muted mb-3">
-							Kuch ledgers ke liye Tally se Credit Period ya Interest Rate nahi mila.
-							Unke liye ek default value set kar sakte hain. Jinke liye ye values
-							already Tally se fetch ho chuki hain, unhe touch nahi kiya jaayega.
+							Some ledgers didn't get these values from Tally. You can set separate defaults for Debtors and Creditors — ledgers that already have values fetched from Tally won't be touched.
 						</p>
 
-						<div class="mb-3">
-							<label for="default_credit_period" class="form-label">
-								Default Credit Period (in days)
-							</label>
-							<input type="number" min="0" class="form-control" id="default_credit_period"
-								name="default_credit_period" placeholder="e.g. 30">
-						</div>
+						<div class="row">
+							<div class="col-md-6 mb-3 mb-md-0">
+								<h6 class="fw-bold mb-3"><i class="fas fa-arrow-down text-success me-1"></i> Debtors</h6>
 
-						<div class="mb-3">
-							<label for="default_interest_rate" class="form-label">
-								Default Interest Rate (% per annum)
-							</label>
-							<input type="number" min="0" step="0.01" class="form-control" id="default_interest_rate"
-								name="default_interest_rate" placeholder="e.g. 12">
+								<div class="mb-3">
+									<label class="form-label">Mobile Number</label>
+									<input type="text" class="form-control" id="debtor_mobile_number" placeholder="e.g. 9876543210">
+								</div>
+								<div class="mb-3">
+									<label class="form-label">Credit Period (days)</label>
+									<input type="number" min="0" class="form-control" id="debtor_credit_period" placeholder="e.g. 30">
+								</div>
+								<div class="mb-3">
+									<label class="form-label">Interest Rate (% p.a.)</label>
+									<input type="number" min="0" step="0.01" class="form-control" id="debtor_interest_rate" placeholder="e.g. 12">
+								</div>
+								<div class="mb-3">
+									<label class="form-label">Balance Limit</label>
+									<input type="number" min="0" step="0.01" class="form-control" id="debtor_balance_limit" placeholder="e.g. 50000">
+								</div>
+							</div>
+
+							<div class="col-md-6">
+								<h6 class="fw-bold mb-3"><i class="fas fa-arrow-up text-danger me-1"></i> Creditors</h6>
+
+								<div class="mb-3">
+									<label class="form-label">Mobile Number</label>
+									<input type="text" class="form-control" id="creditor_mobile_number" placeholder="e.g. 9876543210">
+								</div>
+								<div class="mb-3">
+									<label class="form-label">Credit Period (days)</label>
+									<input type="number" min="0" class="form-control" id="creditor_credit_period" placeholder="e.g. 30">
+								</div>
+								<div class="mb-3">
+									<label class="form-label">Interest Rate (% p.a.)</label>
+									<input type="number" min="0" step="0.01" class="form-control" id="creditor_interest_rate" placeholder="e.g. 12">
+								</div>
+								<div class="mb-3">
+									<label class="form-label">Balance Limit</label>
+									<input type="number" min="0" step="0.01" class="form-control" id="creditor_balance_limit" placeholder="e.g. 50000">
+								</div>
+							</div>
 						</div>
 
 						<div id="syncDefaultsMessage"></div>
@@ -1174,10 +1195,25 @@
 				$('#applySyncDefaultsBtn').on('click', function () {
 
 					let applyBtn = $(this);
-					let creditPeriod = $('#default_credit_period').val();
-					let interestRate = $('#default_interest_rate').val();
 
-					if (!creditPeriod && !interestRate) {
+					let debtor = {
+						mobile_number:  $('#debtor_mobile_number').val(),
+						credit_period:  $('#debtor_credit_period').val(),
+						interest_rate:  $('#debtor_interest_rate').val(),
+						balance_limit:  $('#debtor_balance_limit').val(),
+					};
+
+					let creditor = {
+						mobile_number:  $('#creditor_mobile_number').val(),
+						credit_period:  $('#creditor_credit_period').val(),
+						interest_rate:  $('#creditor_interest_rate').val(),
+						balance_limit:  $('#creditor_balance_limit').val(),
+					};
+
+					let hasAnyValue = Object.values(debtor).some(v => v !== '') ||
+									Object.values(creditor).some(v => v !== '');
+
+					if (!hasAnyValue) {
 						$('#syncDefaultsMessage').html(`
 							<div class="alert alert-warning mt-2">
 								Please enter at least one value, or use Skip.
@@ -1196,8 +1232,8 @@
 						type: 'POST',
 						data: {
 							_token: "{{ csrf_token() }}",
-							default_credit_period: creditPeriod,
-							default_interest_rate: interestRate
+							debtor: debtor,
+							creditor: creditor
 						},
 						success: function (response) {
 							$('#syncDefaultsMessage').html(`

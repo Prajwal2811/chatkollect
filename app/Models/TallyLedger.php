@@ -18,6 +18,7 @@ class TallyLedger extends Model
         'ledger_name',
         'ledger_email',
         'ledger_mobile_number',
+        'ledger_mobile_number_source',
         'parent',
         'opening_balance',
         'closing_balance',

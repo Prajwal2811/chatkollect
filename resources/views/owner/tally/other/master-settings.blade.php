@@ -138,8 +138,11 @@
                 $debtorLedgers = collect($ledgers)->filter(fn ($l) => ($l['under'] ?? '') == 'Sundry Debtors')->values();
                 $creditorLedgers = collect($ledgers)->filter(fn ($l) => ($l['under'] ?? '') == 'Sundry Creditors')->values();
 
+                // Full collector list for the "Collector Name" dropdown in the edit modal.
+                $allCollectors = \App\Models\Collector::orderBy('name')->get();
+
                 // Helper: render a small "Tally" / "Default" badge next to a value, based on
-                // credit_period_source / interest_rate_source coming from the backend.
+                // credit_period_source / ledger_mobile_number_source coming from the backend.
                 // Expected values: 'tally' or 'default' (case-insensitive). Anything else -> no badge.
                 $sourceBadge = function ($source) {
                     $source = strtolower(trim((string) $source));
@@ -205,21 +208,41 @@
                                 </ul>
 
                                 <div class="source-filter-bar mb-0">
-                                    <div id="debtorSourceFilterWrapper">
-                                        <label for="debtorCreditSourceFilter">Credit Period Source</label>
-                                        <select id="debtorCreditSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example11" data-column="credit">
-                                            <option value="">All</option>
-                                            <option value="tally">Tally</option>
-                                            <option value="default">Default</option>
-                                        </select>
+                                    <div id="debtorSourceFilterWrapper" class="source-filter-bar mb-0">
+                                        <div>
+                                            <label for="debtorMobileSourceFilter">Mobile Source</label>
+                                            <select id="debtorMobileSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example11" data-column="mobile">
+                                                <option value="">All</option>
+                                                <option value="tally">Tally</option>
+                                                <option value="default">Default</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label for="debtorCreditSourceFilter">Credit Period Source</label>
+                                            <select id="debtorCreditSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example11" data-column="credit">
+                                                <option value="">All</option>
+                                                <option value="tally">Tally</option>
+                                                <option value="default">Default</option>
+                                            </select>
+                                        </div>
                                     </div>
-                                    <div id="creditorSourceFilterWrapper" class="d-none">
-                                        <label for="creditorCreditSourceFilter">Credit Period Source</label>
-                                        <select id="creditorCreditSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example" data-column="credit">
-                                            <option value="">All</option>
-                                            <option value="tally">Tally</option>
-                                            <option value="default">Default</option>
-                                        </select>
+                                    <div id="creditorSourceFilterWrapper" class="source-filter-bar mb-0 d-none">
+                                        <div>
+                                            <label for="creditorMobileSourceFilter">Mobile Source</label>
+                                            <select id="creditorMobileSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example" data-column="mobile">
+                                                <option value="">All</option>
+                                                <option value="tally">Tally</option>
+                                                <option value="default">Default</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label for="creditorCreditSourceFilter">Credit Period Source</label>
+                                            <select id="creditorCreditSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example" data-column="credit">
+                                                <option value="">All</option>
+                                                <option value="tally">Tally</option>
+                                                <option value="default">Default</option>
+                                            </select>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -248,29 +271,31 @@
                                                         $mark = $l['mark'] ?? 'unmarked';
                                                         $collectorName = \App\Models\Collector::where('id', $l['assigned_collector'])->first();
                                                         $creditSrc = $sourceKey($l['credit_period_source'] ?? null);
+                                                        $mobileSrc = $sourceKey($l['ledger_mobile_number_source'] ?? null);
+                                                        $mobileNumbers = !empty($l['mobile'])
+                                                            ? array_filter(array_map('trim', explode(',', $l['mobile'])))
+                                                            : [];
                                                     @endphp
-                                                    <tr data-credit-source="{{ $creditSrc }}">
+                                                    <tr data-credit-source="{{ $creditSrc }}" data-mobile-source="{{ $mobileSrc }}">
                                                         <td>{{ $index + 1 }}</td>
                                                         <td>{{ $l['name'] }}</td>
                                                         <td class="cell-mobile">
-                                                            @php
-                                                                $mobileNumbers = !empty($l['mobile'])
-                                                                    ? array_filter(array_map('trim', explode(',', $l['mobile'])))
-                                                                    : [];
-                                                            @endphp
                                                             @forelse($mobileNumbers as $num)
                                                                 <div class="mobile-line">{{ $num }}</div>
                                                             @empty
                                                                 -
                                                             @endforelse
+                                                            @if(!empty($mobileNumbers))
+                                                                {!! $sourceBadge($mobileSrc) !!}
+                                                            @endif
                                                         </td>
-                                                        <td>
+                                                        <td class="cell-credit-period">
                                                             {{ !empty($l['credit_period']) ? $l['credit_period'] : '-' }}
                                                             @if(!empty($l['credit_period']))
                                                                 {!! $sourceBadge($creditSrc) !!}
                                                             @endif
                                                         </td>
-                                                        <td>{{ $collectorName->name ?? '-' }}</td>
+                                                        <td class="cell-collector">{{ $collectorName->name ?? '-' }}</td>
                                                         <td class="cell-balance-limit">{{ $l['balance_limit'] ?? '-' }}</td>
                                                         <td class="cell-overlimit">{{ $l['overlimit'] ?? '-' }}</td>
                                                         <td class="cell-mark">
@@ -290,6 +315,8 @@
                                                                 data-under="Sundry Debtors"
                                                                 data-name="{{ $l['name'] }}"
                                                                 data-mobile="{{ $l['mobile'] ?? '' }}"
+                                                                data-credit_period="{{ $l['credit_period'] ?? '' }}"
+                                                                data-assigned_collector="{{ $l['assigned_collector'] ?? '' }}"
                                                                 data-balance_limit="{{ $l['balance_limit'] ?? '' }}"
                                                                 data-mark="{{ $mark }}"
                                                                 data-red_reason="{{ $l['red_reason'] ?? '' }}"
@@ -325,21 +352,23 @@
                                                 @forelse($creditorLedgers as $index => $l)
                                                     @php
                                                         $creditSrc = $sourceKey($l['credit_period_source'] ?? null);
+                                                        $mobileSrc = $sourceKey($l['ledger_mobile_number_source'] ?? null);
+                                                        $mobileNumbers = !empty($l['mobile'])
+                                                            ? array_filter(array_map('trim', explode(',', $l['mobile'])))
+                                                            : [];
                                                     @endphp
-                                                    <tr data-credit-source="{{ $creditSrc }}">
+                                                    <tr data-credit-source="{{ $creditSrc }}" data-mobile-source="{{ $mobileSrc }}">
                                                         <td>{{ $index + 1 }}</td>
                                                         <td>{{ $l['name'] }}</td>
                                                         <td class="cell-mobile">
-                                                            @php
-                                                                $mobileNumbers = !empty($l['mobile'])
-                                                                    ? array_filter(array_map('trim', explode(',', $l['mobile'])))
-                                                                    : [];
-                                                            @endphp
                                                             @forelse($mobileNumbers as $num)
                                                                 <div class="mobile-line">{{ $num }}</div>
                                                             @empty
                                                                 -
                                                             @endforelse
+                                                            @if(!empty($mobileNumbers))
+                                                                {!! $sourceBadge($mobileSrc) !!}
+                                                            @endif
                                                         </td>
                                                         <td>
                                                             {{ !empty($l['credit_period']) ? $l['credit_period'] : '-' }}
@@ -403,6 +432,21 @@
                     <!-- Full fields (debtors only) -->
                     <div id="modal_full_fields">
                         <div class="mb-3">
+                            <label class="form-label fw-semibold">Credit Period (days)</label>
+                            <input type="number" min="0" step="1" class="form-control" id="modal_credit_period" placeholder="Enter credit period in days">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Collector Name</label>
+                            <select class="form-control" id="modal_collector">
+                                <option value="">-- Select Collector --</option>
+                                @foreach($allCollectors as $collector)
+                                    <option value="{{ $collector->id }}">{{ $collector->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
                             <label class="form-label fw-semibold">Balance Limit</label>
                             <input type="number" min="0" step="0.01" class="form-control" id="modal_balance_limit" placeholder="Enter amount">
                         </div>
@@ -439,7 +483,33 @@
     @include('owner.tally.components.footer')
 
     <script>
+        if (typeof $ === 'undefined' || typeof jQuery === 'undefined') {
+            console.error('[editLedgerModal] jQuery is not loaded yet on this page — this script must run AFTER jQuery is included, or every modal field will appear blank.');
+        }
+        if (typeof bootstrap === 'undefined') {
+            console.error('[editLedgerModal] Bootstrap JS is not loaded yet on this page — modal / tooltip calls will throw and can blank out fields.');
+        }
+
         let currentMode = 'full';
+
+        // Small "Tally" / "Default" badge builder, mirrors the Blade $sourceBadge helper.
+        function sourceBadgeHtml(source) {
+            const s = String(source || '').toLowerCase().trim();
+
+            if (s === 'tally') {
+                return '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>';
+            }
+            if (s === 'default') {
+                return '<span class="source-badge source-default" title="This value is the common default you set">Default</span>';
+            }
+            return '';
+        }
+
+        // Normalize a source value to 'tally' | 'default' | '' for data-attributes / filtering.
+        function sourceKeyJs(source) {
+            const s = String(source || '').toLowerCase().trim();
+            return (s === 'tally' || s === 'default') ? s : '';
+        }
 
         // ---------- Multi mobile-number field helpers ----------
 
@@ -495,8 +565,9 @@
         });
 
         // Builds the same "one number per line" markup the Blade view renders,
-        // used when refreshing a row's cell after a successful save.
-        function formatMobileCellHtml(mobileString) {
+        // used when refreshing a row's cell after a successful save. Optionally
+        // appends the Tally/Default source badge once at the end.
+        function formatMobileCellHtml(mobileString, mobileSrc) {
             let numbers = (mobileString || '')
                 .split(',')
                 .map(n => n.trim())
@@ -506,15 +577,37 @@
                 return '-';
             }
 
-            return numbers
+            let html = numbers
                 .map(n => `<div class="mobile-line">${$('<div>').text(n).html()}</div>`)
                 .join('');
+
+            html += sourceBadgeHtml(mobileSrc);
+
+            return html;
         }
 
         // ---------- Edit modal open/save ----------
 
+        // Reads a data-* value straight off the attribute (not jQuery's cached .data()),
+        // so it always reflects what's actually in the DOM right now.
+        function attrVal($el, name, fallback = '') {
+            let v = $el.attr('data-' + name);
+            return (v === undefined || v === null) ? fallback : v;
+        }
+
+        // Runs fn and, if it throws, logs the error to the console instead of letting it
+        // bubble up and abort the rest of the modal-fill sequence (which is what makes
+        // *every* field look blank when only one field's data/selector is bad).
+        function safeFill(label, fn) {
+            try {
+                fn();
+            } catch (err) {
+                console.error('[editLedgerModal] Failed to fill "' + label + '":', err);
+            }
+        }
+
         $(document).on('click', '.edit-ledger-row', function () {
-            
+
             $('.modal-backdrop').remove();
             $('body').removeClass('modal-open').css({
                 'overflow': '',
@@ -522,23 +615,43 @@
             });
 
             let $btn = $(this);
-            currentMode = $btn.data('mode'); // 'full' or 'mobile_only'
+            currentMode = attrVal($btn, 'mode', 'full'); // 'full' or 'mobile_only'
 
-            $('#editLedgerModalTitle').text('Edit — ' + $btn.data('name'));
-            $('#modal_id').val($btn.data('id'));
-            $('#modal_company').val($btn.data('company'));
-            $('#modal_under').val($btn.data('under'));
-            renderMobileFields($btn.data('mobile'));
+            safeFill('title', () => {
+                $('#editLedgerModalTitle').text('Edit — ' + attrVal($btn, 'name'));
+            });
+
+            safeFill('hidden ids', () => {
+                $('#modal_id').val(attrVal($btn, 'id'));
+                $('#modal_company').val(attrVal($btn, 'company'));
+                $('#modal_under').val(attrVal($btn, 'under'));
+            });
+
+            safeFill('mobile numbers', () => {
+                renderMobileFields(attrVal($btn, 'mobile'));
+            });
 
             if (currentMode === 'full') {
                 $('#modal_full_fields').show();
-                $('#modal_balance_limit').val($btn.data('balance_limit'));
 
-                let mark = $btn.data('mark') || 'unmarked';
-                $(`input[name="modal_mark"][value="${mark}"]`).prop('checked', true);
+                safeFill('credit period', () => {
+                    $('#modal_credit_period').val(attrVal($btn, 'credit_period'));
+                });
 
-                $('#modal_red_reason').val($btn.data('red_reason'));
-                $('#modal_reason_wrapper').toggle(mark === 'red');
+                safeFill('collector', () => {
+                    $('#modal_collector').val(attrVal($btn, 'assigned_collector', ''));
+                });
+
+                safeFill('balance limit', () => {
+                    $('#modal_balance_limit').val(attrVal($btn, 'balance_limit'));
+                });
+
+                safeFill('mark', () => {
+                    let mark = attrVal($btn, 'mark', 'unmarked');
+                    $(`input[name="modal_mark"][value="${mark}"]`).prop('checked', true);
+                    $('#modal_red_reason').val(attrVal($btn, 'red_reason'));
+                    $('#modal_reason_wrapper').toggle(mark === 'red');
+                });
             } else {
                 $('#modal_full_fields').hide();
             }
@@ -577,6 +690,8 @@
             };
 
             if (currentMode === 'full') {
+                payload.credit_period      = $('#modal_credit_period').val();
+                payload.assigned_collector = $('#modal_collector').val();
                 payload.balance_limit = $('#modal_balance_limit').val();
                 payload.mark          = $('input[name="modal_mark"]:checked').val() || 'unmarked';
                 payload.red_reason    = $('#modal_red_reason').val();
@@ -595,7 +710,13 @@
                     $btn.prop('disabled', false).text('Save');
 
                     if (res.success) {
-                        updateRowInTable(payload);
+                        // Backend sets ledger_mobile_number_source / credit_period_source to
+                        // 'default' whenever a value is saved manually from this modal. We pick
+                        // that up from the response if present, otherwise fall back to 'default'
+                        // since this is always a manual edit.
+                        let mobileSrc = res.mobile_source ? sourceKeyJs(res.mobile_source) : 'default';
+                        let creditSrc = res.credit_period_source ? sourceKeyJs(res.credit_period_source) : 'default';
+                        updateRowInTable(payload, mobileSrc, creditSrc);
 
                         let modalEl = document.getElementById('editLedgerModal');
                         let modalInstance = bootstrap.Modal.getInstance(modalEl);
@@ -629,17 +750,34 @@
         });
 
      
-        function updateRowInTable(payload) {
+        function updateRowInTable(payload, mobileSrc, creditSrc) {
             let $rowBtn = $(`.edit-ledger-row[data-id="${payload.id}"][data-under="${payload.under}"]`);
             if (!$rowBtn.length) return;
 
             let $row = $rowBtn.closest('tr');
 
-            $row.find('.cell-mobile').html(formatMobileCellHtml(payload.mobile));
+            $row.attr('data-mobile-source', mobileSrc);
+            $row.find('.cell-mobile').html(formatMobileCellHtml(payload.mobile, mobileSrc));
             $rowBtn.data('mobile', payload.mobile);
             $rowBtn.attr('data-mobile', payload.mobile);
 
             if (currentMode === 'full') {
+                // Credit Period
+                $row.attr('data-credit-source', creditSrc);
+                $row.find('.cell-credit-period').html(
+                    (payload.credit_period ? payload.credit_period : '-') + sourceBadgeHtml(creditSrc)
+                );
+                $rowBtn.data('credit_period', payload.credit_period);
+                $rowBtn.attr('data-credit_period', payload.credit_period);
+
+                // Collector Name — read the label straight from the selected dropdown option.
+                let collectorLabel = payload.assigned_collector
+                    ? $('#modal_collector option[value="' + payload.assigned_collector + '"]').text()
+                    : '-';
+                $row.find('.cell-collector').text(collectorLabel);
+                $rowBtn.data('assigned_collector', payload.assigned_collector);
+                $rowBtn.attr('data-assigned_collector', payload.assigned_collector);
+
                 $row.find('.cell-balance-limit').text(payload.balance_limit || '-');
                 $rowBtn.data('balance_limit', payload.balance_limit);
                 $rowBtn.attr('data-balance_limit', payload.balance_limit);
@@ -695,10 +833,10 @@
             }, 3000);
         }
 
-        // ---------- Credit Period Source (Tally / Default) filter for both tables ----------
+        // ---------- Source (Tally / Default) filter for both tables ----------
         const sourceFilterState = {
-            '#example11': { credit: '' },
-            '#example':   { credit: '' },
+            '#example11': { credit: '', mobile: '' },
+            '#example':   { credit: '', mobile: '' },
         };
 
         if ($.fn.DataTable) {
@@ -715,6 +853,9 @@
                 if (state.credit && $row.data('credit-source') !== state.credit) {
                     return false;
                 }
+                if (state.mobile && $row.data('mobile-source') !== state.mobile) {
+                    return false;
+                }
                 return true;
             });
         }
@@ -722,11 +863,11 @@
         $(document).on('change', '.js-source-filter', function () {
             const $select = $(this);
             const tableSelector = $select.data('table');
-            const column = $select.data('column'); // 'credit'
+            const column = $select.data('column'); // 'credit' | 'mobile'
             const value = $select.val();
 
             if (!sourceFilterState[tableSelector]) {
-                sourceFilterState[tableSelector] = { credit: '' };
+                sourceFilterState[tableSelector] = { credit: '', mobile: '' };
             }
             sourceFilterState[tableSelector][column] = value;
 

@@ -195,7 +195,8 @@
                 };
 
                 // Helper: render a small "Tally" / "Default" badge next to a value, based on
-                // credit_period_source / interest_rate_source coming from the backend.
+                // credit_period_source / interest_rate_source / ledger_mobile_number_source
+                // coming from the backend.
                 // Expected values: 'tally' or 'default' (case-insensitive). Anything else -> no badge.
                 $sourceBadge = function ($source) {
                     $source = strtolower(trim((string) $source));
@@ -349,6 +350,14 @@
                                     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
                                         <div class="source-filter-bar mb-0">
                                             <div>
+                                                <label for="debtorMobileSourceFilter">Mobile Source</label>
+                                                <select id="debtorMobileSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example11" data-column="mobile">
+                                                    <option value="">All</option>
+                                                    <option value="tally">Tally</option>
+                                                    <option value="default">Default</option>
+                                                </select>
+                                            </div>
+                                            <div>
                                                 <label for="debtorCreditSourceFilter">Credit Period Source</label>
                                                 <select id="debtorCreditSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example11" data-column="credit">
                                                     <option value="">All</option>
@@ -448,11 +457,17 @@
                                                         $billWise = $isBillWise($l);
                                                         $creditSrc = $sourceKey($l['credit_period_source'] ?? null);
                                                         $interestSrc = $sourceKey($l['interest_rate_source'] ?? null);
+                                                        $mobileSrc = $sourceKey($l['ledger_mobile_number_source'] ?? null);
                                                     @endphp
-                                                    <tr data-credit-source="{{ $creditSrc }}" data-interest-source="{{ $interestSrc }}">
+                                                    <tr data-credit-source="{{ $creditSrc }}" data-interest-source="{{ $interestSrc }}" data-mobile-source="{{ $mobileSrc }}">
                                                         <td>{{ $index + 1 }}</td>
                                                         <td>{{ $l['name'] }}</td>
-                                                        <td>{{ $l['mobile'] ?? '-' }}</td>
+                                                        <td>
+                                                            {{ $l['mobile'] ?? '-' }}
+                                                            @if(!empty($l['mobile']))
+                                                                {!! $sourceBadge($mobileSrc) !!}
+                                                            @endif
+                                                        </td>
                                                         <td>
                                                             {{ !empty($l['credit_period']) ? $l['credit_period'] : '-' }}
                                                             @if(!empty($l['credit_period']))
@@ -486,6 +501,14 @@
                                     <!-- Toggle button + Source filters (same row) -->
                                     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
                                         <div class="source-filter-bar mb-0">
+                                            <div>
+                                                <label for="creditorMobileSourceFilter">Mobile Source</label>
+                                                <select id="creditorMobileSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example" data-column="mobile">
+                                                    <option value="">All</option>
+                                                    <option value="tally">Tally</option>
+                                                    <option value="default">Default</option>
+                                                </select>
+                                            </div>
                                             <div>
                                                 <label for="creditorCreditSourceFilter">Credit Period Source</label>
                                                 <select id="creditorCreditSourceFilter" class="form-control form-control-sm js-source-filter" data-table="#example" data-column="credit">
@@ -586,11 +609,17 @@
                                                         $billWise = $isBillWise($l);
                                                         $creditSrc = $sourceKey($l['credit_period_source'] ?? null);
                                                         $interestSrc = $sourceKey($l['interest_rate_source'] ?? null);
+                                                        $mobileSrc = $sourceKey($l['ledger_mobile_number_source'] ?? null);
                                                     @endphp
-                                                    <tr data-credit-source="{{ $creditSrc }}" data-interest-source="{{ $interestSrc }}">
+                                                    <tr data-credit-source="{{ $creditSrc }}" data-interest-source="{{ $interestSrc }}" data-mobile-source="{{ $mobileSrc }}">
                                                         <td>{{ $index + 1 }}</td>
                                                         <td>{{ $l['name'] }}</td>
-                                                        <td>{{ $l['mobile'] ?? '-' }}</td>
+                                                        <td>
+                                                            {{ $l['mobile'] ?? '-' }}
+                                                            @if(!empty($l['mobile']))
+                                                                {!! $sourceBadge($mobileSrc) !!}
+                                                            @endif
+                                                        </td>
                                                         <td>
                                                             {{ $l['credit_period'] ?? '-' }}
                                                             @if(!empty($l['credit_period']))
@@ -690,8 +719,8 @@
         // Keeps the currently selected filter value per table/column, e.g.
         // sourceFilterState['#example11'].credit = 'tally'
         const sourceFilterState = {
-            '#example11': { credit: '', interest: '' },
-            '#example':   { credit: '', interest: '' },
+            '#example11': { credit: '', interest: '', mobile: '' },
+            '#example':   { credit: '', interest: '', mobile: '' },
         };
 
         if ($.fn.DataTable) {
@@ -699,7 +728,7 @@
                 const tableSelector = '#' + settings.nTable.id;
                 const state = sourceFilterState[tableSelector];
                 if (!state) {
-                    return true; // not one of our filtered tables, don't touch it
+                    return true;
                 }
 
                 const $row = $(settings.oInstance.api().row(index).node());
@@ -711,6 +740,9 @@
                 if (state.interest && $row.data('interest-source') !== state.interest) {
                     return false;
                 }
+                if (state.mobile && $row.data('mobile-source') !== state.mobile) {
+                    return false;
+                }
                 return true;
             });
         }
@@ -718,11 +750,11 @@
         $(document).on('change', '.js-source-filter', function () {
             const $select = $(this);
             const tableSelector = $select.data('table');
-            const column = $select.data('column'); // 'credit' or 'interest'
+            const column = $select.data('column'); // 'credit' | 'interest' | 'mobile'
             const value = $select.val();
 
             if (!sourceFilterState[tableSelector]) {
-                sourceFilterState[tableSelector] = { credit: '', interest: '' };
+                sourceFilterState[tableSelector] = { credit: '', interest: '', mobile: '' };
             }
             sourceFilterState[tableSelector][column] = value;
 
@@ -788,6 +820,7 @@
             const billWise = String(l.maintain_bill_by_bill || '').toLowerCase() === 'yes';
             const creditSrc = sourceKeyJs(l.credit_period_source);
             const interestSrc = sourceKeyJs(l.interest_rate_source);
+            const mobileSrc = sourceKeyJs(l.ledger_mobile_number_source);
 
             const creditPeriod = l.credit_period
                 ? l.credit_period + sourceBadgeHtml(creditSrc)
@@ -795,11 +828,14 @@
             const interestRate = l.interest_rate
                 ? parseFloat(l.interest_rate).toFixed(2) + ' % p.a.' + sourceBadgeHtml(interestSrc)
                 : '-';
+            const mobile = l.mobile
+                ? l.mobile + sourceBadgeHtml(mobileSrc)
+                : '-';
 
-            return `<tr data-credit-source="${creditSrc}" data-interest-source="${interestSrc}">
+            return `<tr data-credit-source="${creditSrc}" data-interest-source="${interestSrc}" data-mobile-source="${mobileSrc}">
                 <td>${index + 1}</td>
                 <td>${l.name}</td>
-                <td>${l.mobile || '-'}</td>
+                <td>${mobile}</td>
                 <td>${creditPeriod}</td>
                 <td>${interestRate}</td>
                 <td>${l.collector_name || '-'}</td>
@@ -810,6 +846,7 @@
             const billWise = String(l.maintain_bill_by_bill || '').toLowerCase() === 'yes';
             const creditSrc = sourceKeyJs(l.credit_period_source);
             const interestSrc = sourceKeyJs(l.interest_rate_source);
+            const mobileSrc = sourceKeyJs(l.ledger_mobile_number_source);
 
             const creditPeriod = l.credit_period
                 ? l.credit_period + sourceBadgeHtml(creditSrc)
@@ -817,11 +854,14 @@
             const interestRate = l.interest_rate
                 ? parseFloat(l.interest_rate).toFixed(2) + ' % p.a.' + sourceBadgeHtml(interestSrc)
                 : '-';
+            const mobile = l.mobile
+                ? l.mobile + sourceBadgeHtml(mobileSrc)
+                : '-';
 
-            return `<tr data-credit-source="${creditSrc}" data-interest-source="${interestSrc}">
+            return `<tr data-credit-source="${creditSrc}" data-interest-source="${interestSrc}" data-mobile-source="${mobileSrc}">
                 <td>${index + 1}</td>
                 <td>${l.name}</td>
-                <td>${l.mobile || '-'}</td>
+                <td>${mobile}</td>
                 <td>${creditPeriod}</td>
                 <td>${interestRate}</td>
             </tr>`;

@@ -22,6 +22,7 @@ return new class extends Migration
             $table->string('ledger_name');                 // LEDGER NAME attribute
             $table->string('ledger_email')->nullable();                 // LEDGER NAME attribute
             $table->string('ledger_mobile_number')->nullable();                 // LEDGER NAME attribute
+            $table->string('ledger_mobile_number_source')->nullable();
             $table->string('parent')->nullable();         // PARENT (under: Sundry Debtors/Creditors etc)
             $table->decimal('opening_balance', 15, 2)->default(0); // OPENINGBALANCE
             $table->decimal('closing_balance', 15, 2)->default(0); // CLOSINGBALANCE
@@ -35,6 +36,7 @@ return new class extends Migration
             $table->foreignId('assigned_collector')->nullable();
             $table->timestamp('balance_synced_at')->nullable();    // last time balance refresh hua
             $table->decimal('balance_limit', 15, 2)->nullable();
+            $table->string('balance_limit_source')->nullable();
             $table->string('overlimit')->nullable();
             $table->enum('mark', ['red', 'green', 'unmarked'])->default('unmarked');
             $table->string('red_reason')->nullable();

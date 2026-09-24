@@ -630,7 +630,6 @@ class OwnerController extends Controller
                                     'ledger_name'                   => $ledger['ledger_name'],
                                     'master_id'                     => $ledger['master_id'] ?: $tallyLedger->master_id,
                                     'ledger_email'                  => $ledger['ledger_email'],
-                                    'ledger_mobile_number'          => $ledger['ledger_mobile_number'],
                                     'parent'                        => $ledger['parent'],
                                     'opening_balance'               => $ledger['opening_balance'],
                                     'closing_balance'               => $ledger['closing_balance'],
@@ -639,6 +638,13 @@ class OwnerController extends Controller
                                     'balance_synced_at'             => $now,
                                     'updated_at'                    => $now,
                                 ];
+
+                                // mobile_number: sirf pehli baar set karo (source abhi tak null hai).
+                                // Ek baar 'tally' ya 'default' set ho gaya, to future syncs isko touch nahi karenge.
+                                if (empty($tallyLedger->ledger_mobile_number_source)) {
+                                    $updateData['ledger_mobile_number']        = $ledger['ledger_mobile_number'];
+                                    $updateData['ledger_mobile_number_source'] = !empty($ledger['ledger_mobile_number']) ? 'tally' : null;
+                                }
 
                                 // credit_period: agar manually 'default' set hai to overwrite mat karo
                                 if ($tallyLedger->credit_period_source !== 'default') {
@@ -664,6 +670,7 @@ class OwnerController extends Controller
                                     'ledger_name'                   => $ledger['ledger_name'],
                                     'ledger_email'                  => $ledger['ledger_email'],
                                     'ledger_mobile_number'          => $ledger['ledger_mobile_number'],
+                                    'ledger_mobile_number_source'   => !empty($ledger['ledger_mobile_number']) ? 'tally' : null,
                                     'parent'                        => $ledger['parent'],
                                     'opening_balance'               => $ledger['opening_balance'],
                                     'closing_balance'               => $ledger['closing_balance'],
@@ -851,50 +858,136 @@ class OwnerController extends Controller
     }
 
     public function applySyncDefaults(Request $request)
-    {
-        $owner = Auth::guard('owner')->user();
+{
+    $owner = Auth::guard('owner')->user();
 
-        $validator = Validator::make($request->all(), [
-            'default_credit_period' => ['nullable', 'integer', 'min:0'],
-            'default_interest_rate' => ['nullable', 'numeric', 'min:0'],
-        ]);
+    $validator = Validator::make($request->all(), [
+        'debtor.mobile_number'   => ['nullable', 'string', 'max:20'],
+        'debtor.credit_period'   => ['nullable', 'integer', 'min:0'],
+        'debtor.interest_rate'   => ['nullable', 'numeric', 'min:0'],
+        'debtor.balance_limit'   => ['nullable', 'numeric', 'min:0'],
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => $validator->errors()->first(),
-                'errors'  => $validator->errors(),
-            ], 422);
-        }
+        'creditor.mobile_number' => ['nullable', 'string', 'max:20'],
+        'creditor.credit_period' => ['nullable', 'integer', 'min:0'],
+        'creditor.interest_rate' => ['nullable', 'numeric', 'min:0'],
+        'creditor.balance_limit' => ['nullable', 'numeric', 'min:0'],
+    ]);
 
-        $creditUpdated = 0;
-        $interestUpdated = 0;
-
-       
-        if ($request->filled('default_credit_period')) {
-            $creditUpdated = TallyLedger::where('owner_id', $owner->id)
-                ->whereNull('credit_period_source')
-                ->update([
-                    'credit_period'        => $request->default_credit_period. ' Days',
-                    'credit_period_source' => 'default',
-                    'updated_at'           => now(),
-                ]);
-        }
-
-        if ($request->filled('default_interest_rate')) {
-            $interestUpdated = TallyLedger::where('owner_id', $owner->id)
-                ->whereNull('interest_rate_source')
-                ->update([
-                    'interest_rate'        => $request->default_interest_rate,
-                    'interest_rate_source' => 'default',
-                    'updated_at'           => now(),
-                ]);
-        }
-
+    if ($validator->fails()) {
         return response()->json([
-            'success' => true,
-            'message' => "Defaults applied to {$creditUpdated} ledger(s) for credit period and {$interestUpdated} ledger(s) for interest rate.",
-        ]);
+            'message' => $validator->errors()->first(),
+            'errors'  => $validator->errors(),
+        ], 422);
     }
+
+    $debtorMobileUpdated    = 0;
+    $debtorCreditUpdated    = 0;
+    $debtorInterestUpdated  = 0;
+    $debtorBalanceUpdated   = 0;
+
+    $creditorMobileUpdated   = 0;
+    $creditorCreditUpdated   = 0;
+    $creditorInterestUpdated = 0;
+    $creditorBalanceUpdated  = 0;
+
+    // ================= DEBTORS =================
+
+    if ($request->filled('debtor.mobile_number')) {
+        $debtorMobileUpdated = TallyLedger::where('owner_id', $owner->id)
+            ->where('parent', 'Sundry Debtors')
+            ->whereNull('ledger_mobile_number_source')
+            ->update([
+                'ledger_mobile_number'        => $request->input('debtor.mobile_number'),
+                'ledger_mobile_number_source' => 'default',
+                'updated_at'                  => now(),
+            ]);
+    }
+
+    if ($request->filled('debtor.credit_period')) {
+        $debtorCreditUpdated = TallyLedger::where('owner_id', $owner->id)
+            ->where('parent', 'Sundry Debtors')
+            ->whereNull('credit_period_source')
+            ->update([
+                'credit_period'        => $request->input('debtor.credit_period') . ' Days',
+                'credit_period_source' => 'default',
+                'updated_at'           => now(),
+            ]);
+    }
+
+    if ($request->filled('debtor.interest_rate')) {
+        $debtorInterestUpdated = TallyLedger::where('owner_id', $owner->id)
+            ->where('parent', 'Sundry Debtors')
+            ->whereNull('interest_rate_source')
+            ->update([
+                'interest_rate'        => $request->input('debtor.interest_rate'),
+                'interest_rate_source' => 'default',
+                'updated_at'           => now(),
+            ]);
+    }
+
+    if ($request->filled('debtor.balance_limit')) {
+        $debtorBalanceUpdated = TallyLedger::where('owner_id', $owner->id)
+            ->where('parent', 'Sundry Debtors')
+            ->whereNull('balance_limit_source')
+            ->update([
+                'balance_limit'        => $request->input('debtor.balance_limit'),
+                'balance_limit_source' => 'default',
+                'updated_at'           => now(),
+            ]);
+    }
+
+    // ================= CREDITORS =================
+
+    if ($request->filled('creditor.mobile_number')) {
+        $creditorMobileUpdated = TallyLedger::where('owner_id', $owner->id)
+            ->where('parent', 'Sundry Creditors')
+            ->whereNull('ledger_mobile_number_source')
+            ->update([
+                'ledger_mobile_number'        => $request->input('creditor.mobile_number'),
+                'ledger_mobile_number_source' => 'default',
+                'updated_at'                  => now(),
+            ]);
+    }
+
+    if ($request->filled('creditor.credit_period')) {
+        $creditorCreditUpdated = TallyLedger::where('owner_id', $owner->id)
+            ->where('parent', 'Sundry Creditors')
+            ->whereNull('credit_period_source')
+            ->update([
+                'credit_period'        => $request->input('creditor.credit_period') . ' Days',
+                'credit_period_source' => 'default',
+                'updated_at'           => now(),
+            ]);
+    }
+
+    if ($request->filled('creditor.interest_rate')) {
+        $creditorInterestUpdated = TallyLedger::where('owner_id', $owner->id)
+            ->where('parent', 'Sundry Creditors')
+            ->whereNull('interest_rate_source')
+            ->update([
+                'interest_rate'        => $request->input('creditor.interest_rate'),
+                'interest_rate_source' => 'default',
+                'updated_at'           => now(),
+            ]);
+    }
+
+    if ($request->filled('creditor.balance_limit')) {
+        $creditorBalanceUpdated = TallyLedger::where('owner_id', $owner->id)
+            ->where('parent', 'Sundry Creditors')
+            ->whereNull('balance_limit_source')
+            ->update([
+                'balance_limit'        => $request->input('creditor.balance_limit'),
+                'balance_limit_source' => 'default',
+                'updated_at'           => now(),
+            ]);
+    }
+
+    return response()->json([
+        'success' => true,
+        'message' => "Defaults applied — Debtors: {$debtorMobileUpdated} mobile, {$debtorCreditUpdated} credit period, {$debtorInterestUpdated} interest rate, {$debtorBalanceUpdated} balance limit | "
+                   . "Creditors: {$creditorMobileUpdated} mobile, {$creditorCreditUpdated} credit period, {$creditorInterestUpdated} interest rate, {$creditorBalanceUpdated} balance limit.",
+    ]);
+}
 
     private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2): string
     {
@@ -2625,6 +2718,7 @@ class OwnerController extends Controller
                     'name'               => $ledger->ledger_name,
                     'under'              => $ledger->parent,
                     'mobile'             => $ledger->ledger_mobile_number,
+                    'ledger_mobile_number_source'             => $ledger->ledger_mobile_number_source,
                     'credit_period'      => $ledger->credit_period,
                     'credit_period_source'      => $ledger->credit_period_source,
                     'interest_rate'      => $ledger->interest_rate,
@@ -2844,6 +2938,7 @@ class OwnerController extends Controller
                     'name'               => $ledger->ledger_name,
                     'under'              => $ledger->parent,
                     'mobile'             => $ledger->ledger_mobile_number,
+                    'ledger_mobile_number_source'             => $ledger->ledger_mobile_number_source,
                     'credit_period'      => $ledger->credit_period,
                     'credit_period_source'      => $ledger->credit_period_source,
                     'interest_rate'      => $ledger->interest_rate,
@@ -2870,11 +2965,14 @@ class OwnerController extends Controller
         }
     }
 
+    
+   
+    
     public function saveRow(Request $request, $company)
     {
         $company = urldecode($company);
         $owner   = Auth::guard('owner')->user();
-
+    
         $validator = Validator::make($request->all(), [
             'id'            => 'required|integer|exists:rms_tally_ledgers,id',
             'under'         => 'required|string|in:Sundry Debtors,Sundry Creditors',
@@ -2882,15 +2980,15 @@ class OwnerController extends Controller
                 if (empty($value)) {
                     return;
                 }
-
+    
                 // Mobile numbers arrive as a comma-separated string,
                 // e.g. "9876543210,9123456780". Validate each piece.
                 $numbers = array_filter(array_map('trim', explode(',', $value)));
-
+    
                 if (empty($numbers)) {
                     return;
                 }
-
+    
                 foreach ($numbers as $number) {
                     if (!preg_match('/^\d{10}$/', $number)) {
                         $fail("\"{$number}\" is not a valid mobile number. It must be exactly 10 digits.");
@@ -2898,78 +2996,92 @@ class OwnerController extends Controller
                     }
                 }
             }],
-            'balance_limit' => 'nullable|numeric|min:0',
-            'overlimit'     => 'nullable|string',
-            'mark'          => 'nullable|in:red,green,unmarked',
-            'red_reason'    => 'nullable|string|max:255',
+            'balance_limit'      => 'nullable|numeric|min:0',
+            'overlimit'          => 'nullable|string',
+            'mark'               => 'nullable|in:red,green,unmarked',
+            'red_reason'         => 'nullable|string|max:255',
+            // New: Credit Period (days) and Collector, editable for Sundry Debtors.
+            'credit_period'      => 'nullable|integer|min:0',
+            'assigned_collector' => 'nullable|integer|exists:collectors,id',
         ]);
-
+    
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'errors'  => $validator->errors(),
             ], 422);
         }
-
+    
         $data = $validator->validated();
         $mark = $data['mark'] ?? 'unmarked';
-
+    
         if ($data['under'] === 'Sundry Debtors' && $mark === 'red' && empty($data['red_reason'])) {
             return response()->json([
                 'success' => false,
                 'errors'  => ['red_reason' => ['Reason is required when marked red.']],
             ], 422);
         }
-
+    
         // Normalize the mobile number list: trim, drop duplicates, rejoin with a
         // single comma and no stray spaces, so what's stored is always clean.
         if (!empty($data['mobile'])) {
             $numbers = array_filter(array_map('trim', explode(',', $data['mobile'])));
             $data['mobile'] = implode(',', array_values(array_unique($numbers)));
         }
-
+    
         $tallyCompany = TallyCompany::where('owner_id', $owner->id)
             ->where('company_name', $company)
             ->first();
-
+    
         if (!$tallyCompany) {
             return response()->json([
                 'success' => false,
                 'errors'  => ['company' => ['Company not found.']],
             ], 404);
         }
-
+    
         $ledger = TallyLedger::where('id', $data['id'])
             ->where('owner_id', $owner->id)
             ->where('tally_company_id', $tallyCompany->id)
             ->where('parent', $data['under'])
             ->first();
-
+    
         if (!$ledger) {
             return response()->json([
                 'success' => false,
                 'errors'  => ['id' => ['Ledger not found for this company.']],
             ], 404);
         }
-
+    
         if ($data['under'] === 'Sundry Creditors') {
             $ledger->update([
                 'ledger_mobile_number' => $data['mobile'] ?? $ledger->ledger_mobile_number,
             ]);
         } else {
+            // A credit_period key present in the request (even if it's an empty/zero value
+            // the user intentionally set) counts as a manual override, so we flip the
+            // source to 'default' — same pattern used for the mobile number source.
+            $creditPeriodManuallySet = array_key_exists('credit_period', $data) && $request->filled('credit_period');
+    
             $ledger->update([
                 'ledger_mobile_number' => $data['mobile'] ?? $ledger->ledger_mobile_number,
                 'balance_limit'        => $data['balance_limit'] ?? null,
                 'overlimit'            => $data['overlimit'] ?? null,
                 'mark'                 => $mark,
                 'red_reason'           => $mark === 'red' ? $data['red_reason'] : null,
+                'credit_period'        => $data['credit_period'] ?? $ledger->credit_period,
+                'credit_period_source' => $creditPeriodManuallySet ? 'default' : $ledger->credit_period_source,
+                'assigned_collector'   => $data['assigned_collector'] ?? null,
             ]);
         }
-
+    
         return response()->json([
-            'success' => true,
-            'message' => 'Ledger updated successfully.',
-            'data'    => $ledger,
+            'success'              => true,
+            'message'              => 'Ledger updated successfully.',
+            'data'                 => $ledger,
+            // Frontend reads these to refresh the Tally/Default badges without a full reload.
+            'mobile_source'        => $ledger->ledger_mobile_number_source ?? null,
+            'credit_period_source' => $ledger->credit_period_source ?? null,
         ]);
     }
 
