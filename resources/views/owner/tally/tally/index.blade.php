@@ -48,7 +48,7 @@
 
 							<div class="tds-page-head mb-4">
 								<div>
-									<h2 class="tds-page-title">Tally Overview new</h2>
+									<h2 class="tds-page-title">Tally Overview </h2>
 									<p class="tds-page-sub">Your Tally connection, at a glance</p>
 								</div>
 								<div class="tds-actions">
