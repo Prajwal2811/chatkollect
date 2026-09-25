@@ -24,10 +24,20 @@ use Carbon\Carbon;
 use Illuminate\Validation\Rule;
 use Illuminate\Http\JsonResponse;
 use App\Models\OwnerBankDetail;
-
+use Illuminate\Support\Facades\Artisan;
 
 class OwnerController extends Controller
 {
+    public function clearCache()
+    {
+        Artisan::call('cache:clear');
+        Artisan::call('config:clear');
+        Artisan::call('view:clear');
+        Artisan::call('route:clear');
+
+        return response()->json(['message' => 'All caches cleared successfully.']);
+    }
+    
     protected TallyService $tally;
 
     public function __construct(TallyService $tally)
