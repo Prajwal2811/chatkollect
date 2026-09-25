@@ -1674,12 +1674,21 @@ class OwnerController extends Controller
             ->pluck('mapped_to', 'voucher_type')
             ->toArray();
 
+        $ledgerCreditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+        $today = Carbon::now()->startOfDay();
+
         $vouchers = TallyVoucher::where('owner_id', $owner->id)
             ->where('tally_company_id', $tallyCompany->id)
             ->where('ledger_id', $ledgerModel->id)
             ->orderBy('date')
             ->get()
-            ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings));
+            // 👇 id, due_date, credit_period, credit_period_source bhi saath me le lo
+            ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
+                'id'                   => $v->id,
+                'due_date'             => $v->due_date ?? null,
+                'credit_period'        => $v->credit_period,
+                'credit_period_source' => $v->credit_period_source,
+            ]);
 
         if ($field === 'Balance') {
             return response()->json([
@@ -1689,14 +1698,33 @@ class OwnerController extends Controller
 
         $filtered = $this->filterVouchersByField($vouchers, $field, $under);
 
-        $rows = $filtered->map(fn ($v) => [
-            'date'          => $v['date'],
-            'voucher_no'    => $v['voucher_number'],
-            'voucher_type'  => $v['voucher_type'],
-            'particulars'   => $v['particulars'],
-            'debit'         => $v['debit'],
-            'credit'        => $v['credit'],
-        ])->values();
+        $rows = $filtered->map(function ($v) use ($ledgerCreditPeriod, $today) {
+            // per-voucher credit_period agar manually set hai to wahi, warna ledger ka default
+            $resolvedCP = ($v['credit_period_source'] === 'voucher' && $v['credit_period'] !== null)
+                ? (int) $v['credit_period']   // "30 Days" se bhi (int) cast 30 nikal leta hai
+                : $ledgerCreditPeriod;
+
+            $days = 0;
+            if (!empty($v['due_date'])) {
+                $dueDateCarbon = Carbon::parse($v['due_date'])->startOfDay();
+                if ($dueDateCarbon->lt($today)) {
+                    $days = $today->diffInDays($dueDateCarbon);
+                }
+            }
+
+            return [
+                'id'            => $v['id'] ?? null,
+                'date'          => $v['date'],
+                'voucher_no'    => $v['voucher_number'],
+                'voucher_type'  => $v['voucher_type'],
+                'particulars'   => $v['particulars'],
+                'debit'         => $v['debit'],
+                'credit'        => $v['credit'],
+                'due_date'      => $v['due_date'] ?? null,
+                'credit_period' => $resolvedCP,
+                'days'          => $days,
+            ];
+        })->values();
 
         return response()->json(['vouchers' => $rows]);
     }
