@@ -41,6 +41,8 @@ Route::prefix('owner')->middleware('auth:owner')->group(function () {
 
 Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(function () {
 
+        
+        Route::post('/tally/clear-cache', [OwnerController::class, 'clearCache'])->name('owner.tally.clear-cache');
 
         Route::post('/tally/connect', [OwnerController::class, 'connect'])->name('owner.tally.connect');
 
@@ -287,6 +289,7 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
         // EMI
         Route::get('/manual/set-debtor-emi', [OwnerController::class, 'manaualSetDebtorEMI'])->name('owner.manual.set-debtor-emi');
 
+  
     });
 
 

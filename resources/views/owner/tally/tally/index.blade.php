@@ -407,9 +407,6 @@
 		@include('owner.tally.components.footer')
 
 		{{-- ================= BANK DETAILS MODAL (mandatory, non-closable) ================= --}}
-		{{-- Ye modal sabse pehle check hota hai. Jab tak owner ki bank details DB me save
-			 nahi hain, tab tak ye forcefully open rahega (koi close button nahi), aur
-			 Tally connect modal ka auto-open isi ke baad trigger hoga. --}}
 		<div class="modal fade" id="bankDetailsModal" tabindex="-1"
 			data-bs-backdrop="{{ $isBankDetailsAdded ? 'true' : 'static' }}"
 			data-bs-keyboard="{{ $isBankDetailsAdded ? 'true' : 'false' }}"
@@ -425,8 +422,6 @@
 							</span>
 						</h5>
 
-						{{-- Close (X) button sirf tab dikhega jab bank details already saved hain.
-							 Jab missing ho, add karna mandatory hai isliye X nahi hai. --}}
 						@if($isBankDetailsAdded)
 							<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 						@endif
@@ -510,12 +505,6 @@
 		{{-- ================= /BANK DETAILS MODAL ================= --}}
 
 		{{-- ================= TALLY CONNECT / EDIT MODAL ================= --}}
-		{{-- Isko main-wrapper ke bahar, body ke bilkul end me rakha hai taaki parent divs ka
-			 overflow/transform/position CSS ye modal ko clip ya hide na kare.
-			 Ab ye modal hamesha DOM me rahega — disconnected hone par forcefully open hoga
-			 (bina close button ke), aur connected hone par "Edit Tally Connection" button se
-			 manually open hoga (close button ke saath), aur existing values pre-filled hongi.
-			 NOTE: Iska auto-open sirf tab trigger hoga jab bank details already save ho chuki hain. --}}
 		<div class="modal fade" id="tallyConnectModal" tabindex="-1"
 			data-bs-backdrop="{{ $isTallyConneted ? 'true' : 'static' }}"
 			data-bs-keyboard="{{ $isTallyConneted ? 'true' : 'false' }}"
@@ -531,8 +520,6 @@
 							</span>
 						</h5>
 
-						{{-- Close (X) button sirf tab dikhega jab Tally already connected ho.
-							 Jab disconnected ho, connect karna mandatory hai isliye X nahi hai. --}}
 						@if($isTallyConneted)
 							<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 						@endif
@@ -928,7 +915,6 @@
 
 				function getModalInstance() {
 					if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
-						// Bootstrap 5
 						return bootstrap.Modal.getOrCreateInstance($modal[0], {
 							backdrop: isTallyConneted ? true : 'static',
 							keyboard: isTallyConneted
@@ -939,11 +925,9 @@
 
 				function showTallyModal() {
 					if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
-						// Bootstrap 5
 						var modalInstance = getModalInstance();
 						modalInstance.show();
 					} else if (typeof $.fn.modal !== 'undefined') {
-						// Bootstrap 4
 						$modal.modal({
 							backdrop: isTallyConneted ? true : 'static',
 							keyboard: isTallyConneted,

@@ -80,6 +80,16 @@
                     </div>
                 </div>
                 <ul class="navbar-nav header-right">
+
+                    {{-- ================= CLEAR CACHE (moved here from Tally dashboard) ================= --}}
+                    <li class="nav-item header-clear-cache">
+                        <button type="button" id="clearCacheBtn" class="btn btn-outline-secondary btn-sm header-clear-cache-btn">
+                            <i class="fas fa-broom"></i>
+                            <span class="d-none d-md-inline ms-1">Clear Cache</span>
+                        </button>
+                    </li>
+                    {{-- ================= /CLEAR CACHE ================= --}}
+
                     <li class="nav-item dropdown notification_dropdown">
                         <a class="nav-link bell dz-theme-mode" href="javascript:void(0);">
                             <i id="icon-light" class="fas fa-sun"></i>
@@ -216,3 +226,211 @@
         </nav>
     </div>
 </div>
+
+{{-- ================= CLEAR CACHE CONFIRM MODAL (navbar) ================= --}}
+<div class="modal fade" id="clearCacheConfirmModal" tabindex="-1" aria-labelledby="clearCacheConfirmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content header-clear-cache-modal">
+
+            <div class="modal-body text-center pt-4 pb-3 px-4">
+
+                <div class="header-clear-cache-icon mb-3">
+                    <i class="fas fa-broom"></i>
+                </div>
+
+                <h4 class="mb-2 fw-bold" id="clearCacheConfirmModalLabel">Clear Cache?</h4>
+                <p class="text-muted mb-0">
+                    This will clear the application cache. Are you sure you want to continue?
+                </p>
+
+            </div>
+
+            <div class="modal-footer border-0 pt-0 pb-4 px-4">
+                <button type="button" class="btn btn-outline-secondary flex-fill" data-bs-dismiss="modal">
+                    Cancel
+                </button>
+                <button type="button" id="confirmClearCacheBtn" class="btn btn-primary flex-fill">
+                    <i class="fas fa-broom me-2"></i> Yes, Clear Cache
+                </button>
+            </div>
+
+        </div>
+    </div>
+</div>
+{{-- ================= /CLEAR CACHE CONFIRM MODAL ================= --}}
+
+{{-- ================= CLEAR CACHE LOADING MODAL (navbar) ================= --}}
+<div class="modal fade" id="clearCacheLoadingModal" tabindex="-1"
+    data-bs-backdrop="static"
+    data-bs-keyboard="false"
+    aria-hidden="true">
+
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+
+            <div class="modal-body text-center py-5">
+
+                <div class="mb-3">
+                    <i class="fas fa-broom fa-spin text-primary" style="font-size: 40px;"></i>
+                </div>
+
+                <h5 class="mb-0">Clearing cache, please wait...</h5>
+
+            </div>
+
+        </div>
+    </div>
+</div>
+{{-- ================= /CLEAR CACHE LOADING MODAL ================= --}}
+
+<style>
+    .header-clear-cache {
+        display: flex;
+        align-items: center;
+        margin-right: 10px;
+    }
+
+    .header-clear-cache-btn {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 8px;
+        font-weight: 600;
+    }
+
+    .header-clear-cache-modal {
+        border-radius: 16px;
+        border: none;
+        overflow: hidden;
+    }
+
+    .header-clear-cache-icon {
+        width: 72px;
+        height: 72px;
+        margin: 0 auto;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #E9E2F8, #d7c9f5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .header-clear-cache-icon i {
+        font-size: 30px;
+        color: #4E3F6B;
+    }
+</style>
+
+<script>
+    $(function () {
+
+        var $clearCacheConfirmModal = $('#clearCacheConfirmModal');
+        var $clearCacheLoadingModal = $('#clearCacheLoadingModal');
+
+        // Keep these modals attached directly to body so no parent overflow/position
+        // rule ever clips or hides them, regardless of which page includes this header.
+        if ($clearCacheConfirmModal.length) $clearCacheConfirmModal.appendTo('body');
+        if ($clearCacheLoadingModal.length) $clearCacheLoadingModal.appendTo('body');
+
+        function showModalEl($el, options) {
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                bootstrap.Modal.getOrCreateInstance($el[0], options || {}).show();
+            } else if (typeof $.fn.modal !== 'undefined') {
+                $el.modal(Object.assign({ show: true }, options || {}));
+            } else {
+                console.error('Bootstrap JS load nahi hua hai. Check script tag order.');
+            }
+        }
+
+        function hideModalEl($el) {
+            if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                var instance = bootstrap.Modal.getInstance($el[0]);
+                if (instance) instance.hide();
+            } else if (typeof $.fn.modal !== 'undefined') {
+                $el.modal('hide');
+            }
+        }
+
+        function showHeaderMessage(html) {
+            // Agar current page par #syncMessage (Tally dashboard) available hai to wahi
+            // use karo, warna ek chhota top-right toast bana dो.
+            var $target = $('#syncMessage');
+
+            if ($target.length) {
+                $target.html(html);
+                return;
+            }
+
+            var $toastWrap = $('#headerClearCacheToastWrap');
+
+            if (!$toastWrap.length) {
+                $toastWrap = $('<div id="headerClearCacheToastWrap"></div>').css({
+                    position: 'fixed',
+                    top: '20px',
+                    right: '20px',
+                    zIndex: 2000,
+                    minWidth: '280px'
+                }).appendTo('body');
+            }
+
+            $toastWrap.html(html);
+
+            setTimeout(function () {
+                $toastWrap.find('.alert').alert('close');
+            }, 4000);
+        }
+
+        // Step 1: Clear Cache button click -> open confirmation modal
+        $('#clearCacheBtn').on('click', function () {
+            showModalEl($clearCacheConfirmModal);
+        });
+
+        // Step 2: Confirm click -> close confirm modal, show loading modal, call API
+        $('#confirmClearCacheBtn').on('click', function () {
+
+            hideModalEl($clearCacheConfirmModal);
+
+            showModalEl($clearCacheLoadingModal, {
+                backdrop: 'static',
+                keyboard: false
+            });
+
+            $.ajax({
+                url: "{{ route('owner.tally.clear-cache') }}",
+                type: 'POST',
+                data: {
+                    _token: "{{ csrf_token() }}"
+                },
+                success: function (response) {
+                    setTimeout(function () {
+                        hideModalEl($clearCacheLoadingModal);
+
+                        showHeaderMessage(`
+                            <div class="alert alert-success alert-dismissible fade show mt-3">
+                                ${response.message || 'Cache cleared successfully.'}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                            </div>
+                        `);
+                    }, 600);
+                },
+                error: function (xhr) {
+                    let message = 'Cache clear nahi ho paya. Phir try karo.';
+                    if (xhr.responseJSON?.message) {
+                        message = xhr.responseJSON.message;
+                    }
+
+                    setTimeout(function () {
+                        hideModalEl($clearCacheLoadingModal);
+
+                        showHeaderMessage(`
+                            <div class="alert alert-danger alert-dismissible fade show mt-3">
+                                ${message}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                            </div>
+                        `);
+                    }, 600);
+                }
+            });
+        });
+
+    });
+</script>
