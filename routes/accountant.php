@@ -71,6 +71,11 @@ Route::prefix('accountant')->middleware(['auth:accountant', 'accountant.subscrip
             [AccountantController::class, 'ledgerVouchers']
         )->name('accountant.tally.ledger.vouchers');
 
+        Route::get('/tally/{company}/ledger/{ledger}/{under?}/field-vouchers', [AccountantController::class, 'ledgerFieldVouchers'])->name('accountant.tally.ledger.field-vouchers');
+
+        Route::get('/tally/ledger-due-vouchers', [AccountantController::class, 'ledgerDueVouchers'])->name('accountant.tally.ledger.due-vouchers');
+
+        Route::post('/tally/ledger/update-credit-period', [AccountantController::class, 'updateCreditPeriod'])->name('accountant.tally.ledger.update-credit-period');
 
         Route::get(
             '/tally/company/{company}/ledger/{ledger}/followup/{under?}',
@@ -84,6 +89,8 @@ Route::prefix('accountant')->middleware(['auth:accountant', 'accountant.subscrip
             [AccountantController::class, 'followUpsHub']
         )->name('accountant.tally.followup.hub');
 
+
+        Route::post('/tally/{company}/bad-debts/assign', [AccountantController::class, 'assignBadDebts'])->name('accountant.tally.baddebts.assign'); 
 
         // Followup Actions
         Route::get( 

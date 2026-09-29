@@ -999,16 +999,16 @@ class OwnerController extends Controller
     ]);
 }
 
-    private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2): string
-    {
-        $alphaOnly = strtoupper(preg_replace('/[^a-zA-Z]/', '', $name));
+private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2): string
+{
+    $alphaOnly = strtoupper(preg_replace('/[^a-zA-Z]/', '', $name));
 
-        $prefix = str_pad(substr($alphaOnly, 0, 4), 4, 'X');
+    $prefix = str_pad(substr($alphaOnly, 0, 4), 4, 'X');
 
-        $idPart = str_pad((string) $primaryId, $minDigits, '0', STR_PAD_LEFT);
+    $idPart = str_pad((string) $primaryId, $minDigits, '0', STR_PAD_LEFT);
 
-        return $prefix . $idPart;
-    }
+    return $prefix . $idPart;
+}
 
     private function buildVoucherUniqueId(
         string $companyName,

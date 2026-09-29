@@ -11,7 +11,12 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
 use App\Services\TallyService;
 use App\Models\LedgerCollector;
+use App\Models\TallyCompany;
 use App\Models\VoucherMapping;
+use App\Models\TallyLedger;
+use App\Models\TallyVoucher;
+use Carbon\Carbon;
+
 
 
 class AccountantController extends Controller
@@ -129,40 +134,28 @@ class AccountantController extends Controller
 
 
     public function dashboard()
-    {
+    {   
         try {
-            $xml = $this->tally->getCompanies();
-            $xmlObj = simplexml_load_string($xml);
+            $accountant = auth('accountant')->user();
+            $ownerId = $accountant->owner_id ?? null ;
 
-            $tallyConnected = false;
-            $companies = [];
+            $companies = TallyCompany::where('owner_id', $ownerId)->get();
+            $xml = "";
+            
 
-            if ($xmlObj) {
-                $tallyConnected = true;
-                $nodes = $xmlObj->xpath("//*[local-name()='COMPANY']");
-                if ($nodes) {
-                    foreach ($nodes as $company) {
-                        $name = trim((string)($company['NAME'] ?? $company->NAME));
-                        if ($name != '') {
-                            $companies[] = [
-                                'name' => $name,
-                            ];
-                        }
-                    }
-                }
-            }
-
+            $isTallyConneted = true;
+            
             return view('accountant.tally.index', compact(
                 'companies',
                 'xml',
-                'tallyConnected'
+                'isTallyConneted'
             ));
 
         } catch (\Exception $e) {
 
             return view('accountant.tally.index', [
                 'companies' => [],
-                'tallyConnected' => false,
+                'isTallyConneted' => false,
                 'error' => $e->getMessage(),
             ]);
         }
@@ -305,61 +298,116 @@ class AccountantController extends Controller
         return back()->with('success', 'Collector assigned successfully.');
     }
 
-    public function companyLedgers($company)
+    public function companyLedgers($com)
     {
         try {
 
-            $company = urldecode($company);
+            $accountant = auth('accountant')->user();
+            $ownerId = $accountant->owner_id ?? null ;
 
-            $xml = $this->tally->getLedgers($company);
+            $companies = TallyCompany::where('owner_id', $ownerId)->get();
+            $xml = "";
+            
 
-            // Remove invalid XML entities like &#4;
-            $xml = preg_replace('/&#x?0*4;?/i', '', $xml);
-            $xml = preg_replace('/&#[0-8];|&#1[0-9];|&#2[0-9];|&#3[0-1];/', '', $xml);
+            $isTallyConneted = true;
 
-            // Remove control characters
-            $xml = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $xml);
-
-            libxml_use_internal_errors(true);
-
-            $xmlObj = simplexml_load_string($xml);
-
-            if ($xmlObj === false) {
-                foreach (libxml_get_errors() as $error) {
-                    dump($error->message);
+            $company = urldecode($com);
+            $tallyCompany = TallyCompany::where('owner_id', $ownerId)
+                ->where('company_name', $company)
+                ->first();
+    
+            $ledgerModels = TallyLedger::where('owner_id', $ownerId)
+                ->where('tally_company_id', $tallyCompany->id)
+                ->orderBy('ledger_name')
+                ->get();
+    
+            $vouchersByLedger = TallyVoucher::where('owner_id', $ownerId)
+                ->where('tally_company_id', $tallyCompany->id)
+                ->whereIn('ledger_id', $ledgerModels->pluck('id'))
+                ->get()
+                ->groupBy('ledger_id');
+    
+            $voucherMappings = VoucherMapping::where('company', $com)
+                ->pluck('mapped_to', 'voucher_type')
+                ->toArray();
+    
+            $today = Carbon::now()->startOfDay();
+    
+            $ledgers = $ledgerModels->map(function ($ledger) use ($vouchersByLedger, $today, $voucherMappings) {
+                $under = $ledger->parent;
+    
+                // due_date aur voucher_number bhi saath me
+                $vouchers = $vouchersByLedger->get($ledger->id, collect())
+                    ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
+                        'due_date'       => $v->due_date ?? null,
+                        'voucher_number' => $v->voucher_number,
+                    ]);
+    
+                $isReceipt = fn ($v) => str_contains($v['voucher_type_low'], 'receipt');
+                $isPayment = fn ($v) => str_contains($v['voucher_type_low'], 'payment');
+    
+                $sale = $purchase = $otherDebits = $otherCredits = $receipts = $payments = 0.0;
+    
+                if ($under === 'Sundry Creditors') {
+                    $purchase     = (float) $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'purchase' && $v['credit'] > 0)->sum('credit');
+                    $otherCredits = (float) $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'purchase' && $v['credit'] > 0)->sum('credit');
+                    $payments     = (float) $vouchers->filter(fn ($v) => $isPayment($v) && $v['debit'] > 0)->sum('debit');
+                } else {
+                    $sale        = (float) $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'sales' && $v['debit'] > 0)->sum('debit');
+                    $otherDebits = (float) $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'sales' && $v['debit'] > 0)->sum('debit');
+                    $receipts    = (float) $vouchers->filter(fn ($v) => $isReceipt($v) && $v['credit'] > 0)->sum('credit');
                 }
-            }
+    
+                $creditPeriod = (int) ($ledger->credit_period ?? 0);
+    
+                // Receipts ke against clear na hue invoices -> Balance Due / Not Due
+                $openInvoices = $this->buildOpenInvoices($vouchers, $under, $creditPeriod, $today);
+    
+                $due    = (float) $openInvoices->filter(fn ($i) => $i['days'] > 0)->sum('pending');
+                $notDue = (float) $openInvoices->filter(fn ($i) => $i['days'] <= 0)->sum('pending');
+    
+                $balance = (float) ($ledger->closing_balance ?? 0);
+    
+                return [
+                    'unique_id' => $ledger->unique_ledger_id,
+                    'name'      => $ledger->ledger_name,
+                    'under'     => $under,
+                    'mobile'    => $ledger->ledger_mobile_number,
+    
+                    'balance'       => $balance,
+                    'due'           => $due,
+                    'not_due'       => $notDue,
+                    'target'        => $ledger->target ?? 0,
+                    'sale'          => $sale,
 
-            $xmlObj = simplexml_load_string($xml);
-
-            $ledgers = [];
-
-            if ($xmlObj) {
-
-                $nodes = $xmlObj->xpath("//*[local-name()='LEDGER']");
-
-                if ($nodes) {
-
-                    foreach ($nodes as $ledger) {
-
-                        $name = (string) ($ledger['NAME'] ?? '');
-                        $under = (string) ($ledger->PARENT ?? '');
-
-                        // Sirf Sundry Debtors aur Sundry Creditors
-                        if (
-                            in_array(
-                                trim($under),
-                                ['Sundry Debtors', 'Sundry Creditors']
-                            )
-                        ) {
-                            $ledgers[] = [
-                                'name' => $name,
-                                'under' => $under,
-                            ];
-                        }
-                    }
-                }
-            }
+                    'purchase'      => $purchase,
+                    'other_debits'  => $otherDebits,
+                    'other_credits' => $otherCredits,
+                    'receipts'      => $receipts,
+                    'payments'      => $payments,
+    
+                    'interest_cost'     => $ledger->interest_cost ?? 0,
+                    'interest_received' => $ledger->interest_received ?? 0,
+                    'interest_paid'     => $ledger->interest_paid ?? 0,
+                    'interest_due'      => $ledger->interest_due ?? 0,
+                    'interest_waived'   => $ledger->interest_waived ?? 0,
+    
+                    'bad_debts'             => $ledger->bad_debts ?? 0,
+                    'total_debtors'         => $balance > 0 ? $balance : 0,
+                    'total_creditors'       => $balance < 0 ? abs($balance) : 0,
+                    'march_closing_pending' => $ledger->march_closing_pending ?? 0,
+    
+                    // Table me `status` column nahi, `mark` (red/green/unmarked) hai
+                    'status' => match ($ledger->mark) {
+                        'green' => 'success',
+                        'red'   => 'danger',
+                        default => 'secondary',
+                    },
+                    // `overlimit` string hai ("Yes"/"No"), seedha (bool) cast karne se "No" bhi true ho jata hai
+                    'overlimit' => filter_var($ledger->overlimit, FILTER_VALIDATE_BOOLEAN),
+                    'rank'      => $ledger->rank ?? null,
+                ];
+            });
 
             return view(
                 'accountant.tally.ledgers',
@@ -375,107 +423,89 @@ class AccountantController extends Controller
     {
         $under = urldecode($under);
         try {
-            $voucherMappings = VoucherMapping::where('company', $company)
-                                ->pluck('mapped_to', 'voucher_type')
-                                ->toArray();
+            $accountant = auth('accountant')->user();
+            $ownerId = $accountant->owner_id ?? null ;
 
+            
+            $com = $company;  
             $company = urldecode($company);
             $ledger  = urldecode($ledger);
 
-            $xml = $this->tally->getLedgerVouchers($company, $ledger);
+            $voucherMappings = VoucherMapping::where('company', $com)
+                ->pluck('mapped_to', 'voucher_type')
+                ->toArray();
 
-            $xml = preg_replace('/&#(?:0*4);?/i', '', $xml);
-            $xml = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $xml);
+            $tallyCompany = TallyCompany::where('owner_id', $ownerId)
+                ->where('company_name', $company)
+                ->first();
 
-            libxml_use_internal_errors(true);
-            $xmlObj = simplexml_load_string($xml);
-
-            if ($xmlObj === false) {
-                $errors = [];
-                foreach (libxml_get_errors() as $error) {
-                    $errors[] = trim($error->message);
-                }
-                return back()->with('error', 'XML Parse Error: ' . implode(', ', $errors));
-            }
-
+            $tallyLedger = TallyLedger::where('owner_id', $ownerId)
+                ->where('tally_company_id', $tallyCompany->id ?? 0)
+                ->where('ledger_name', $ledger)
+                ->first();
+ 
             $vouchers = [];
-            $nodes = $xmlObj->xpath("//*[local-name()='VOUCHER']");
 
-            if ($nodes) {
-                foreach ($nodes as $voucher) {
-                    $belongsToLedger = false;
-                    $particulars = [];
-                    $ledgerAmount = 0;
+            $creditSideTypesForDebtor  = ['receipt', 'receipt note', 'credit note']; // money IN — reduces receivable
+            $debitSideTypesForCreditor = ['payment', 'debit note'];                  // money OUT — reduces payable
 
-                    if (isset($voucher->{'ALLLEDGERENTRIES.LIST'})) {
-                        foreach ($voucher->{'ALLLEDGERENTRIES.LIST'} as $entry) {
-                            $entryLedger = trim((string)($entry->LEDGERNAME ?? ''));
-                            $amount = (float)($entry->AMOUNT ?? 0);
-                            if (strcasecmp($entryLedger, $ledger) === 0) {
-                                $belongsToLedger = true;
-                                $ledgerAmount += $amount;
-                            } else {
-                                if (!empty($entryLedger)) {
-                                    $particulars[] = $entryLedger;
-                                }
-                            }
+            if ($tallyCompany && $tallyLedger) {
+                $voucherRows = TallyVoucher::where('owner_id', $ownerId)
+                    ->where('tally_company_id', $tallyCompany->id)
+                    ->where('ledger_id', $tallyLedger->id)
+                    ->orderBy('date')
+                    ->get();
+
+                foreach ($voucherRows as $v) {
+                    $amount = abs((float) $v->amount);
+
+                    $voucherType    = trim((string) $v->voucher_type);
+                    $voucherTypeLow = strtolower($voucherType);
+
+                    $mappedType = trim($voucherMappings[$voucherType] ?? 'Other than Sales/Purchase');
+
+                    $debit  = 0;
+                    $credit = 0;
+
+                    if ($under === 'Sundry Creditors') {
+                        if (in_array($voucherTypeLow, $debitSideTypesForCreditor, true)) {
+                            $debit = $amount;
+                        } else {
+                            $credit = $amount;
+                        }
+                    } else {
+                        if (in_array($voucherTypeLow, $creditSideTypesForDebtor, true)) {
+                            $credit = $amount;
+                        } else {
+                            $debit = $amount;
                         }
                     }
 
-                    if (!$belongsToLedger) {
-                        continue;
-                    }
-
-                    $debit = 0;
-                    $credit = 0;
-
-                    if ($ledgerAmount < 0) {
-                        $debit = abs($ledgerAmount);
-                    } elseif ($ledgerAmount > 0) {
-                        $credit = abs($ledgerAmount);
-                    }
-
-                    $voucherType = trim((string)($voucher->VOUCHERTYPENAME ?? ''));
-                    $voucherDate = (string)($voucher->DATE ?? '');
-
                     $vouchers[] = [
-                        'date'           => $voucherDate,
-                        'particulars'    => !empty($particulars)
-                            ? implode(', ', array_unique($particulars))
-                            : (string)($voucher->NARRATION ?? ''),
+                        'date'           => (string) $v->date,
+                        'particulars'    => trim((string) $v->party_ledger_name) ?: '',
                         'voucher_type'   => $voucherType,
-                        'mapped_type'    => trim($voucherMappings[$voucherType] ?? 'Others'),
-                        'voucher_number' => (string)($voucher->VOUCHERNUMBER ?? ''),
+                        'mapped_type'    => $mappedType,
+                        'voucher_number' => (string) $v->voucher_number,
                         'debit'          => $debit,
                         'credit'         => $credit,
-                        'master_id'      => (string)($voucher->MASTERID ?? ''),
+                        'master_id'      => (string) $v->id,
                     ];
                 }
             }
 
-            // Opening / Closing Balance (all-time, as returned by Tally)
-            $balanceXml = $this->tally->getLedgerDetails($company, $ledger);
-            $balanceObj = simplexml_load_string($balanceXml);
+            $openingBalanceAllTime = (float) ($tallyLedger->opening_balance ?? 0);
+            $closingBalanceAllTime = (float) ($tallyLedger->closing_balance ?? 0);
 
-            $openingBalanceAllTime = 0;
-            $closingBalanceAllTime = 0;
-
-            if ($balanceObj !== false && isset($balanceObj->BODY->DATA->COLLECTION->LEDGER)) {
-                $ledgerData = $balanceObj->BODY->DATA->COLLECTION->LEDGER;
-                $openingBalanceAllTime = (float) ($ledgerData->OPENINGBALANCE ?? 0);
-                $closingBalanceAllTime = (float) ($ledgerData->CLOSINGBALANCE ?? 0);
-            }
-
-            // FY (Financial Year) resolution — Indian FY: 1 Apr - 31 Mar
-            $today = \Carbon\Carbon::now();
-            $currentFyStartYear = $today->month >= 4 ? (int)$today->year : (int)$today->year - 1;
+            $today = Carbon::now();
+            $currentFyStartYear = $today->month >= 4 ? (int) $today->year : (int) $today->year - 1;
 
             $fyParam = $request->get('fy');
             $selectedFyStartYear = $currentFyStartYear;
 
             if ($fyParam && preg_match('/^(\d{4})-(\d{4})$/', $fyParam, $m)) {
-                if ((int)$m[2] === (int)$m[1] + 1) {
-                    $selectedFyStartYear = (int)$m[1];
+                if ((int) $m[2] === (int) $m[1] + 1) {
+                    $selectedFyStartYear = (int) $m[1];
                 }
             }
 
@@ -483,11 +513,11 @@ class AccountantController extends Controller
             $previousFyStartYear = $selectedFyStartYear - 1;
             $previousFyLabel = $previousFyStartYear . '-' . ($previousFyStartYear + 1);
 
-            $selectedFyStart = \Carbon\Carbon::create($selectedFyStartYear, 4, 1)->startOfDay();
-            $selectedFyEnd   = \Carbon\Carbon::create($selectedFyStartYear + 1, 3, 31)->endOfDay();
+            $selectedFyStart = Carbon::create($selectedFyStartYear, 4, 1)->startOfDay();
+            $selectedFyEnd = Carbon::create($selectedFyStartYear + 1, 3, 31)->endOfDay();
 
-            $previousFyStart = \Carbon\Carbon::create($previousFyStartYear, 4, 1)->startOfDay();
-            $previousFyEnd   = \Carbon\Carbon::create($previousFyStartYear + 1, 3, 31)->endOfDay();
+            $previousFyStart = Carbon::create($previousFyStartYear, 4, 1)->startOfDay();
+            $previousFyEnd = Carbon::create($previousFyStartYear + 1, 3, 31)->endOfDay();
 
             $fyOptions = [];
             for ($i = 0; $i < 5; $i++) {
@@ -498,10 +528,10 @@ class AccountantController extends Controller
             $parseDate = function ($d) {
                 if (empty($d)) return null;
                 try {
-                    return \Carbon\Carbon::createFromFormat('Ymd', $d)->startOfDay();
+                    return Carbon::createFromFormat('Ymd', $d)->startOfDay();
                 } catch (\Throwable $e) {
                     try {
-                        return \Carbon\Carbon::parse($d)->startOfDay();
+                        return Carbon::parse($d)->startOfDay();
                     } catch (\Throwable $e2) {
                         return null;
                     }
@@ -509,15 +539,10 @@ class AccountantController extends Controller
             };
 
             $vouchersAsc = $vouchers;
-            usort($vouchersAsc, function ($a, $b) {
-                return strcmp($a['date'], $b['date']);
-            });
+            usort($vouchersAsc, fn($a, $b) => strcmp($a['date'], $b['date']));
 
-            
             $netBeforeSelectedFy = 0;
             $netWithinSelectedFy = 0;
-
-
 
             foreach ($vouchersAsc as $v) {
                 $d = $parseDate($v['date']);
@@ -549,9 +574,9 @@ class AccountantController extends Controller
                 ->sortByDesc('date')->values()->toArray();
 
             $receiptVouchers = collect($previousFyVouchers)
-                ->filter(fn($item) => strtolower(trim($item['mapped_type'])) === 'receipt')
+                ->filter(fn($item) => strtolower(trim($item['voucher_type'])) === 'receipt')
                 ->sortByDesc('date')->values()->toArray();
-
+ 
             $buildBuckets = function (array $voucherSet, ?string $under) {
                 if ($under === "Sundry Debtors") {
                     $primaryVouchers = collect($voucherSet)
@@ -570,60 +595,13 @@ class AccountantController extends Controller
                     $totalOthers = collect($journalVouchers)->sum('debit');
                     $totalCredit = collect($secondaryVouchers)->sum('credit');
 
-                    $others = collect($journalVouchers)->sortBy('date')->values()
-                        ->map(function ($v) { $v['pending'] = $v['debit']; return $v; })->toArray();
-
-                    $sales = collect($primaryVouchers)->sortBy('date')->values()
-                        ->map(function ($v) { $v['pending'] = $v['debit']; return $v; })->toArray();
-
-                    $receipts = collect($secondaryVouchers)->sortBy('date')->values()->toArray();
-
-                    foreach ($receipts as $receipt) {
-                        $amount = $receipt['credit'];
-                        foreach ($others as $index => $other) {
-                            if ($amount <= 0) break;
-                            if ($other['pending'] <= 0) continue;
-                            $adjust = min($amount, $other['pending']);
-                            $others[$index]['pending'] -= $adjust;
-                            $amount -= $adjust;
-                        }
-                        foreach ($sales as $index => $sale) {
-                            if ($amount <= 0) break;
-                            if ($sale['pending'] <= 0) continue;
-                            $adjust = min($amount, $sale['pending']);
-                            $sales[$index]['pending'] -= $adjust;
-                            $amount -= $adjust;
-                        }
-                    }
-
-                    $pendingAmount = array_sum(array_column($others, 'pending'))
-                        + array_sum(array_column($sales, 'pending'));
-
-                    $pendingVouchers = collect(array_merge($sales, $others))
-                        ->filter(fn($v) => ($v['pending'] ?? 0) > 0.01)
-                        ->sortBy('date')
-                        ->values()
-                        ->toArray();
-
-                    if ($totalCredit >= ($totalSales + $totalOthers)) {
-                        $pendingAmount = 0;
-                        $pendingVouchers = [];
-                    }
-
-                    $totalDebit = $totalSales + $totalOthers;
-
                     return [
-                        'primaryVouchers'   => $sales,
+                        'primaryVouchers'   => collect($primaryVouchers)->sortBy('date')->values()->toArray(),
                         'secondaryVouchers' => $secondaryVouchers,
-                        'journalVouchers'   => $others,
-                        'pendingVouchers'   => $pendingVouchers,
+                        'journalVouchers'   => collect($journalVouchers)->sortBy('date')->values()->toArray(),
                         'primaryLabel'      => 'Total Debit',
                         'secondaryLabel'    => 'Total Credit',
-                        'summary' => [
-                            'sale'     => $totalDebit,
-                            'receipts' => $totalCredit,
-                            'pending'  => $pendingAmount,
-                        ],
+                        'summary'           => ['sale' => $totalSales + $totalOthers, 'receipts' => $totalCredit],
                     ];
                 } elseif ($under === "Sundry Creditors") {
                     $primaryVouchers = collect($voucherSet)
@@ -642,130 +620,153 @@ class AccountantController extends Controller
                     $totalOthers   = collect($journalVouchers)->sum('credit');
                     $totalDebit    = collect($secondaryVouchers)->sum('debit');
 
-                    $others = collect($journalVouchers)->sortBy('date')->values()
-                        ->map(function ($v) { $v['pending'] = $v['credit']; return $v; });
-
-                    $purchases = collect($primaryVouchers)->sortBy('date')->values()
-                        ->map(function ($v) { $v['pending'] = $v['credit']; return $v; });
-
-                    $payments = collect($secondaryVouchers)->sortBy('date')->values();
-
-                    foreach ($payments as $payment) {
-                        $amount = $payment['debit'];
-                        foreach ($others as &$other) {
-                            if ($amount <= 0) break;
-                            if ($other['pending'] <= 0) continue;
-                            $adjust = min($amount, $other['pending']);
-                            $other['pending'] -= $adjust;
-                            $amount -= $adjust;
-                        }
-                        foreach ($purchases as &$purchase) {
-                            if ($amount <= 0) break;
-                            if ($purchase['pending'] <= 0) continue;
-                            $adjust = min($amount, $purchase['pending']);
-                            $purchase['pending'] -= $adjust;
-                            $amount -= $adjust;
-                        }
-                    }
-
-                    $pendingAmount = collect($others)->sum('pending') + collect($purchases)->sum('pending');
-
-                    $pendingVouchers = collect(array_merge($purchases->toArray(), $others->toArray()))
-                        ->filter(fn($v) => ($v['pending'] ?? 0) > 0.01)
-                        ->sortBy('date')
-                        ->values()
-                        ->toArray();
-
-                    if ($totalDebit >= ($totalPurchase + $totalOthers)) {
-                        $pendingAmount = 0;
-                        $pendingVouchers = [];
-                    }
-
-                    $totalCredit = $totalPurchase + $totalOthers;
-
                     return [
-                        'primaryVouchers'   => $purchases->toArray(),
+                        'primaryVouchers'   => collect($primaryVouchers)->sortBy('date')->values()->toArray(),
                         'secondaryVouchers' => $secondaryVouchers,
-                        'journalVouchers'   => $others->toArray(),
-                        'pendingVouchers'   => $pendingVouchers,
+                        'journalVouchers'   => collect($journalVouchers)->sortBy('date')->values()->toArray(),
                         'primaryLabel'      => 'Total Credit',
                         'secondaryLabel'    => 'Total Debit',
-                        'summary' => [
-                            'sale'     => $totalCredit,
-                            'receipts' => $totalDebit,
-                            'pending'  => $pendingAmount,
-                        ],
+                        'summary'           => ['sale' => $totalPurchase + $totalOthers, 'receipts' => $totalDebit],
                     ];
                 }
 
                 return [
-                    'primaryVouchers'   => [],
-                    'secondaryVouchers' => [],
-                    'journalVouchers'   => [],
-                    'pendingVouchers'   => [],
-                    'primaryLabel'      => 'Primary',
-                    'secondaryLabel'    => 'Secondary',
-                    'summary' => ['sale' => 0, 'receipts' => 0, 'pending' => 0],
+                    'primaryVouchers' => [], 'secondaryVouchers' => [], 'journalVouchers' => [],
+                    'primaryLabel' => 'Primary', 'secondaryLabel' => 'Secondary',
+                    'summary' => ['sale' => 0, 'receipts' => 0],
                 ];
             };
 
-            // Cumulative: books ki shuruaat se lekar selected FY ke end tak — saare vouchers
-            $cumulativeVouchersTillSelectedFy = array_values(array_filter($vouchersAsc, function ($v) use ($parseDate, $selectedFyEnd) {
-                $d = $parseDate($v['date']);
-                return $d && $d->lte($selectedFyEnd);
-            }));
+             
+            $buildPendingSnapshot = function (array $voucherSet, ?string $under) {
+                if ($under === 'Sundry Debtors') {
+                    $primary = collect($voucherSet)
+                        ->filter(fn($v) => strtolower(trim($v['mapped_type'])) === 'sales' && ($v['debit'] ?? 0) > 0)
+                        ->sortBy('date')->values()
+                        ->map(function ($v) { $v['pending'] = $v['debit']; return $v; })->all();
 
-            // Cumulative: books ki shuruaat se lekar previous FY ke end tak — saare vouchers
-            $cumulativeVouchersTillPreviousFy = array_values(array_filter($vouchersAsc, function ($v) use ($parseDate, $previousFyEnd) {
-                $d = $parseDate($v['date']);
-                return $d && $d->lte($previousFyEnd);
-            }));
+                    $others = collect($voucherSet)
+                        ->filter(fn($v) => strtolower(trim($v['mapped_type'])) !== 'sales' && ($v['debit'] ?? 0) > 0)
+                        ->sortBy('date')->values()
+                        ->map(function ($v) { $v['pending'] = $v['debit']; return $v; })->all();
 
-            $currentFyBuckets  = $buildBuckets($cumulativeVouchersTillSelectedFy, $under);
-            $previousFyBuckets = $buildBuckets($cumulativeVouchersTillPreviousFy, $under);
+                    $receipts = collect($voucherSet)
+                        ->filter(fn($v) => ($v['credit'] ?? 0) > 0)
+                        ->sortBy('date')->values()->all();
 
-            $currentFyOnlyBuckets  = $buildBuckets($currentFyVouchers, $under);   
-            $previousFyOnlyBuckets = $buildBuckets($previousFyVouchers, $under);  // sirf FY ke andar ke totals ke liye
-            
-            $summary           = $currentFyOnlyBuckets['summary'];   // Total Sale/Purchase, Total Receipt/Payment cards — sirf selected FY
+                    foreach ($receipts as $receipt) {
+                        $amount = $receipt['credit'];
+
+                        foreach ($others as $i => $o) {
+                            if ($amount <= 0) break;
+                            if ($others[$i]['pending'] <= 0) continue;
+                            $adjust = min($amount, $others[$i]['pending']);
+                            $others[$i]['pending'] -= $adjust;
+                            $amount -= $adjust;
+                        }
+                        foreach ($primary as $i => $p) {
+                            if ($amount <= 0) break;
+                            if ($primary[$i]['pending'] <= 0) continue;
+                            $adjust = min($amount, $primary[$i]['pending']);
+                            $primary[$i]['pending'] -= $adjust;
+                            $amount -= $adjust;
+                        }
+                    }
+
+                    $pendingVouchers = collect(array_merge($primary, $others))
+                        ->filter(fn($v) => ($v['pending'] ?? 0) > 0.01)
+                        ->sortBy('date')->values()->toArray();
+
+                    return ['pendingAmount' => array_sum(array_column($pendingVouchers, 'pending')), 'pendingVouchers' => $pendingVouchers];
+
+                } elseif ($under === 'Sundry Creditors') {
+                    $primary = collect($voucherSet)
+                        ->filter(fn($v) => strtolower(trim($v['mapped_type'])) === 'purchase' && ($v['credit'] ?? 0) > 0)
+                        ->sortBy('date')->values()
+                        ->map(function ($v) { $v['pending'] = $v['credit']; return $v; })->all();
+
+                    $others = collect($voucherSet)
+                        ->filter(fn($v) => strtolower(trim($v['mapped_type'])) !== 'purchase' && ($v['credit'] ?? 0) > 0)
+                        ->sortBy('date')->values()
+                        ->map(function ($v) { $v['pending'] = $v['credit']; return $v; })->all();
+
+                    $payments = collect($voucherSet)
+                        ->filter(fn($v) => ($v['debit'] ?? 0) > 0)
+                        ->sortBy('date')->values()->all();
+
+                    foreach ($payments as $payment) {
+                        $amount = $payment['debit'];
+
+                        foreach ($others as $i => $o) {
+                            if ($amount <= 0) break;
+                            if ($others[$i]['pending'] <= 0) continue;
+                            $adjust = min($amount, $others[$i]['pending']);
+                            $others[$i]['pending'] -= $adjust;
+                            $amount -= $adjust;
+                        }
+                        foreach ($primary as $i => $p) {
+                            if ($amount <= 0) break;
+                            if ($primary[$i]['pending'] <= 0) continue;
+                            $adjust = min($amount, $primary[$i]['pending']);
+                            $primary[$i]['pending'] -= $adjust;
+                            $amount -= $adjust;
+                        }
+                    }
+
+                    $pendingVouchers = collect(array_merge($primary, $others))
+                        ->filter(fn($v) => ($v['pending'] ?? 0) > 0.01)
+                        ->sortBy('date')->values()->toArray();
+
+                    return ['pendingAmount' => array_sum(array_column($pendingVouchers, 'pending')), 'pendingVouchers' => $pendingVouchers];
+                }
+
+                return ['pendingAmount' => 0, 'pendingVouchers' => []];
+            };
+
+            $vouchersUpTo = function (array $allVouchersAsc, Carbon $cutoff) use ($parseDate) {
+                return array_values(array_filter($allVouchersAsc, function ($v) use ($parseDate, $cutoff) {
+                    $d = $parseDate($v['date']);
+                    return $d && $d->lte($cutoff);
+                }));
+            };
+
+            $vouchersUpToPreviousFyEnd = $vouchersUpTo($vouchersAsc, $previousFyEnd);
+            $pendingSnapshot = $buildPendingSnapshot($vouchersUpToPreviousFyEnd, $under);
+
+            $vouchersUpToSelectedFyEnd = $vouchersUpTo($vouchersAsc, $selectedFyEnd);
+            $closingSnapshot = $buildPendingSnapshot($vouchersUpToSelectedFyEnd, $under);
+
+            $currentFyOnlyBuckets = $buildBuckets($currentFyVouchers, $under);
+            $previousFyOnlyBuckets = $buildBuckets($previousFyVouchers, $under);
+
+            $summary = [
+                'sale'     => $currentFyOnlyBuckets['summary']['sale'],
+                'receipts' => $currentFyOnlyBuckets['summary']['receipts'],
+                'pending'  => $pendingSnapshot['pendingAmount'],
+            ];
+
             $primaryVouchers   = $previousFyOnlyBuckets['primaryVouchers'];
             $secondaryVouchers = $previousFyOnlyBuckets['secondaryVouchers'];
             $journalVouchers   = $previousFyOnlyBuckets['journalVouchers'];
             $primaryLabel      = $previousFyOnlyBuckets['primaryLabel'];
             $secondaryLabel    = $previousFyOnlyBuckets['secondaryLabel'];
 
-            $summary['pending'] = $previousFyBuckets['summary']['pending'];   // cumulative pending (all history till previous FY end)
-            $pendingVouchers    = $previousFyBuckets['pendingVouchers'];      // cumulative pending vouchers list
+            $pendingVouchers        = $pendingSnapshot['pendingVouchers'];
+            $closingBalanceVouchers = $closingSnapshot['pendingVouchers'];
 
-            $closingBalanceVouchers = $currentFyBuckets['pendingVouchers'];  
-            
             return view('accountant.tally.ledger-vouchers', compact(
-                'company',
-                'ledger',
-                'vouchers',
-                'summary',
-                'openingBalance',
-                'closingBalance',
-                'salesVouchers',
-                'receiptVouchers',
-                'journalVouchers',
-                'under',
-                'primaryVouchers',
-                'secondaryVouchers',
-                'primaryLabel',
-                'secondaryLabel',
-                'fyOptions',
-                'selectedFyLabel',
-                'previousFyLabel',
-                'pendingVouchers',
-                'closingBalanceVouchers'
+                'company', 'ledger', 'vouchers', 'summary', 'openingBalance', 'closingBalance',
+                'salesVouchers', 'receiptVouchers', 'journalVouchers', 'under',
+                'primaryVouchers', 'secondaryVouchers', 'primaryLabel', 'secondaryLabel',
+                'fyOptions', 'selectedFyLabel', 'previousFyLabel',
+                'pendingVouchers', 'closingBalanceVouchers'
             ));
 
         } catch (\Throwable $e) {
             Log::error('Ledger Voucher Error', [
                 'message' => $e->getMessage(),
-                'line'    => $e->getLine(),
-                'file'    => $e->getFile(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile(),
             ]);
 
             return back()->with('error', $e->getMessage());
@@ -1334,6 +1335,274 @@ class AccountantController extends Controller
         
         // print_r($history); die;
         return view('accountant.manual.followup-history', compact('history'));
+    }
+
+    public function ledgerFieldVouchers(Request $request, $company, $ledger, $under)
+    {
+        $accountant = auth('accountant')->user();
+        $ownerId = $accountant->owner_id ?? null ;
+
+        
+        $field   = $request->get('field');
+        $company = urldecode($company);
+        $ledger  = urldecode($ledger);
+        $under   = urldecode($under);
+        $owner   = Auth::guard('owner')->user();
+
+        $tallyCompany = TallyCompany::where('owner_id', $ownerId)
+            ->where('company_name', $company)
+            ->first();
+
+        $ledgerModel = TallyLedger::where('owner_id', $ownerId)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->where('ledger_name', $ledger)
+            ->first();
+
+        if (!$ledgerModel) {
+            return response()->json(['vouchers' => []]);
+        }
+
+        $voucherMappings = VoucherMapping::where('company', $company)
+            ->pluck('mapped_to', 'voucher_type')
+            ->toArray();
+
+        $ledgerCreditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+        $today = Carbon::now()->startOfDay();
+
+        $vouchers = TallyVoucher::where('owner_id', $ownerId)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->where('ledger_id', $ledgerModel->id)
+            ->orderBy('date')
+            ->get()
+            // 👇 id, due_date, credit_period, credit_period_source bhi saath me le lo
+            ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
+                'id'                   => $v->id,
+                'due_date'             => $v->due_date ?? null,
+                'credit_period'        => $v->credit_period,
+                'credit_period_source' => $v->credit_period_source,
+            ]);
+
+        if ($field === 'Balance') {
+            return response()->json([
+                'vouchers' => $this->buildBalanceBreakdown($vouchers, $under),
+            ]);
+        }
+
+        $filtered = $this->filterVouchersByField($vouchers, $field, $under);
+
+        $rows = $filtered->map(function ($v) use ($ledgerCreditPeriod, $today) {
+            // per-voucher credit_period agar manually set hai to wahi, warna ledger ka default
+            $resolvedCP = ($v['credit_period_source'] === 'voucher' && $v['credit_period'] !== null)
+                ? (int) $v['credit_period']   // "30 Days" se bhi (int) cast 30 nikal leta hai
+                : $ledgerCreditPeriod;
+
+            $days = 0;
+            if (!empty($v['due_date'])) {
+                $dueDateCarbon = Carbon::parse($v['due_date'])->startOfDay();
+                if ($dueDateCarbon->lt($today)) {
+                    $days = $today->diffInDays($dueDateCarbon);
+                }
+            }
+
+            return [
+                'id'            => $v['id'] ?? null,
+                'date'          => $v['date'],
+                'voucher_no'    => $v['voucher_number'],
+                'voucher_type'  => $v['voucher_type'],
+                'particulars'   => $v['particulars'],
+                'debit'         => $v['debit'],
+                'credit'        => $v['credit'],
+                'due_date'      => $v['due_date'] ?? null,
+                'credit_period' => $resolvedCP,
+                'days'          => $days,
+            ];
+        })->values();
+
+        return response()->json(['vouchers' => $rows]);
+    }
+
+    private function buildOpenInvoices($rows, string $under, int $creditPeriod, Carbon $today)
+    {
+        $isCreditor = $under === 'Sundry Creditors';
+    
+        $invoices = $rows
+            ->filter(fn ($r) => $isCreditor
+                ? ($r['mapped_type_low'] === 'purchase' && $r['credit'] > 0)
+                : ($r['mapped_type_low'] === 'sales' && $r['debit'] > 0))
+            ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)   // purana pehle
+            ->values();
+    
+        // Settlement pool: receipts (debtor) / payments (creditor)
+        $pool = (float) $rows
+            ->filter(fn ($r) => $isCreditor
+                ? (str_contains($r['voucher_type_low'], 'payment') && $r['debit'] > 0)
+                : (str_contains($r['voucher_type_low'], 'receipt') && $r['credit'] > 0))
+            ->sum(fn ($r) => $isCreditor ? $r['debit'] : $r['credit']);
+    
+        return $invoices
+            ->map(function ($r) use (&$pool, $isCreditor, $creditPeriod, $today) {
+                $original = (float) ($isCreditor ? $r['credit'] : $r['debit']);
+                $cleared  = min($pool, $original);
+                $pool    -= $cleared;
+                $pending  = round($original - $cleared, 2);
+    
+                $voucherDate = Carbon::parse($r['date'])->startOfDay();
+                $dueDate     = $this->resolveDueDate($r['due_date'] ?? null, $voucherDate, $creditPeriod);
+    
+                return [
+                    'date'           => $voucherDate->toDateString(),
+                    'due_date'       => $dueDate->toDateString(),
+                    'voucher_number' => $r['voucher_number'] ?? null,
+                    'days'           => (int) $dueDate->diffInDays($today, false), // +ve = overdue
+                    'original'       => $original,
+                    'cleared'        => round($cleared, 2),
+                    'pending'        => $pending,
+                ];
+            })
+            ->filter(fn ($i) => $i['pending'] > 0.009)   // fully cleared hata do
+            ->values();
+    }
+
+    private function classifyVoucherRow($v, ?string $under, array $voucherMappings): array
+    {
+        static $creditSideTypesForDebtor  = ['receipt', 'receipt note', 'credit note'];
+        static $debitSideTypesForCreditor = ['payment', 'debit note'];
+
+        $amount = abs((float) $v->amount);
+        $voucherType    = trim((string) $v->voucher_type);
+        $voucherTypeLow = strtolower($voucherType);
+
+        $rawMapped = $voucherMappings[$voucherType] ?? null;
+
+        if ($rawMapped !== null && trim($rawMapped) !== '') {
+            $mappedType = trim($rawMapped);
+        } elseif (str_contains($voucherTypeLow, 'sale')) {
+            $mappedType = 'Sales';
+        } elseif (str_contains($voucherTypeLow, 'purchase')) {
+            $mappedType = 'Purchase';
+        } else {
+            $mappedType = 'Other than Sales/Purchase';
+        }
+
+        $debit  = 0;
+        $credit = 0;
+
+        if ($under === 'Sundry Creditors') {
+            if (in_array($voucherTypeLow, $debitSideTypesForCreditor, true)) {
+                $debit = $amount;
+            } else {
+                $credit = $amount;
+            }
+        } else {
+            if (in_array($voucherTypeLow, $creditSideTypesForDebtor, true)) {
+                $credit = $amount;
+            } else {
+                $debit = $amount;
+            }
+        }
+
+        return [
+            'date'             => (string) $v->date,
+            'particulars'      => trim((string) $v->party_ledger_name) ?: '',
+            'voucher_type'     => $voucherType,
+            'voucher_type_low' => $voucherTypeLow,
+            'mapped_type'      => $mappedType,
+            'mapped_type_low'  => strtolower($mappedType),
+            'voucher_number'   => (string) $v->voucher_number,
+            'debit'            => $debit,
+            'credit'           => $credit,
+        ];
+    }
+
+    private function resolveDueDate($voucherDueDate, Carbon $voucherDate, int $creditPeriod): Carbon
+    {
+        if (!empty($voucherDueDate)) {
+            try {
+                $d = Carbon::parse($voucherDueDate)->startOfDay();
+                if ($d->year > 2000) {   // '0000-00-00' jaisi junk values ignore
+                    return $d;
+                }
+            } catch (\Throwable $e) {
+                // credit period pe fallback
+            }
+        }
+    
+        return $voucherDate->copy()->startOfDay()->addDays($creditPeriod);
+    }
+
+    private function filterVouchersByField($vouchers, string $field, ?string $under)
+    {
+        $isCreditor = ($under === 'Sundry Creditors');
+
+        return match ($field) {
+            'Sale'      => $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'sales' && $v['debit'] > 0),
+            'Purchase'  => $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'purchase' && $v['credit'] > 0),
+            'Other Debits'  => $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'sales' && $v['debit'] > 0),
+            'Other Credits' => $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'purchase' && $v['credit'] > 0),
+            'Receipts'  => $vouchers->filter(fn ($v) => str_contains($v['voucher_type_low'], 'receipt') && $v['credit'] > 0),
+            'Payments'  => $vouchers->filter(fn ($v) => str_contains($v['voucher_type_low'], 'payment') && $v['debit'] > 0),
+            default     => $vouchers,
+        };
+    }
+
+    public function updateCreditPeriod(Request $request)
+    {
+        $request->validate([
+            'company'        => 'required|string',
+            'ledger'         => 'required|string',
+            'under'          => 'nullable|string',
+            'voucher_id'     => 'nullable',
+            'voucher_number' => 'nullable|string',
+            'credit_period'  => 'required|integer|min:0',
+        ]);
+
+        $accountant = auth('accountant')->user();
+        $ownerId = $accountant->owner_id ?? null ;
+
+        
+        $tallyCompany = TallyCompany::where('owner_id', $ownerId)
+            ->where('company_name', $request->company)
+            ->firstOrFail();
+
+        $ledgerModel = TallyLedger::where('owner_id', $ownerId)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->where('ledger_name', $request->ledger)
+            ->firstOrFail();
+
+        $query = TallyVoucher::where('owner_id', $ownerId)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->where('ledger_id', $ledgerModel->id);
+
+        // pehle id se try karo (agar dee gayi ho aur numeric ho), warna voucher_number se
+        if ($request->filled('voucher_id') && is_numeric($request->voucher_id)) {
+            $voucher = (clone $query)->where('id', $request->voucher_id)->first();
+        } else {
+            $voucher = null;
+        }
+
+        if (!$voucher && $request->filled('voucher_number')) {
+            $voucher = (clone $query)->where('voucher_number', $request->voucher_number)->first();
+        }
+
+        if (!$voucher) {
+            return response()->json(['message' => 'Voucher not found for this ledger.'], 404);
+        }
+
+        $voucher->credit_period        = $request->credit_period . ' Days';
+        $voucher->credit_period_source = 'voucher'; // ya 'manual', jo bhi convention aap use karte ho ledger side
+        $voucher->save();
+
+        $voucherDate = Carbon::parse($voucher->date);
+        $newDueDate  = $voucherDate->copy()->addDays((int) $request->credit_period);
+        $daysOverdue = now()->diffInDays($newDueDate, false) < 0
+            ? now()->diffInDays($newDueDate)
+            : 0;
+
+        return response()->json([
+            'success'  => true,
+            'due_date' => $newDueDate->format('Y-m-d'),
+            'days'     => $daysOverdue,
+        ]);
     }
 }
  
