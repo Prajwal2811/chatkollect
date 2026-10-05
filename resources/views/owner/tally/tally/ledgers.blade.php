@@ -174,6 +174,24 @@
                         text-decoration: underline;
                         color: #4E3F6B;
                     }
+
+                    /* ===== Debtor Ranking table (image wali UI) ===== */
+                    .ranking-table thead th {
+                        position: sticky;
+                        top: 0;
+                        z-index: 1;
+                        background: #fff;
+                        font-weight: 700;
+                        white-space: nowrap;
+                    }
+
+                    .ranking-table thead th.th-orange {
+                        background: #ff9800;
+                    }
+
+                    .ranking-table thead th.th-green {
+                        background: #00e000;
+                    }
                     
                 </style>
 
@@ -231,10 +249,10 @@
                             'D' => '#dc3545',
                         ];
                         $rankLabelMap = [
-                            'A' => 'Rank A - Excellent',
-                            'B' => 'Rank B - Good',
-                            'C' => 'Rank C - Average',
-                            'D' => 'Rank D - Poor',
+                            'A' => 'Rank A',
+                            'B' => 'Rank B',
+                            'C' => 'Rank C',
+                            'D' => 'Rank D',
                         ];
 
                         $debtorLedgers = collect($ledgers)
@@ -297,6 +315,40 @@
                                 ];
                             });
 
+                        // ===== Excel wale formulas ke hisaab se Rank / Class (Debtors & Creditors dono ke liye alag) =====
+                        // H            = % Target  (Target / (Overdue + Not Due) * 100)
+                        // Priority Rank = RANK(H, H-range, 0)  -> descending
+                        // Debtor Rank   = RANK(H, H-range, 1)  -> ascending   (column J)
+                        // Class         = Debtor Rank / COUNTA(J) * 100  ->  <=15 A, <=50 B, <=85 C, baaki D
+                        $applyRanks = function ($list) {
+                            $list = $list->map(function ($l) {
+                                $overdue = $l['rows']['Balance Overdue'];
+                                $notDue  = $l['rows']['Not Due'];
+                                $target  = $l['rows']['Balance Target'];
+                                $total   = bcadd($overdue, $notDue, 2);
+                                $l['pct_target'] = bccomp($total, '0', 2) !== 0 ? round($target / $total * 100) : 0;
+                                return $l;
+                            });
+
+                            $pcts  = $list->pluck('pct_target');
+                            $count = $list->count();
+
+                            return $list->map(function ($l) use ($pcts, $count) {
+                                $p = $l['pct_target'];
+
+                                $l['priority_rank'] = $pcts->filter(fn ($x) => $x > $p)->count() + 1;   // RANK(...,0)
+                                $l['debtor_rank']   = $pcts->filter(fn ($x) => $x < $p)->count() + 1;   // RANK(...,1)
+
+                                $share = $count > 0 ? ($l['debtor_rank'] / $count) * 100 : 0;
+                                $l['rank'] = $share <= 15 ? 'A' : ($share <= 50 ? 'B' : ($share <= 85 ? 'C' : 'D'));
+
+                                return $l;
+                            })->values();
+                        };
+
+                        $debtorLedgers   = $applyRanks($debtorLedgers);
+                        $creditorLedgers = $applyRanks($creditorLedgers);
+
                         $mergeMap = [
                             'Sale'               => 'Sale / Purchase',
                             'Purchase'           => 'Sale / Purchase',
@@ -342,6 +394,39 @@
                         $totalsCreditor    = $computeTotals($creditorLedgers);
                         $breakdownDebtor   = $computeBreakdown($debtorLedgers);
                         $breakdownCreditor = $computeBreakdown($creditorLedgers);
+
+                        // ===== Debtor Ranking table (image wali UI) =====
+                        $rankingRows = $debtorLedgers->map(function ($l) {
+                            $overdue = $l['rows']['Balance Overdue'];
+                            $notDue  = $l['rows']['Not Due'];
+                            $target  = $l['rows']['Balance Target'];
+
+                            $total    = bcadd($overdue, $notDue, 2);
+                            $hasTotal = bccomp($total, '0', 2) !== 0;
+
+                            return [
+                                'name'        => $l['name'],
+                                'overdue'     => $overdue,
+                                'not_due'     => $notDue,
+                                'total_due'   => $total,
+                                'target'      => $target,
+                                'pct_overdue' => $hasTotal ? round($overdue / $total * 100, 2) : 0,
+                                'pct_not_due' => $hasTotal ? round($notDue  / $total * 100, 2) : 0,
+                                'pct_target'  => $hasTotal ? round($target  / $total * 100)    : 0,
+                                'class'       => $l['rank'] ?? 'D',
+                                // agar controller se already aa rahe hon to wahi use honge
+                                'debtor_rank'   => $l['debtor_rank']   ?? null,
+                                'priority_rank' => $l['priority_rank'] ?? null,
+                            ];
+                        })->values();
+
+                        // Fallback ranks: %Target ke basis par (same % = same rank)
+                        $pctList = $rankingRows->pluck('pct_target');
+                        $rankingRows = $rankingRows->map(function ($r) use ($pctList) {
+                            $r['debtor_rank']   = $r['debtor_rank']   ?? ($pctList->filter(fn ($p) => $p < $r['pct_target'])->count() + 1);
+                            $r['priority_rank'] = $r['priority_rank'] ?? ($pctList->filter(fn ($p) => $p > $r['pct_target'])->count() + 1);
+                            return $r;
+                        });
 
                         $rowClassMap = [
                             'Balance'               => 'table-warning',
@@ -593,8 +678,7 @@
                                                     <th>Balance Today</th>
                                                     <th>% Overdue</th>
                                                     <th>Overdue target</th>
-                                                    <th>Working 1  <br> Target Collection</th>
-                                                    <th>Working 2  <br> Target Collection</th>
+                                                    <th>Target Collection</th>
                                                     <th>% Not Due</th>
                                                     <th>Target Balance</th>
                                                 </tr>
@@ -609,6 +693,72 @@
                                     <a href="javascript:void(0);" id="ledgerVoucherViewAllLink" target="_blank" class="btn btn-outline-primary btn-sm">
                                         <i class="fa fa-external-link-alt me-1"></i> View Full Ledger Vouchers
                                     </a>
+                                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Debtor Ranking Modal -->
+                    <div class="modal fade" id="debtorRankingModal" tabindex="-1" aria-hidden="true">
+                        <div class="modal-dialog modal-dialog-centered modal-fullscreen-lg-down" style="max-width: 1300px;">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Debtor Ranking</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-2">
+                                        <div class="input-group input-group-sm" style="max-width:300px;">
+                                            <span class="input-group-text"><i class="fa fa-search"></i></span>
+                                            <input type="text" id="debtorRankingSearch" class="form-control" placeholder="Search debtor...">
+                                        </div>
+                                    </div>
+
+                                    <div class="table-responsive" style="max-height: 65vh; overflow: auto;">
+                                        <table class="table table-bordered table-hover align-middle mb-0 ranking-table" id="debtorRankingTable">
+                                            <thead>
+                                                <tr>
+                                                    <th>Debtor</th>
+                                                    <th class="text-end">Overdue</th>
+                                                    <th class="text-end">Not Due</th>
+                                                    <th class="text-end">Total Due</th>
+                                                    <th class="text-end">Target</th>
+                                                    <th class="text-end">%Overdue</th>
+                                                    <th class="text-end">% Not Due</th>
+                                                    <th class="text-end">% Target</th>
+                                                    <th class="text-end">Collection<br>Priority Rank</th>
+                                                    <th class="text-end">Debtor Rank</th>
+                                                    <th class="text-end">Class</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                @forelse($rankingRows as $r)
+                                                    <tr>
+                                                        <td class="fw-bold">{{ $r['name'] }}</td>
+                                                        <td class="text-end">{{ $fmt($r['overdue']) }}</td>
+                                                        <td class="text-end">{{ $fmt($r['not_due']) }}</td>
+                                                        <td class="text-end">{{ $fmt($r['total_due']) }}</td>
+                                                        <td class="text-end">{{ $fmt($r['target']) }}</td>
+                                                        <td class="text-end">{{ $r['pct_overdue'] }}%</td>
+                                                        <td class="text-end">{{ $r['pct_not_due'] }}%</td>
+                                                        <td class="text-end">{{ $r['pct_target'] }}</td>
+                                                        <td>{{ $r['priority_rank'] }}</td>
+                                                        <td>{{ $r['debtor_rank'] }}</td>
+                                                        <td>
+                                                            <span class="badge" style="background-color: {{ $rankColorMap[$r['class']] ?? '#adb5bd' }};">
+                                                                {{ $r['class'] }}
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                @empty
+                                                    <tr><td colspan="11" class="text-center text-muted">No Debtors Found</td></tr>
+                                                @endforelse
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
                                     <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
                                 </div>
                             </div>
@@ -737,6 +887,12 @@
                                             <span class="toggle-text">Mark Bad Debts (Creditors)</span>
                                         </button>
                                         <button type="button"
+                                            class="btn btn-outline-success btn-sm"
+                                            data-bs-toggle="modal"
+                                            data-bs-target="#debtorRankingModal">
+                                            <i class="fa fa-list-ol me-1"></i> Debtor Ranking
+                                        </button>
+                                        <button type="button"
                                             class="btn btn-dark btn-sm openFollowupModal"
                                             data-bs-toggle="modal"
                                             data-bs-target="#followupTypeModal"
@@ -770,7 +926,7 @@
 
                                                 <div class="input-group input-group-sm filter-search-wrap">
                                                     <span class="input-group-text"><i class="fa fa-search"></i></span>
-                                                    <input type="text" class="form-control filter-search" placeholder="Search name / mobile...">
+                                                    <input type="text" class="form-control filter-search" placeholder="Search name / mobile / #id...">
                                                 </div>
 
                                                 <select class="form-select form-select-sm filter-status">
@@ -782,10 +938,11 @@
 
                                                 <select class="form-select form-select-sm filter-rank">
                                                     <option value="">All Ranks</option>
-                                                    <option value="A">Rank A - Excellent</option>
-                                                    <option value="B">Rank B - Good</option>
-                                                    <option value="C">Rank C - Average</option>
-                                                    <option value="D">Rank D - Poor</option>
+                                                    <option value="A">Rank A</option>
+                                                    <option value="B">Rank B</option>
+                                                    <option value="C">Rank C</option>
+                                                    <option value="D">Rank D</option>
+                                                    <option value="none">Unranked</option>
                                                 </select>
 
                                                 <select class="form-select form-select-sm filter-overlimit">
@@ -807,16 +964,18 @@
                                                         $rows = $l['rows'];
                                                         $dotColor = $statusColorMap[$l['status'] ?? 'secondary'] ?? '#adb5bd';
                                                         $dotLabel = $statusLabelMap[$l['status'] ?? 'secondary'] ?? 'Unmarked';
-                                                        $rankColor = $rankColorMap[$l['rank'] ?? 'D'] ?? '#adb5bd';
-                                                        $rankLabel = $rankLabelMap[$l['rank'] ?? 'D'] ?? 'Unranked';
+                                                        $rk = preg_match('/^\s*(?:rank\s*)?([A-D])\s*$/i', (string) ($l['rank'] ?? ''), $rm) ? strtoupper($rm[1]) : '';
+                                                        $rankColor = $rankColorMap[$rk] ?? '#adb5bd';
+                                                        $rankLabel = $rankLabelMap[$rk] ?? 'Unranked';
                                                     @endphp
 
                                                     <div class="accordion-item mb-3 border rounded shadow-sm"
                                                         data-status="{{ $l['status'] ?? 'secondary' }}"
-                                                        data-rank="{{ $l['rank'] ?? 'D' }}"
+                                                        data-rank="{{ $rk }}"
                                                         data-overlimit="{{ !empty($l['overlimit']) ? 1 : 0 }}"
-                                                        data-name="{{ strtolower($l['name']) }}"
-                                                        data-mobile="{{ $l['mobile'] ?? '' }}">
+                                                        data-name="{{ mb_strtolower($l['name']) }}"
+                                                        data-uid="{{ strtolower((string) ($l['unique_id'] ?? '')) }}"
+                                                        data-mobile="{{ preg_replace('/\D/', '', $l['mobile'] ?? '') }}">
                                                         <h2 class="accordion-header" id="heading-{{ $uid }}">
                                                             <div class="d-flex align-items-center w-100">
                                                                 <span class="ledger-check-wrap bad-debt-check-wrap d-none" data-type="debtor">
@@ -842,7 +1001,7 @@
                                                                                 <span class="status-dot" style="background-color: {{ $overlimitColor }};" title="{{ $overlimitLabel }}"></span>
                                                                             @endif
                                                                             <span class="rank-badge" style="background-color: {{ $rankColor }};" title="{{ $rankLabel }}">
-                                                                                {{ $l['rank'] ?? '-' }}
+                                                                                {{ $rk ?: '-' }}
                                                                             </span>
                                                                         </div>
                                                                         <span class="badge bg-success">Sundry Debtors</span>
@@ -903,7 +1062,7 @@
 
                                                 <div class="input-group input-group-sm filter-search-wrap">
                                                     <span class="input-group-text"><i class="fa fa-search"></i></span>
-                                                    <input type="text" class="form-control filter-search" placeholder="Search name / mobile...">
+                                                    <input type="text" class="form-control filter-search" placeholder="Search name / mobile / #id...">
                                                 </div>
 
                                                 <select class="form-select form-select-sm filter-status">
@@ -915,10 +1074,11 @@
 
                                                 <select class="form-select form-select-sm filter-rank">
                                                     <option value="">All Ranks</option>
-                                                    <option value="A">Rank A - Excellent</option>
-                                                    <option value="B">Rank B - Good</option>
-                                                    <option value="C">Rank C - Average</option>
-                                                    <option value="D">Rank D - Poor</option>
+                                                    <option value="A">Rank A</option>
+                                                    <option value="B">Rank B</option>
+                                                    <option value="C">Rank C</option>
+                                                    <option value="D">Rank D</option>
+                                                    <option value="none">Unranked</option>
                                                 </select>
 
                                                 <select class="form-select form-select-sm filter-overlimit">
@@ -940,15 +1100,17 @@
                                                         $rows = $l['rows'];
                                                         $dotColor = $statusColorMap[$l['status'] ?? 'secondary'] ?? '#adb5bd';
                                                         $dotLabel = $statusLabelMap[$l['status'] ?? 'secondary'] ?? 'Unmarked';
-                                                        $rankColor = $rankColorMap[$l['rank'] ?? 'D'] ?? '#adb5bd';
-                                                        $rankLabel = $rankLabelMap[$l['rank'] ?? 'D'] ?? 'Unranked';
+                                                        $rk = preg_match('/^\s*(?:rank\s*)?([A-D])\s*$/i', (string) ($l['rank'] ?? ''), $rm) ? strtoupper($rm[1]) : '';
+                                                        $rankColor = $rankColorMap[$rk] ?? '#adb5bd';
+                                                        $rankLabel = $rankLabelMap[$rk] ?? 'Unranked';
                                                     @endphp
                                                     <div class="accordion-item mb-3 border rounded shadow-sm"
                                                         data-status="{{ $l['status'] ?? 'secondary' }}"
-                                                        data-rank="{{ $l['rank'] ?? 'D' }}"
+                                                        data-rank="{{ $rk }}"
                                                         data-overlimit="{{ !empty($l['overlimit']) ? 1 : 0 }}"
-                                                        data-name="{{ strtolower($l['name']) }}"
-                                                        data-mobile="{{ $l['mobile'] ?? '' }}">
+                                                        data-name="{{ mb_strtolower($l['name']) }}"
+                                                        data-uid="{{ strtolower((string) ($l['unique_id'] ?? '')) }}"
+                                                        data-mobile="{{ preg_replace('/\D/', '', $l['mobile'] ?? '') }}">
                                                         <h2 class="accordion-header" id="heading-{{ $uid }}">
                                                             <div class="d-flex align-items-center w-100">
                                                                 <span class="ledger-check-wrap bad-debt-check-wrap d-none" data-type="creditor">
@@ -974,7 +1136,7 @@
                                                                                 <span class="status-dot" style="background-color: {{ $overlimitColor }};" title="{{ $overlimitLabel }}"></span>
                                                                             @endif
                                                                             <span class="rank-badge" style="background-color: {{ $rankColor }};" title="{{ $rankLabel }}">
-                                                                                {{ $l['rank'] ?? '-' }}
+                                                                                {{ $rk ?: '-' }}
                                                                             </span>
                                                                         </div>
                                                                         <span class="badge bg-danger">Sundry Creditors</span>
@@ -1131,8 +1293,7 @@
                                     <td>${amt(r.balance)}</td>
                                     <td>${pct(r.pctOverdue)}</td>
                                     <td>${pct(r.target)}</td>
-                                    <td>${amt(r.w1)}</td>
-                                    <td>${amt(r.w2)}</td>
+                                    <td>${amt(r.targetCollection)}</td>
                                     <td>${pct(r.pctNotDue)}</td>
                                     <td>${amt(r.targetBal)}</td>
                                 </tr>`;
@@ -1588,50 +1749,60 @@
                     });
                 });
 
-                // ===== Search + Status / Rank / Overlimit Filters (per tab, scoped independently) =====
-
+                // ===== Search + Status / Rank / Overlimit Filters (per tab) =====
                 function applyLedgerFilters(scope) {
-                    let $bar = $('.ledger-filter-bar[data-scope="' + scope + '"]');
-                    let searchVal    = ($bar.find('.filter-search').val() || '').toLowerCase().trim();
-                    let statusVal    = $bar.find('.filter-status').val();
-                    let rankVal      = $bar.find('.filter-rank').val();
-                    let overlimitVal = $bar.find('.filter-overlimit').val();
+                    const $bar       = $('.ledger-filter-bar[data-scope="' + scope + '"]');
+                    const q          = ($bar.find('.filter-search').val() || '').toLowerCase().trim();
+                    const qDigits    = q.replace(/\D/g, '');
+                    const qId        = q.replace(/^#/, '');
+                    const statusVal  = $bar.find('.filter-status').val();
+                    const rankVal    = $bar.find('.filter-rank').val();
+                    const overlimitV = $bar.find('.filter-overlimit').val();
 
-                    let $accordion = scope === 'debtor' ? $('#debtorAccordion') : $('#creditorAccordion');
-                    let $items = $accordion.find('.accordion-item');
-                    let total = $items.length;
+                    const $accordion = scope === 'debtor' ? $('#debtorAccordion') : $('#creditorAccordion');
+                    const $items     = $accordion.find('.accordion-item');
+                    const total      = $items.length;
                     let visibleCount = 0;
 
                     $items.each(function () {
-                        let $item = $(this);
+                        const $item  = $(this);
+                        const name   = ($item.attr('data-name')   || '').toLowerCase();
+                        const uid    = ($item.attr('data-uid')    || '').toLowerCase();
+                        const mobile = ($item.attr('data-mobile') || '').replace(/\D/g, '');
+                        const status = $item.attr('data-status')    || '';
+                        const rank   = $item.attr('data-rank')      || '';
+                        const over   = $item.attr('data-overlimit') || '0';
+
                         let matches = true;
 
-                        if (searchVal) {
-                            let name = String($item.data('name') || '').toLowerCase();
-                            let mobile = String($item.data('mobile') || '').toLowerCase();
-                            if (name.indexOf(searchVal) === -1 && mobile.indexOf(searchVal) === -1) {
-                                matches = false;
-                            }
+                        if (q) {
+                            matches = name.indexOf(q) !== -1
+                                   || (qId && uid.indexOf(qId) !== -1)
+                                   || (qDigits && mobile.indexOf(qDigits) !== -1);
                         }
-                        if (matches && statusVal && String($item.data('status')) !== statusVal) {
-                            matches = false;
+                        if (matches && statusVal) {
+                            matches = (status === statusVal);
                         }
-                        if (matches && rankVal && String($item.data('rank')) !== rankVal) {
-                            matches = false;
+                        if (matches && rankVal) {
+                            matches = (rankVal === 'none') ? (rank === '') : (rank === rankVal);
                         }
-                        if (matches && overlimitVal && String($item.data('overlimit')) !== overlimitVal) {
-                            matches = false;
+                        if (matches && overlimitV) {
+                            matches = (over === overlimitV);
                         }
 
-                        $item.toggle(matches);
-                        if (matches) visibleCount++;
+                        $item.toggleClass('d-none', !matches);
+
+                        if (matches) {
+                            visibleCount++;
+                        } else {
+                            // hidden ledger ka bad-debt checkbox uncheck, taaki galti se assign na ho
+                            $item.find('.bad-debt-checkbox:checked').prop('checked', false).trigger('change');
+                        }
                     });
 
-                    $bar.find('.filter-count-text').text(
-                        total > 0 ? ('Showing ' + visibleCount + ' of ' + total) : ''
-                    );
+                    $bar.find('.filter-count-text').text(total > 0 ? ('Showing ' + visibleCount + ' of ' + total) : '');
 
-                    let $emptyMsg = $accordion.find('.filter-empty-msg');
+                    const $emptyMsg = $accordion.find('.filter-empty-msg');
                     if (total > 0 && visibleCount === 0) {
                         if ($emptyMsg.length === 0) {
                             $accordion.append('<p class="text-center text-muted filter-empty-msg">No ledgers match the selected filters.</p>');
@@ -1642,20 +1813,24 @@
                 }
 
                 $(document).on('change', '.ledger-filter-bar select', function () {
-                    let scope = $(this).closest('.ledger-filter-bar').data('scope');
-                    applyLedgerFilters(scope);
+                    applyLedgerFilters($(this).closest('.ledger-filter-bar').data('scope'));
                 });
 
                 $(document).on('input', '.ledger-filter-bar .filter-search', function () {
-                    let scope = $(this).closest('.ledger-filter-bar').data('scope');
-                    applyLedgerFilters(scope);
+                    applyLedgerFilters($(this).closest('.ledger-filter-bar').data('scope'));
                 });
 
                 $(document).on('click', '.filter-reset-btn', function () {
-                    let $bar = $(this).closest('.ledger-filter-bar');
+                    const $bar = $(this).closest('.ledger-filter-bar');
                     $bar.find('select').val('');
                     $bar.find('.filter-search').val('');
                     applyLedgerFilters($bar.data('scope'));
+                });
+
+                // Page load pe count dikhao
+                $(function () {
+                    applyLedgerFilters('debtor');
+                    applyLedgerFilters('creditor');
                 });
 
                 // ===== Manual, single-source accordion open/close =====
@@ -1748,6 +1923,17 @@
                 $('#ledgerVoucherModal').on('hidden.bs.modal', function () {
                     $('#ledgerVoucherSearch').val('');
                     $('#creditPeriodSaveAlert').addClass('d-none').removeClass('show alert-success alert-danger');
+                });
+
+                // ===== Debtor Ranking modal: live search =====
+                $(document).on('input', '#debtorRankingSearch', function () {
+                    let val = $(this).val().toLowerCase().trim();
+                    $('#debtorRankingTable tbody tr').each(function () {
+                        $(this).toggle($(this).text().toLowerCase().indexOf(val) !== -1);
+                    });
+                });
+                $('#debtorRankingModal').on('hidden.bs.modal', function () {
+                    $('#debtorRankingSearch').val('').trigger('input');
                 });
             </script>
         </div>
