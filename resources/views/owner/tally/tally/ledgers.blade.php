@@ -1,4 +1,4 @@
-        @include('owner.tally.components.header')
+@include('owner.tally.components.header')
         <div id="main-wrapper">
             <div class="nav-header">
                 <a href="#" class="brand-logo">
@@ -156,7 +156,7 @@
                         padding: 4px 8px;
                     }
 
-                    /* Credit Period editable input inside Balance Due table */
+                    /* Credit Period editable input inside Balance Overdue table */
                     .credit-period-input {
                         width: 90px;
                         margin: 0 auto;
@@ -174,11 +174,41 @@
                         text-decoration: underline;
                         color: #4E3F6B;
                     }
+                    
                 </style>
 
                 <div class="container-fluid">
                     @php
-                        $fmt = fn ($n) => number_format((float) $n, 2);
+                        // ✅ Bina round kiye, DB ke decimals jaise ke taise (sirf Indian comma grouping)
+                        $fmt = function ($n) {
+                            $s   = (string) $n;
+                            $neg = str_starts_with($s, '-');
+                            $s   = ltrim($s, '+-');
+                            [$i, $d] = array_pad(explode('.', $s, 2), 2, '');
+                            if (strlen($i) > 3) {
+                                $i = preg_replace('/\B(?=(\d{2})+(?!\d))/', ',', substr($i, 0, -3)) . ',' . substr($i, -3);
+                            }
+                            return ($neg ? '-' : '') . $i . ($d !== '' ? '.' . $d : '');
+                        };
+
+                        // ✅ String hi rakho, float cast mat karo (value DB jaisi rahegi)
+                        $num = function ($v) {
+                            $s = str_replace([',', '₹', ' '], '', (string) ($v ?? 0));
+                            return is_numeric($s) ? $s : '0';
+                        };
+
+                        // trailing zeros hatane ke liye (totals ke liye)
+                        $trimZeros = fn ($s) => str_contains($s, '.') ? rtrim(rtrim($s, '0'), '.') : $s;
+
+                        // target ki value alag-alag key naam se aa sakti hai, jo mile wahi le lo
+                        $getTarget = function ($l) use ($num) {
+                            foreach (['target', 'target_balance', 'targetBal', 'balance_target'] as $k) {
+                                if (isset($l[$k]) && $l[$k] !== '') {
+                                    return $num($l[$k]);
+                                }
+                            }
+                            return '0';
+                        };
 
                         $statusColorMap = [
                             'success'   => '#28a745',
@@ -210,22 +240,22 @@
                         $debtorLedgers = collect($ledgers)
                             ->filter(fn ($l) => ($l['under'] ?? '') == 'Sundry Debtors')
                             ->values()
-                            ->map(function ($l) {
+                            ->map(function ($l) use ($num, $getTarget) {
                                 $rows = [
-                                    'Balance'                => $l['balance']           ?? 0,
-                                    'Balance Due'            => $l['due']                ?? 0,
-                                    'Target'                 => $l['target']             ?? 0,
-                                    'Sale'                   => $l['sale']                ?? 0,
-                                    'Other Debits'           => $l['other_debits']       ?? 0,
-                                    'Receipts'               => $l['receipts']           ?? 0,
-                                    'Not Due'                => $l['not_due']            ?? 0,
-                                    'Interest Cost'          => $l['interest_cost']      ?? 0,
-                                    'Interest Received'      => $l['interest_received']  ?? 0,
-                                    'Interest Due'           => $l['interest_due']       ?? 0,
-                                    'Interest Waived'        => $l['interest_waived']    ?? 0,
-                                    'Bad Debts / Family A/c' => $l['bad_debts']          ?? 0,
-                                    'Total Debtors'          => $l['total_debtors']      ?? 0,
-                                    'March Closing Pending'  => $l['march_closing_pending'] ?? 0,
+                                    'Balance'                => $num($l['balance']               ?? 0),
+                                    'Balance Overdue'        => $num($l['due']                   ?? 0),
+                                    'Balance Target'         => $getTarget($l),
+                                    'Sale'                   => $num($l['sale']                  ?? 0),
+                                    'Other Debits'           => $num($l['other_debits']          ?? 0),
+                                    'Receipts'               => $num($l['receipts']              ?? 0),
+                                    'Not Due'                => $num($l['not_due']               ?? 0),
+                                    'Interest Cost'          => $num($l['interest_cost']         ?? 0),
+                                    'Interest Received'      => $num($l['interest_received']     ?? 0),
+                                    'Interest Due'           => $num($l['interest_due']          ?? 0),
+                                    'Interest Waived'        => $num($l['interest_waived']       ?? 0),
+                                    'Bad Debts / Family A/c' => $num($l['bad_debts']             ?? 0),
+                                    'Total Debtors'          => $num($l['total_debtors']         ?? 0),
+                                    'March Closing Pending'  => $num($l['march_closing_pending'] ?? 0),
                                 ];
 
                                 return $l + [
@@ -240,22 +270,22 @@
                         $creditorLedgers = collect($ledgers)
                             ->filter(fn ($l) => ($l['under'] ?? '') == 'Sundry Creditors')
                             ->values()
-                            ->map(function ($l) {
+                            ->map(function ($l) use ($num, $getTarget) {
                                 $rows = [
-                                    'Balance'                => $l['balance']           ?? 0,
-                                    'Balance Due'            => $l['due']                ?? 0,
-                                    'Target'                 => $l['target']             ?? 0,
-                                    'Purchase'               => $l['purchase']           ?? 0,
-                                    'Other Credits'          => $l['other_credits']      ?? 0,
-                                    'Payments'               => $l['payments']           ?? 0,
-                                    'Not Due'                => $l['not_due']            ?? 0,
-                                    'Interest Cost'          => $l['interest_cost']      ?? 0,
-                                    'Interest Paid'          => $l['interest_paid']      ?? 0,
-                                    'Interest Due'           => $l['interest_due']       ?? 0,
-                                    'Interest Waived'        => $l['interest_waived']    ?? 0,
-                                    'Bad Debts / Family A/c' => $l['bad_debts']          ?? 0,
-                                    'Total Creditors'        => $l['total_creditors']    ?? 0,
-                                    'March Closing Pending'  => $l['march_closing_pending'] ?? 0,
+                                    'Balance'                => $num($l['balance']               ?? 0),
+                                    'Balance Overdue'        => $num($l['due']                   ?? 0),
+                                    'Balance Target'         => $getTarget($l),
+                                    'Purchase'               => $num($l['purchase']              ?? 0),
+                                    'Other Credits'          => $num($l['other_credits']         ?? 0),
+                                    'Payments'               => $num($l['payments']              ?? 0),
+                                    'Not Due'                => $num($l['not_due']               ?? 0),
+                                    'Interest Cost'          => $num($l['interest_cost']         ?? 0),
+                                    'Interest Paid'          => $num($l['interest_paid']         ?? 0),
+                                    'Interest Due'           => $num($l['interest_due']          ?? 0),
+                                    'Interest Waived'        => $num($l['interest_waived']       ?? 0),
+                                    'Bad Debts / Family A/c' => $num($l['bad_debts']             ?? 0),
+                                    'Total Creditors'        => $num($l['total_creditors']       ?? 0),
+                                    'March Closing Pending'  => $num($l['march_closing_pending'] ?? 0),
                                 ];
 
                                 return $l + [
@@ -280,19 +310,19 @@
                             'Total Creditors'    => 'Total Debtors / Creditors',
                         ];
 
-
-                        $computeTotals = function ($ledgerList) use ($mergeMap) {
+                        // ✅ float + ki jagah bcadd (exact sum)
+                        $computeTotals = function ($ledgerList) use ($mergeMap, $num, $trimZeros) {
                             $t = [];
                             foreach ($ledgerList as $l) {
                                 foreach ($l['rows'] as $label => $value) {
                                     $key = $mergeMap[$label] ?? $label;
-                                    $t[$key] = ($t[$key] ?? 0) + $value;
+                                    $t[$key] = bcadd($t[$key] ?? '0', $num($value), 10);
                                 }
                             }
-                            return $t;
+                            return array_map($trimZeros, $t);
                         };
 
-                        $computeBreakdown = function ($ledgerList) use ($mergeMap) {
+                        $computeBreakdown = function ($ledgerList) use ($mergeMap, $num) {
                             $b = [];
                             foreach ($ledgerList as $l) {
                                 foreach ($l['rows'] as $label => $value) {
@@ -301,7 +331,7 @@
                                         'ledger' => $l['name'],
                                         'under'  => $l['under'] ?? '',
                                         'label'  => $label,
-                                        'value'  => $value,
+                                        'value'  => $num($value),
                                     ];
                                 }
                             }
@@ -315,8 +345,8 @@
 
                         $rowClassMap = [
                             'Balance'               => 'table-warning',
-                            'Balance Due'           => 'table-warning',
-                            'Target'                => 'table-success',
+                            'Balance Overdue'       => 'table-warning',
+                            'Balance Target'        => 'table-success',
                             'Sale'                  => 'table-success',
                             'Purchase'              => 'table-success',
                             'Interest Due'          => 'table-danger',
@@ -328,8 +358,8 @@
 
                         $cardStyles = [
                             'Balance'                   => ['bg' => 'primary',   'icon' => '₹'],
-                            'Balance Due'               => ['bg' => 'danger',    'icon' => '₹'],
-                            'Target'                    => ['bg' => 'success',   'icon' => '₹'],
+                            'Balance Overdue'           => ['bg' => 'danger',    'icon' => '₹'],
+                            'Balance Target'            => ['bg' => 'success',   'icon' => '₹'],
                             'Sale / Purchase'           => ['bg' => 'warning',   'icon' => '₹'],
                             'Other Debits / Credits'    => ['bg' => 'info',      'icon' => '₹'],
                             'Receipts / Payments'       => ['bg' => 'secondary', 'icon' => '₹'],
@@ -343,7 +373,6 @@
                             'March Closing Pending'     => ['bg' => 'dark',      'icon' => '₹'],
                         ];
                     @endphp
-
                     <!-- Summary Cards Toggle Button -->
                     <div class="d-flex justify-content-end mb-2">
                         <button class="btn btn-outline-primary btn-sm" type="button" id="summaryToggleBtn">
@@ -485,26 +514,26 @@
                                         </div>
                                     </div>
 
-                                    <!-- ===== NORMAL table (every field EXCEPT Balance / Balance Due) ===== -->
+                                    <!-- ===== NORMAL table (every field EXCEPT Balance / Balance Overdue / Target) ===== -->
                                     <div class="table-responsive" id="ledgerVoucherNormalWrap" style="max-height: 55vh; overflow-y: auto;">
                                         <table class="table table-bordered table-hover align-middle mb-0" id="ledgerVoucherTable">
-        <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
-            <tr>
-                <th class="col-date">Date</th>
-                <th class="col-voucherno">Voucher No.</th>
-                <th class="col-vouchertype">Voucher Type</th>
-                <th class="col-particulars">Particulars</th>
-                <th class="col-duedate d-none">Due Date</th>
-                <th class="col-creditperiod d-none text-center">Credit Period</th>
-                <th class="col-days d-none text-center">Days</th>
-                <th class="col-debit text-end">Debit</th>
-                <th class="col-credit text-end">Credit</th>
-            </tr>
-        </thead>
-        <tbody id="ledgerVoucherBody">
-            <tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>
-        </tbody>
-    </table>
+                                            <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                <tr>
+                                                    <th class="col-date">Date</th>
+                                                    <th class="col-voucherno">Voucher No.</th>
+                                                    <th class="col-vouchertype">Voucher Type</th>
+                                                    <th class="col-particulars">Particulars</th>
+                                                    <th class="col-duedate d-none">Due Date</th>
+                                                    <th class="col-creditperiod d-none text-center">Credit Period</th>
+                                                    <th class="col-days d-none text-center">Days</th>
+                                                    <th class="col-debit text-end">Debit</th>
+                                                    <th class="col-credit text-end">Credit</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="ledgerVoucherBody">
+                                                <tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>
+                                            </tbody>
+                                        </table>
                                     </div>
 
                                     <!-- ===== BALANCE breakdown table (Original / Received-Paid / Pending) ===== -->
@@ -534,7 +563,7 @@
                                         </div>
                                         <table class="table table-bordered table-hover align-middle mb-0" id="ledgerDueTable">
                                             <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
-                                                <tr>
+                                                <tr id="ledgerDueHeadRow">
                                                     <th>Date</th>
                                                     <th>Voucher No.</th>
                                                     <th class="text-center">Days</th>
@@ -546,10 +575,33 @@
                                             </tbody>
                                             <tfoot>
                                                 <tr>
-                                                    <th colspan="3" class="text-end">Total Due</th>
+                                                    <th colspan="3" class="text-end" id="ledgerDueTotalLabel">Total Due</th>
                                                     <th class="text-end" id="ledgerDueTotal">-</th>
                                                 </tr>
                                             </tfoot>
+                                        </table>
+                                    </div>
+
+                                    <!-- ===== TARGET table (Month-wise Overdue / Not Due / Balance / Targets) ===== -->
+                                    <div class="table-responsive d-none" id="ledgerVoucherTargetWrap" style="max-height: 55vh; overflow: auto;">
+                                        <table class="table table-bordered table-hover align-middle mb-0 text-end" id="ledgerTargetTable">
+                                            <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                <tr>
+                                                    <th class="text-start">Month</th>
+                                                    <th>Overdue <br> Balance Till</th>
+                                                    <th>Not Due  <br> Balance Till</th>
+                                                    <th>Balance Today</th>
+                                                    <th>% Overdue</th>
+                                                    <th>Overdue target</th>
+                                                    <th>Working 1  <br> Target Collection</th>
+                                                    <th>Working 2  <br> Target Collection</th>
+                                                    <th>% Not Due</th>
+                                                    <th>Target Balance</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="ledgerTargetBody">
+                                                <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
+                                            </tbody>
                                         </table>
                                     </div>
                                 </div>
@@ -1000,6 +1052,20 @@
             @include('owner.tally.components.footer')
 
             <script>
+                // ✅ Bina round kiye amount dikhata hai (Indian grouping). DB ki value jaisi hai waisi hi.
+                function fmtExact(n) {
+                    if (n === null || n === undefined || n === '') return '0';
+                    let s = String(n).replace(/,/g, '');
+                    let neg = s[0] === '-';
+                    s = s.replace(/^[-+]/, '');
+                    let parts = s.split('.');
+                    let i = parts[0], d = parts[1];
+                    if (i.length > 3) {
+                        i = i.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + i.slice(-3);
+                    }
+                    return (neg ? '-' : '') + i + (d ? '.' + d : '');
+                }
+
                 function calcDueDateFromDays(days) {
                     let d = new Date();
                     d.setDate(d.getDate() - (parseInt(days, 10) || 0));
@@ -1013,25 +1079,21 @@
 
                 const breakdownDataDebtor   = @json($breakdownDebtor);
                 const breakdownDataCreditor = @json($breakdownCreditor);
+                const totalsDataDebtor      = @json($totalsDebtor);
+                const totalsDataCreditor    = @json($totalsCreditor);
                 const currentCompanyName    = @json($company);
 
                 function showLedgerBreakdown(label, type) {
                     let dataset = (type === 'creditor') ? breakdownDataCreditor : breakdownDataDebtor;
+                    let totals  = (type === 'creditor') ? totalsDataCreditor : totalsDataDebtor;
                     let items = dataset[label] || [];
                     let html = '';
-                    let total = 0;
 
-                    items.forEach(function(item) {
-                        total += parseFloat(item.value);
-                        let formattedValue = new Intl.NumberFormat('en-IN', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2
-                        }).format(item.value);
-
+                    items.forEach(function (item) {
                         html += `<tr>
                             <td>${item.ledger} <span class="badge bg-light text-dark ms-1">${item.under}</span></td>
                             <td>${item.label}</td>
-                            <td><strong>₹ ${formattedValue}</strong></td>
+                            <td><strong>₹ ${fmtExact(item.value)}</strong></td>
                         </tr>`;
                     });
 
@@ -1039,206 +1101,261 @@
                         html = '<tr><td colspan="3" class="text-center text-muted">No data available</td></tr>';
                     }
 
-                    let formattedTotal = new Intl.NumberFormat('en-IN', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2
-                    }).format(total);
-
                     let typeLabel = (type === 'creditor') ? 'Sundry Creditors' : 'Sundry Debtors';
                     $('#ledgerBreakdownTitle').text(label + ' Breakdown (' + typeLabel + ')');
                     $('#ledgerBreakdownBody').html(html);
-                    $('#ledgerBreakdownTotal').text('₹ ' + formattedTotal);
+                    // Total PHP se aaya hua exact value (JS me float sum nahi)
+                    $('#ledgerBreakdownTotal').text('₹ ' + fmtExact(totals[label] ?? 0));
                 }
 
-                // ===== Per-ledger, per-field (Balance / Balance Due / Sale / ...) voucher modal =====
+                // ===== TARGET modal: DB se data =====
+                function renderTargetData(ledger, under) {
+                    const amt = n => (n === null || n === undefined) ? '' : fmtExact(n);
+                    const pct = n => (n === null || n === undefined) ? '' : fmtExact(n) + '%';
+
+                    $('#ledgerVoucherLoading').removeClass('d-none');
+
+                    $.ajax({
+                        url: "{{ route('owner.tally.ledger.target-data') }}",
+                        method: "GET",
+                        dataType: "json",
+                        data: { company: currentCompanyName, ledger: ledger, under: under },
+                        success: function (res) {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+                            let html = '';
+                            (res.rows || []).forEach(function (r) {
+                                html += `<tr>
+                                    <td class="month-cell text-start">${r.month}</td>
+                                    <td>${amt(r.overdue)}</td>
+                                    <td>${amt(r.notDue)}</td>
+                                    <td>${amt(r.balance)}</td>
+                                    <td>${pct(r.pctOverdue)}</td>
+                                    <td>${pct(r.target)}</td>
+                                    <td>${amt(r.w1)}</td>
+                                    <td>${amt(r.w2)}</td>
+                                    <td>${pct(r.pctNotDue)}</td>
+                                    <td>${amt(r.targetBal)}</td>
+                                </tr>`;
+                            });
+                            $('#ledgerTargetBody').html(html || '<tr><td colspan="10" class="text-center text-muted">No data found</td></tr>');
+                        },
+                        error: function () {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+                            $('#ledgerVoucherError').removeClass('d-none').text('Could not load target data.');
+                        }
+                    });
+                }
+
+                // ===== Per-ledger, per-field (Balance / Balance Overdue / Target / Sale / ...) voucher modal =====
                 //
-                // "Balance"     -> #ledgerBalanceTable (Original / Received-Paid / Pending)
-                // "Balance Due" -> #ledgerDueTable     (Date / Due Date / Voucher No. / Credit Period / Days / Pending Amount)
-                // baaki fields  -> #ledgerVoucherTable (normal debit/credit voucher list)
+                // "Balance"         -> #ledgerBalanceTable (Original / Received-Paid / Pending)
+                // "Balance Overdue" -> #ledgerDueTable     (Date / Voucher No. / Days / Pending Amount)
+                // "Target"          -> #ledgerTargetTable  (Month-wise)
+                // baaki fields      -> #ledgerVoucherTable (normal debit/credit voucher list)
                 function showLedgerVoucherDetail(ledger, under, field) {
-        let isBalance = (field === 'Balance');
-        let isDue     = (field === 'Balance Due');
-        let isSale    = (field === 'Sale');
-        let isCreditor = (under === 'Sundry Creditors');
+                    let isBalance  = (field === 'Balance');
+                    let isNotDue   = (field === 'Not Due');
+                    let isDue      = (field === 'Balance Overdue') || isNotDue;   // Not Due bhi Due wali table use karta hai
+                    let isTarget   = (field === 'Balance Target');
+                    let isSale     = (field === 'Sale');
+                    let isCreditor = (under === 'Sundry Creditors');
 
-        $('#ledgerVoucherModalTitle').text(
-            ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? ' (Overdue Vouchers)' : ' Vouchers'))
-        );
-        $('#ledgerVoucherError').addClass('d-none').text('');
-        $('#ledgerVoucherLoading').removeClass('d-none');
+                    $('#ledgerVoucherModalTitle').text(
+                        ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? (isNotDue ? ' (Not Due Vouchers)' : ' (Overdue Vouchers)') : (isTarget ? ' (Month-wise)' : ' Vouchers')))
+                    );
+                    $('#ledgerVoucherError').addClass('d-none').text('');
+                    $('#ledgerVoucherLoading').removeClass('d-none');
 
-        $('#ledgerVoucherNormalWrap').toggleClass('d-none', isBalance || isDue);
-        $('#ledgerVoucherBalanceWrap').toggleClass('d-none', !isBalance);
-        $('#ledgerVoucherDueWrap').toggleClass('d-none', !isDue);
+                    $('#ledgerVoucherNormalWrap').toggleClass('d-none', isBalance || isDue || isTarget);
+                    $('#ledgerVoucherBalanceWrap').toggleClass('d-none', !isBalance);
+                    $('#ledgerVoucherDueWrap').toggleClass('d-none', !isDue);
+                    $('#ledgerVoucherTargetWrap').toggleClass('d-none', !isTarget);
 
-        $('#ledgerVoucherBody').html('<tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>');
-        $('#ledgerBalanceBody').html('<tr><td colspan="5" class="text-center text-muted">No vouchers loaded</td></tr>');
-        $('#ledgerDueBody').html('<tr><td colspan="4" class="text-center text-muted">No vouchers loaded</td></tr>');
-        $('#ledgerDueTotal').text('-');
+                    $('#ledgerVoucherBody').html('<tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>');
+                    $('#ledgerBalanceBody').html('<tr><td colspan="5" class="text-center text-muted">No vouchers loaded</td></tr>');
+                    $('#ledgerDueBody').html('<tr><td colspan="4" class="text-center text-muted">No vouchers loaded</td></tr>');
+                    $('#ledgerTargetBody').html('<tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>');
+                    $('#ledgerDueTotal').text('-');
 
-        $('#ledgerVoucherSearch').val('');
+                    $('#ledgerVoucherSearch').val('');
 
-        $('#ledgerBalanceClearedHeader').text(isCreditor ? 'Paid' : 'Received');
-        $('#ledgerDueAmountHeader').text('Pending Amount');
+                    $('#ledgerBalanceClearedHeader').text(isCreditor ? 'Paid' : 'Received');
+                    $('#ledgerDueHeadRow').html(isNotDue
+                        ? '<th>Date</th><th>Due Date</th><th>Voucher No.</th><th class="text-end" id="ledgerDueAmountHeader">Amount</th>'
+                        : '<th>Date</th><th>Voucher No.</th><th class="text-center">Days</th><th class="text-end" id="ledgerDueAmountHeader">Pending Amount</th>');
+                    $('#ledgerDueTotalLabel').text(isNotDue ? 'Total Not Due' : 'Total Due');
 
-        let hideVoucherNo = (field === 'Receipts');
-        let hideDebit     = (field === 'Receipts');
-        let hideCredit    = (field === 'Sale');
+                    let hideVoucherNo = (field === 'Receipts');
+                    let hideDebit     = (field === 'Receipts');
+                    let hideCredit    = (field === 'Sale' || field === 'Other Debits');
 
-        $('#ledgerVoucherTable .col-voucherno').toggle(!hideVoucherNo);
-        $('#ledgerVoucherTable .col-debit').toggle(!hideDebit);
-        $('#ledgerVoucherTable .col-credit').toggle(!hideCredit);
+                    $('#ledgerVoucherTable .col-voucherno').toggle(!hideVoucherNo);
+                    $('#ledgerVoucherTable .col-debit').toggle(!hideDebit);
+                    $('#ledgerVoucherTable .col-credit').toggle(!hideCredit);
 
-        // Sale ke liye Credit Period columns dikhao
-        $('#ledgerVoucherTable .col-duedate').toggleClass('d-none', !isSale);
-        $('#ledgerVoucherTable .col-creditperiod').toggleClass('d-none', !isSale);
-        $('#ledgerVoucherTable .col-days').toggleClass('d-none', !isSale);
+                    // Sale ke liye Credit Period columns dikhao
+                    $('#ledgerVoucherTable .col-duedate').toggleClass('d-none', !isSale);
+                    $('#ledgerVoucherTable .col-creditperiod').toggleClass('d-none', !isSale);
+                    $('#ledgerVoucherTable .col-days').toggleClass('d-none', !isSale);
 
-        let baseUrl = "{{ route('owner.tally.ledger.vouchers', ['company' => ':company', 'ledger' => ':ledger', 'under' => ':under']) }}";
-        let fullPageUrl = baseUrl
-            .replace(':company', encodeURIComponent(currentCompanyName))
-            .replace(':ledger', encodeURIComponent(ledger))
-            .replace(':under', encodeURIComponent(under));
-        $('#ledgerVoucherViewAllLink').attr('href', fullPageUrl);
+                    let baseUrl = "{{ route('owner.tally.ledger.vouchers', ['company' => ':company', 'ledger' => ':ledger', 'under' => ':under']) }}";
+                    let fullPageUrl = baseUrl
+                        .replace(':company', encodeURIComponent(currentCompanyName))
+                        .replace(':ledger', encodeURIComponent(ledger))
+                        .replace(':under', encodeURIComponent(under));
+                    $('#ledgerVoucherViewAllLink').attr('href', fullPageUrl);
 
-        let fieldAjaxBaseUrl = "{{ route('owner.tally.ledger.field-vouchers', ['company' => ':company', 'ledger' => ':ledger', 'under' => ':under']) }}";
-        let fieldAjaxUrl = fieldAjaxBaseUrl
-            .replace(':company', encodeURIComponent(currentCompanyName))
-            .replace(':ledger', encodeURIComponent(ledger))
-            .replace(':under', encodeURIComponent(under));
-
-        let dueAjaxUrl = "{{ route('owner.tally.ledger.due-vouchers') }}";
-
-        let fmtAmt = function (n) {
-            return new Intl.NumberFormat('en-IN', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            }).format(n || 0);
-        };
-
-        let fmtDate = function (d) {
-            if (!d) return '-';
-            let dateObj = new Date(d);
-            if (isNaN(dateObj.getTime())) return d;
-            return dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-        };
-
-        $.ajax({
-            url: isDue ? dueAjaxUrl : fieldAjaxUrl,
-            method: "GET",
-            data: isDue
-                ? { company: currentCompanyName, ledger: ledger, under: under }
-                : { field: field },
-            dataType: "json",
-            success: function (res) {
-                $('#ledgerVoucherLoading').addClass('d-none');
-
-                let vouchers = (res && res.vouchers) ? res.vouchers : (Array.isArray(res) ? res : []);
-
-                if (!vouchers.length) {
-                    if (isDue) {
-                        $('#ledgerDueBody').html('<tr><td colspan="4" class="text-center text-muted">No overdue vouchers found 🎉</td></tr>');
-                        $('#ledgerDueTotal').text('₹ 0.00');
-                    } else if (isBalance) {
-                        $('#ledgerBalanceBody').html('<tr><td colspan="5" class="text-center text-muted">No pending invoices found — all clear! 🎉</td></tr>');
-                    } else {
-                        let colspan = 6 - (hideVoucherNo ? 1 : 0) - (hideDebit ? 1 : 0) - (hideCredit ? 1 : 0) + (isSale ? 3 : 0);
-                        $('#ledgerVoucherBody').html('<tr><td colspan="' + colspan + '" class="text-center text-muted">No vouchers found for this field.</td></tr>');
-                    }
-                    return;
-                }
-
-                // ===== BALANCE DUE (ab Credit Period edit nahi, sirf Days + Amount) =====
-                if (isDue) {
-                    let rows = '';
-                    let total = 0;
-                    vouchers.forEach(function (v) {
-                        total += parseFloat(v.amount) || 0;
-                        let partial = (parseFloat(v.original) || 0) > (parseFloat(v.amount) || 0) + 0.009
-                            ? `<div class="text-muted small">of ₹ ${fmtAmt(v.original)}</div>`
-                            : '';
-
-                        rows += `<tr data-voucher-id="${v.id ?? v.voucher_number ?? ''}">
-                            <td>${fmtDate(v.date)}</td>
-                            <td>${v.voucher_number ?? '-'}</td>
-                            <td class="text-center"><span class="badge bg-danger days-badge">${v.days} days</span></td>
-                            <td class="text-end fw-bold">₹ ${fmtAmt(v.amount)}${partial}</td>
-                        </tr>`;
-                    });
-                    $('#ledgerDueBody').html(rows);
-                    $('#ledgerDueTotal').text('₹ ' + fmtAmt(res.total ?? total));
-                    return;
-                }
-
-                // ===== BALANCE =====
-                if (isBalance) {
-                    let clearedKey = isCreditor ? 'paid' : 'received';
-                    let rows = '';
-                    vouchers.forEach(function (v) {
-                        rows += `<tr>
-                            <td>${fmtDate(v.date)}</td>
-                            <td>${v.voucher_number ?? '-'}</td>
-                            <td class="text-end">₹ ${fmtAmt(v.original)}</td>
-                            <td class="text-end">₹ ${fmtAmt(v[clearedKey])}</td>
-                            <td class="text-end fw-bold ${v.pending > 0 ? 'text-danger' : 'text-success'}">₹ ${fmtAmt(v.pending)}</td>
-                        </tr>`;
-                    });
-                    $('#ledgerBalanceBody').html(rows);
-                    return;
-                }
-
-                // ===== NORMAL fields (Sale yahin, Due Date + Credit Period yahin editable) =====
-                let rows = '';
-                vouchers.forEach(function (v) {
-                    let dueDateCell = '';
-                    let creditPeriodCell = '';
-                    let daysCell = '';
-
-                    if (isSale) {
-                        dueDateCell = `<td class="col-duedate due-date-cell">${fmtDateShared(calcDueDateFromDays(v.days))}</td>`;
-
-                        creditPeriodCell = `<td class="col-creditperiod text-center">
-                            <div class="d-flex align-items-center justify-content-center gap-1">
-                                <input type="number" min="0"
-                                    class="form-control form-control-sm credit-period-input"
-                                    value="${v.credit_period ?? 0}"
-                                    data-voucher-id="${v.id ?? ''}"
-                                    data-voucher-number="${v.voucher_no ?? ''}"
-                                    data-ledger="${ledger}"
-                                    data-under="${under}">
-                                <button type="button" class="btn btn-sm btn-outline-primary credit-period-save-btn" title="Save">
-                                    <i class="fa fa-save"></i>
-                                </button>
-                            </div>
-                        </td>`;
-
-                        daysCell = `<td class="col-days text-center"><span class="badge bg-danger days-badge">${v.days ?? 0} days</span></td>`;
+                    // ===== TARGET: DB se data =====
+                    if (isTarget) {
+                        renderTargetData(ledger, under);
+                        return;
                     }
 
-                    rows += `<tr>
-                        <td class="col-date">${fmtDate(v.date)}</td>
-                        <td class="col-voucherno" style="${hideVoucherNo ? 'display:none;' : ''}">${v.voucher_no ?? '-'}</td>
-                        <td class="col-vouchertype">${v.voucher_type ?? '-'}</td>
-                        <td class="col-particulars">${v.particulars ?? '-'}</td>
-                        ${dueDateCell}
-                        ${creditPeriodCell}
-                        ${daysCell}
-                        <td class="col-debit text-end" style="${hideDebit ? 'display:none;' : ''}">${v.debit ? '₹ ' + fmtAmt(v.debit) : ''}</td>
-                        <td class="col-credit text-end" style="${hideCredit ? 'display:none;' : ''}">${v.credit ? '₹ ' + fmtAmt(v.credit) : ''}</td>
-                    </tr>`;
-                });
-                $('#ledgerVoucherBody').html(rows);
-            },
-            error: function () {
-                $('#ledgerVoucherLoading').addClass('d-none');
-                $('#ledgerVoucherError')
-                    .removeClass('d-none')
-                    .text('Could not load vouchers for this field. Please try "View Full Ledger Vouchers" instead.');
-            }
-        });
-    }
+                    let fieldAjaxBaseUrl = "{{ route('owner.tally.ledger.field-vouchers', ['company' => ':company', 'ledger' => ':ledger', 'under' => ':under']) }}";
+                    let fieldAjaxUrl = fieldAjaxBaseUrl
+                        .replace(':company', encodeURIComponent(currentCompanyName))
+                        .replace(':ledger', encodeURIComponent(ledger))
+                        .replace(':under', encodeURIComponent(under));
 
-                // ===== Balance Due modal: per-voucher editable Credit Period -> Save button se update =====
+                    let dueAjaxUrl = "{{ route('owner.tally.ledger.due-vouchers') }}";
+
+                    // ✅ Round nahi, DB jaisa exact amount
+                    let fmtAmt = function (n) {
+                        return fmtExact(n);
+                    };
+
+                    let fmtDate = function (d) {
+                        if (!d) return '-';
+                        let dateObj = new Date(d);
+                        if (isNaN(dateObj.getTime())) return d;
+                        return dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+                    };
+
+                    $.ajax({
+                        url: isDue ? dueAjaxUrl : fieldAjaxUrl,
+                        method: "GET",
+                        data: isDue
+                            ? { company: currentCompanyName, ledger: ledger, under: under, type: isNotDue ? 'not_due' : 'due' }
+                            : { field: field },
+                        dataType: "json",
+                        success: function (res) {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+
+                            let vouchers = (res && res.vouchers) ? res.vouchers : (Array.isArray(res) ? res : []);
+
+                            if (!vouchers.length) {
+                                if (isDue) {
+                                    $('#ledgerDueBody').html('<tr><td colspan="4" class="text-center text-muted">' + (isNotDue ? 'No not due vouchers found' : 'No overdue vouchers found 🎉') + '</td></tr>');
+                                    $('#ledgerDueTotal').text('₹ 0');
+                                } else if (isBalance) {
+                                    $('#ledgerBalanceBody').html('<tr><td colspan="5" class="text-center text-muted">No pending invoices found — all clear! 🎉</td></tr>');
+                                } else {
+                                    let colspan = 6 - (hideVoucherNo ? 1 : 0) - (hideDebit ? 1 : 0) - (hideCredit ? 1 : 0) + (isSale ? 3 : 0);
+                                    $('#ledgerVoucherBody').html('<tr><td colspan="' + colspan + '" class="text-center text-muted">No vouchers found for this field.</td></tr>');
+                                }
+                                return;
+                            }
+
+                            // ===== BALANCE DUE (sirf Days + Amount) =====
+                            if (isDue) {
+                                let rows = '';
+                                vouchers.forEach(function (v) {
+                                    let partial = (parseFloat(v.original) || 0) > (parseFloat(v.amount) || 0) + 0.009
+                                        ? `<div class="text-muted small">of ₹ ${fmtAmt(v.original)}</div>`
+                                        : '';
+
+                                    if (isNotDue) {
+                                        rows += `<tr>
+                                            <td>${fmtDate(v.date)}</td>
+                                            <td>${fmtDate(v.due_date)}</td>
+                                            <td>${v.voucher_number ?? '-'}</td>
+                                            <td class="text-end fw-bold">₹ ${fmtAmt(v.amount)}</td>
+                                        </tr>`;
+                                        return;
+                                    }
+
+                                    rows += `<tr data-voucher-id="${v.id ?? v.voucher_number ?? ''}">
+                                        <td>${fmtDate(v.date)}</td>
+                                        <td>${v.voucher_number ?? '-'}</td>
+                                        <td class="text-center"><span class="badge bg-danger days-badge">${v.days} days</span></td>
+                                        <td class="text-end fw-bold">₹ ${fmtAmt(v.amount)}${partial}</td>
+                                    </tr>`;
+                                });
+                                $('#ledgerDueBody').html(rows);
+                                // Total controller se aata hai (exact). JS me float sum nahi karte.
+                                $('#ledgerDueTotal').text('₹ ' + fmtAmt(res.total ?? 0));
+                                return;
+                            }
+
+                            // ===== BALANCE =====
+                            if (isBalance) {
+                                let clearedKey = isCreditor ? 'paid' : 'received';
+                                let rows = '';
+                                vouchers.forEach(function (v) {
+                                    rows += `<tr>
+                                        <td>${fmtDate(v.date)}</td>
+                                        <td>${v.voucher_number ?? '-'}</td>
+                                        <td class="text-end">₹ ${fmtAmt(v.original)}</td>
+                                        <td class="text-end">₹ ${fmtAmt(v[clearedKey])}</td>
+                                        <td class="text-end fw-bold ${parseFloat(v.pending) > 0 ? 'text-danger' : 'text-success'}">₹ ${fmtAmt(v.pending)}</td>
+                                    </tr>`;
+                                });
+                                $('#ledgerBalanceBody').html(rows);
+                                return;
+                            }
+
+                            // ===== NORMAL fields (Sale yahin, Due Date + Credit Period yahin editable) =====
+                            let rows = '';
+                            vouchers.forEach(function (v) {
+                                let dueDateCell = '';
+                                let creditPeriodCell = '';
+                                let daysCell = '';
+
+                                if (isSale) {
+                                    dueDateCell = `<td class="col-duedate due-date-cell">${fmtDateShared(calcDueDateFromDays(v.days))}</td>`;
+
+                                    creditPeriodCell = `<td class="col-creditperiod text-center">
+                                        <div class="d-flex align-items-center justify-content-center gap-1">
+                                            <input type="number" min="0"
+                                                class="form-control form-control-sm credit-period-input"
+                                                value="${v.credit_period ?? 0}"
+                                                data-voucher-id="${v.id ?? ''}"
+                                                data-voucher-number="${v.voucher_no ?? ''}"
+                                                data-ledger="${ledger}"
+                                                data-under="${under}">
+                                            <button type="button" class="btn btn-sm btn-outline-primary credit-period-save-btn" title="Save">
+                                                <i class="fa fa-save"></i>
+                                            </button>
+                                        </div>
+                                    </td>`;
+
+                                    daysCell = `<td class="col-days text-center"><span class="badge bg-danger days-badge">${v.days ?? 0} days</span></td>`;
+                                }
+
+                                rows += `<tr>
+                                    <td class="col-date">${fmtDate(v.date)}</td>
+                                    <td class="col-voucherno" style="${hideVoucherNo ? 'display:none;' : ''}">${v.voucher_no ?? '-'}</td>
+                                    <td class="col-vouchertype">${v.voucher_type ?? '-'}</td>
+                                    <td class="col-particulars">${v.particulars ?? '-'}</td>
+                                    ${dueDateCell}
+                                    ${creditPeriodCell}
+                                    ${daysCell}
+                                    <td class="col-debit text-end" style="${hideDebit ? 'display:none;' : ''}">${parseFloat(v.debit) > 0 ? '₹ ' + fmtAmt(v.debit) : ''}</td>
+                                    <td class="col-credit text-end" style="${hideCredit ? 'display:none;' : ''}">${parseFloat(v.credit) > 0 ? '₹ ' + fmtAmt(v.credit) : ''}</td>
+                                </tr>`;
+                            });
+                            $('#ledgerVoucherBody').html(rows);
+                        },
+                        error: function () {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+                            $('#ledgerVoucherError')
+                                .removeClass('d-none')
+                                .text('Could not load vouchers for this field. Please try "View Full Ledger Vouchers" instead.');
+                        }
+                    });
+                }
+
+                // ===== Balance Overdue modal: per-voucher editable Credit Period -> Save button se update =====
                 $(document).on('click', '.credit-period-save-btn', function () {
                     let $btn   = $(this);
                     let $input = $btn.closest('td').find('.credit-period-input');
@@ -1275,8 +1392,6 @@
 
                             if (res && res.days !== undefined) {
                                 $row.find('.days-badge').text(res.days + ' days');
-                            }
-                            if (res && res.days !== undefined) {
                                 $row.find('.due-date-cell').text(fmtDateShared(calcDueDateFromDays(res.days)));
                             }
 
@@ -1578,8 +1693,8 @@
                     }
                 });
 
+                
                 // ===== Search inside modals (Breakdown + Voucher) =====
-
                 function filterModalTableRows(inputId, tbodyId) {
                     let val = ($('#' + inputId).val() || '').toLowerCase().trim();
                     let $rows = $('#' + tbodyId + ' tr');
@@ -1600,7 +1715,7 @@
                     let $noMatch = $tbody.find('.no-match-row');
                     if (visibleCount === 0 && val !== '') {
                         if ($noMatch.length === 0) {
-                            let colspan = $tbody.closest('table').find('thead th').length || 3;
+                            let colspan = $tbody.closest('table').find('thead tr:last th').length || 3;
                             $tbody.append('<tr class="no-match-row"><td colspan="' + colspan + '" class="text-center text-muted">No matching results.</td></tr>');
                         }
                     } else {
@@ -1613,13 +1728,15 @@
                     filterModalTableRows('ledgerBreakdownSearch', 'ledgerBreakdownBody');
                 });
 
-                // Live search - Voucher Modal (Normal / Balance / Balance Due, jo table visible ho usi me)
+                // Live search - Voucher Modal (Normal / Balance / Balance Overdue / Target, jo table visible ho usi me)
                 $(document).on('input', '#ledgerVoucherSearch', function () {
                     let tbodyId = 'ledgerVoucherBody';
                     if (!$('#ledgerVoucherBalanceWrap').hasClass('d-none')) {
                         tbodyId = 'ledgerBalanceBody';
                     } else if (!$('#ledgerVoucherDueWrap').hasClass('d-none')) {
                         tbodyId = 'ledgerDueBody';
+                    } else if (!$('#ledgerVoucherTargetWrap').hasClass('d-none')) {
+                        tbodyId = 'ledgerTargetBody';
                     }
                     filterModalTableRows('ledgerVoucherSearch', tbodyId);
                 });
@@ -1634,4 +1751,3 @@
                 });
             </script>
         </div>
-        

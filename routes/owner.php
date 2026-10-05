@@ -15,14 +15,11 @@ Route::prefix('owner')->middleware('owner.guest')->group(function () {
 
     Route::view('/register', 'owner.register')->name('owner.register');
 
-    Route::view('/forgot-password', 'owner.forgot-password')
-        ->name('owner.forgot-password');
+    Route::view('/forgot-password', 'owner.forgot-password')->name('owner.forgot-password');
 
-    Route::post('/login', [OwnerController::class, 'authenticate'])
-        ->name('owner.auth');
+    Route::post('/login', [OwnerController::class, 'authenticate'])->name('owner.auth');
 
-    Route::post('/register', [OwnerController::class, 'registerOwner'])
-        ->name('owner.register.submit');
+    Route::post('/register', [OwnerController::class, 'registerOwner'])->name('owner.register.submit');
 });
 
 
@@ -33,14 +30,12 @@ Route::prefix('owner')->middleware('auth:owner')->group(function () {
     Route::get('/subscribe', [OwnerController::class, 'subscribe'])->name('owner.subscribe');
 
     // Logout
-    Route::get('/logout', [OwnerController::class, 'signOut'])
-        ->name('owner.signOut');
+    Route::get('/logout', [OwnerController::class, 'signOut'])->name('owner.signOut');
 });
 
 
 
 Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(function () {
-
         
         Route::post('/tally/clear-cache', [OwnerController::class, 'clearCache'])->name('owner.tally.clear-cache');
 
@@ -48,7 +43,6 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
 
         // Dashboard
         Route::get('/dashboard', [OwnerController::class, 'dashboard'])->name('owner.dashboard');
-
 
         // Accountants 
         Route::get('/accountants-list', [OwnerController::class, 'accountants'])->name('owner.accountants.index');
@@ -82,91 +76,43 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
 
         Route::get('/tally/company/{company}',[OwnerController::class, 'companyDetails'])->name('owner.tally.company.details');
 
-        Route::get(
-            '/tally/company/{company}/ledgers',
-            [OwnerController::class, 'companyLedgers']
-        )->name('owner.tally.company.ledgers');
+        Route::get('/tally/company/{company}/ledgers',[OwnerController::class, 'companyLedgers'])->name('owner.tally.company.ledgers');
 
         Route::post('/tally/ledger/update-credit-period', [OwnerController::class, 'updateCreditPeriod'])->name('owner.tally.ledger.update-credit-period');
 
         Route::get('owner/tally/{company}/ledger/{ledger}/{under?}/field-vouchers', [OwnerController::class, 'ledgerFieldVouchers'])->name('owner.tally.ledger.field-vouchers');
-        Route::get(
-            
-            '/tally/company/{company}/ledger/{ledger}/invoices',
-            [OwnerController::class, 'ledgerInvoices']
-        )->name('owner.tally.ledger.invoices');
 
-        Route::get(
-            '/tally/company/{company}/ledger/{ledger}/receipts',
-            [OwnerController::class, 'ledgerReceipts']
-        )->name('owner.tally.ledger.receipts');
+        Route::get('/tally/company/{company}/ledger/{ledger}/invoices',[OwnerController::class, 'ledgerInvoices'])->name('owner.tally.ledger.invoices');
 
-        Route::get(
-            '/tally/company/{company}/ledger/{ledger}/vouchers/{under?}',
-            [OwnerController::class, 'ledgerVouchers']
-        )->name('owner.tally.ledger.vouchers');
+        Route::get('/tally/company/{company}/ledger/{ledger}/receipts',[OwnerController::class, 'ledgerReceipts'])->name('owner.tally.ledger.receipts');
 
-        Route::get(
-            '/tally/company/{company}/ledger/{ledger}/followup/{under?}',
-            [OwnerController::class, 'ledgerFollowUp']
-        )->name('owner.tally.ledger.followup');
+        Route::get('/tally/company/{company}/ledger/{ledger}/vouchers/{under?}',[OwnerController::class, 'ledgerVouchers'])->name('owner.tally.ledger.vouchers');
 
-        Route::get(
-            '/tally/voucher-mappings/{company}',
-            [OwnerController::class, 'voucherMappings']
-        )->name('owner.tally.voucher.mappings');
+        Route::get('/tally/company/{company}/ledger/{ledger}/followup/{under?}',[OwnerController::class, 'ledgerFollowUp'])->name('owner.tally.ledger.followup');
 
-        Route::post(
-            '/voucher-mappings/save', 
-            [OwnerController::class, 'saveVoucherMappings']
-        )->name('owner.voucher-mappings.save');
+        Route::get('/tally/voucher-mappings/{company}',[OwnerController::class, 'voucherMappings'])->name('owner.tally.voucher.mappings');
 
-        Route::get(
-            '/tally/company/{company}/followup/hub/', 
-            [OwnerController::class, 'followUpsHub']
-        )->name('owner.tally.followup.hub');
+        Route::post('/voucher-mappings/save', [OwnerController::class, 'saveVoucherMappings'])->name('owner.voucher-mappings.save');
 
-        Route::get(
-            '/tally/company/{company}/ledgers-assign',
-            [OwnerController::class, 'asignLedgers']
-        )->name('owner.tally.company.ledgers-assign');
+        Route::get('/tally/company/{company}/followup/hub/', [OwnerController::class, 'followUpsHub'])->name('owner.tally.followup.hub');
 
-        Route::post(
-            '/owner/assign-collectors', 
-            [OwnerController::class, 'assignLedgers']
-        )->name('owner.assign.collectors');
+        Route::get('/tally/company/{company}/ledgers-assign',[OwnerController::class, 'asignLedgers'])->name('owner.tally.company.ledgers-assign');
+
+        Route::post('/owner/assign-collectors', [OwnerController::class, 'assignLedgers'])->name('owner.assign.collectors');
 
 
         // Followup Actions
-        Route::get( 
-            '/tally/company/{company}/followup-action/telecaller', 
-            [OwnerController::class, 'telecaller']
-        )->name('owner.tally.company.followup-action.telecaller');
+        Route::get( '/tally/company/{company}/followup-action/telecaller', [OwnerController::class, 'telecaller'])->name('owner.tally.company.followup-action.telecaller');
 
-        Route::get(
-            '/tally/company/{company}/followup-action/call', 
-            [OwnerController::class, 'call']
-        )->name('owner.tally.company.followup-action.call');
+        Route::get('/tally/company/{company}/followup-action/call', [OwnerController::class, 'call'])->name('owner.tally.company.followup-action.call');
 
-        Route::get(
-            '/tally/company/{company}/followup-action/whatsapp-message', 
-            [OwnerController::class, 'whatsappMessage']
-        )->name('owner.tally.company.followup-action.whatsapp-message');
+        Route::get('/tally/company/{company}/followup-action/whatsapp-message', [OwnerController::class, 'whatsappMessage'])->name('owner.tally.company.followup-action.whatsapp-message');
 
-        Route::get(
-            '/tally/company/{company}/followup-action/physical-visit', 
-            [OwnerController::class, 'physicalVisit']
-        )->name('owner.tally.company.followup-action.physical-visit');
+        Route::get('/tally/company/{company}/followup-action/physical-visit', [OwnerController::class, 'physicalVisit'])->name('owner.tally.company.followup-action.physical-visit');
         
-        Route::get(
-            '/tally/company/{company}/followup-action/escalation', 
-            [OwnerController::class, 'escalation']
-        )->name('owner.tally.company.followup-action.escalation');
+        Route::get('/tally/company/{company}/followup-action/escalation', [OwnerController::class, 'escalation'])->name('owner.tally.company.followup-action.escalation');
 
-        Route::get(
-            '/tally/company/{company}/followup-history', 
-            [OwnerController::class, 'followupHistory']
-        )->name('owner.tally.company.followup_history');
+        Route::get('/tally/company/{company}/followup-history', [OwnerController::class, 'followupHistory'])->name('owner.tally.company.followup_history');
 
 
         // Other
@@ -175,11 +121,15 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
         Route::post('/company/{company}/save-parameters', [OwnerController::class, 'storeParameter'])->name('owner.other.template.parameters.store');
         Route::get('/company/{company}/ai-templates', [OwnerController::class, 'aiTemplates'])->name('owner.other.ai-templates');
         Route::get('/company/{company}/responses', [OwnerController::class, 'responses'])->name('owner.other.responses');
+
         Route::get('/company/{company}/overdue-target', [OwnerController::class, 'overdueTarget'])->name('owner.other.overdue-target');
+        Route::post('/overdue-target/save', [OwnerController::class, 'saveOverdueTarget'])->name('owner.overdue-target.save');
+
+        
         Route::get('/company/{company}/default-settings', [OwnerController::class, 'defaultSettings'])->name('owner.other.default-settings');
         Route::post('owner/tally/ledger/set-common-setting', [OwnerController::class, 'setCommonSetting'])->name('owner.tally.ledger.set-common-setting');
         Route::get('/company/{company}/master-settings', [OwnerController::class, 'masterSettings'])->name('owner.other.master-settings');
-       Route::post('/company/{company}/save-row', [OwnerController::class, 'saveRow'])->name('owner.other.saveRow');
+        Route::post('/company/{company}/save-row', [OwnerController::class, 'saveRow'])->name('owner.other.saveRow');
         Route::post('/tally/{company}/bad-debts/assign', [OwnerController::class, 'assignBadDebts'])->name('owner.tally.baddebts.assign'); 
 
 
@@ -233,40 +183,19 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
         
 
         // Follow Ups
-        Route::get(
-            '/manual/followup/hub/', 
-            [OwnerController::class, 'manualFollowUpsHub']
-        )->name('owner.manual.followup.hub');
+        Route::get('/manual/followup/hub/', [OwnerController::class, 'manualFollowUpsHub'])->name('owner.manual.followup.hub');
 
-        Route::get( 
-            '/manual/followup-action/telecaller', 
-            [OwnerController::class, 'manualTelecaller']
-        )->name('owner.manual.followup-action.telecaller');
+        Route::get( '/manual/followup-action/telecaller', [OwnerController::class, 'manualTelecaller'])->name('owner.manual.followup-action.telecaller');
 
-        Route::get(
-            '/manual/followup-action/call', 
-            [OwnerController::class, 'manualCall']
-        )->name('owner.manual.followup-action.call');
+        Route::get('/manual/followup-action/call', [OwnerController::class, 'manualCall'])->name('owner.manual.followup-action.call');
 
-        Route::get(
-            '/manual/followup-action/whatsapp-message', 
-            [OwnerController::class, 'manualWhatsappMessage']
-        )->name('owner.manual.followup-action.whatsapp-message');
+        Route::get('/manual/followup-action/whatsapp-message', [OwnerController::class, 'manualWhatsappMessage'])->name('owner.manual.followup-action.whatsapp-message');
 
-        Route::get(
-            '/manual/followup-action/physical-visit', 
-            [OwnerController::class, 'manualPhysicalVisit']
-        )->name('owner.manual.followup-action.physical-visit');
+        Route::get('/manual/followup-action/physical-visit', [OwnerController::class, 'manualPhysicalVisit'])->name('owner.manual.followup-action.physical-visit');
         
-        Route::get(
-            '/manual/followup-action/escalation', 
-            [OwnerController::class, 'manualEscalation']
-        )->name('owner.manual.followup-action.escalation');
+        Route::get('/manual/followup-action/escalation', [OwnerController::class, 'manualEscalation'])->name('owner.manual.followup-action.escalation');
 
-        Route::get(
-            '/manual/followup-history', 
-            [OwnerController::class, 'manualFollowupHistory']
-        )->name('owner.manual.followup_history');
+        Route::get('/manual/followup-history', [OwnerController::class, 'manualFollowupHistory'])->name('owner.manual.followup_history');
 
         // Other
         Route::get('/manual/templates', [OwnerController::class, 'manualTemplates'])->name('owner.manual.other.templates');
@@ -283,9 +212,9 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
         Route::get('/manual/charts', [OwnerController::class, 'manualCharts'])->name('owner.manual.reports.charts');
         Route::get('/manual/sales-analysis', [OwnerController::class, 'manaulSalesAnalysis'])->name('owner.manual.reports.sales-analysis');
 
-
         Route::get('/tally/ledger-due-vouchers', [OwnerController::class, 'ledgerDueVouchers'])->name('owner.tally.ledger.due-vouchers');
 
+        Route::get('/tally/ledger/target-data', [OwnerController::class, 'ledgerTargetData'])->name('owner.tally.ledger.target-data');
         // EMI
         Route::get('/manual/set-debtor-emi', [OwnerController::class, 'manaualSetDebtorEMI'])->name('owner.manual.set-debtor-emi');
 

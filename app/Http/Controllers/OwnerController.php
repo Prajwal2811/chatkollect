@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
+
 use App\Models\Owner;
 use App\Models\VoucherMapping;
 use App\Models\Accountant;
@@ -15,10 +16,13 @@ use App\Models\TallyLedger;
 use App\Models\TallyVoucher;
 use App\Models\WhatsappTemplate;
 use App\Models\WhatsappTemplateParameter;
-use Illuminate\Support\Facades\Hash;
-use App\Services\TallyService;
-use Illuminate\Support\Facades\Auth;
+use App\Models\OverdueTargetSetting;
 use App\Models\TallyCompany;
+
+use App\Services\TallyService;
+
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use Illuminate\Validation\Rule;
@@ -28,6 +32,15 @@ use Illuminate\Support\Facades\Artisan;
 
 class OwnerController extends Controller
 {
+
+    protected TallyService $tally;
+
+    public function __construct(TallyService $tally)
+    {
+        $this->tally = $tally;
+    }
+
+
     public function clearCache()
     {
         Artisan::call('cache:clear');
@@ -38,20 +51,13 @@ class OwnerController extends Controller
         return response()->json(['message' => 'All caches cleared successfully.']);
     }
     
-    protected TallyService $tally;
-
-    public function __construct(TallyService $tally)
-    {
-        $this->tally = $tally;
-    }
  
     public function subscription()
     {
         return view('owner.tally.subscription');
     }
 
-
-    public function subscribe(Request $request)
+    public function subscribe()
     {
         $owner = auth('owner')->user();
 
@@ -62,8 +68,7 @@ class OwnerController extends Controller
         return redirect()->route('owner.tally.dashboard')->with('success', 'Subscription activated successfully.');
     }
 
-
-    // Register form submit
+   
     public function registerOwner(Request $request)
     {
         $request->validate([
@@ -649,20 +654,19 @@ class OwnerController extends Controller
                                     'updated_at'                    => $now,
                                 ];
 
-                                // mobile_number: sirf pehli baar set karo (source abhi tak null hai).
-                                // Ek baar 'tally' ya 'default' set ho gaya, to future syncs isko touch nahi karenge.
+                      
                                 if (empty($tallyLedger->ledger_mobile_number_source)) {
                                     $updateData['ledger_mobile_number']        = $ledger['ledger_mobile_number'];
                                     $updateData['ledger_mobile_number_source'] = !empty($ledger['ledger_mobile_number']) ? 'tally' : null;
                                 }
 
-                                // credit_period: agar manually 'default' set hai to overwrite mat karo
+                        
                                 if ($tallyLedger->credit_period_source !== 'default') {
                                     $updateData['credit_period']        = $ledger['credit_period']. ' Days';
                                     $updateData['credit_period_source'] = !empty($ledger['credit_period']) ? 'tally' : null;
                                 }
 
-                                // interest_rate: agar manually 'default' set hai to overwrite mat karo
+                                
                                 if ($tallyLedger->interest_rate_source !== 'default') {
                                     $updateData['interest_rate']        = $ledger['interest_rate'];
                                     $updateData['interest_style']       = $ledger['interest_style'];
@@ -808,13 +812,6 @@ class OwnerController extends Controller
                                 $tallyVoucher->id
                             );
 
-                            Log::info('Voucher credit period trace', [
-                                'voucher_number' => $voucherData['voucher_number'],
-                                'master_id'      => $voucherData['master_id'],
-                                'ledger_name'    => $ledgerRecord->ledger_name,
-                                'ledger_credit_period' => $ledgerRecord->credit_period,
-                            ]);
-
                             $tallyVoucher->update([
                                 'unique_voucher_id' => $uniqueVoucherId,
                             ]);
@@ -900,8 +897,6 @@ class OwnerController extends Controller
     $creditorInterestUpdated = 0;
     $creditorBalanceUpdated  = 0;
 
-    // ================= DEBTORS =================
-
     if ($request->filled('debtor.mobile_number')) {
         $debtorMobileUpdated = TallyLedger::where('owner_id', $owner->id)
             ->where('parent', 'Sundry Debtors')
@@ -946,7 +941,6 @@ class OwnerController extends Controller
             ]);
     }
 
-    // ================= CREDITORS =================
 
     if ($request->filled('creditor.mobile_number')) {
         $creditorMobileUpdated = TallyLedger::where('owner_id', $owner->id)
@@ -1047,11 +1041,16 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         if (!empty($voucherDueDate)) {
             try {
                 $d = Carbon::parse($voucherDueDate)->startOfDay();
-                if ($d->year > 2000) {   // '0000-00-00' jaisi junk values ignore
+                if ($d->year > 2000) {    
                     return $d;
                 }
             } catch (\Throwable $e) {
-                // credit period pe fallback
+                Log::warning('Invalid voucher due date', [
+                    'voucher_due_date' => $voucherDueDate,
+                    'voucher_date'     => $voucherDate->toDateString(),
+                    'credit_period'    => $creditPeriod,
+                    'error'            => $e->getMessage(),
+                ]);
             }
         }
     
@@ -1061,42 +1060,41 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
     private function buildOpenInvoices($rows, string $under, int $creditPeriod, Carbon $today)
     {
         $isCreditor = $under === 'Sundry Creditors';
-    
+
         $invoices = $rows
             ->filter(fn ($r) => $isCreditor
-                ? ($r['mapped_type_low'] === 'purchase' && $r['credit'] > 0)
-                : ($r['mapped_type_low'] === 'sales' && $r['debit'] > 0))
-            ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)   // purana pehle
+                ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
+                : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
+            ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
             ->values();
-    
-        // Settlement pool: receipts (debtor) / payments (creditor)
-        $pool = (float) $rows
+
+        $pool = $rows
             ->filter(fn ($r) => $isCreditor
-                ? (str_contains($r['voucher_type_low'], 'payment') && $r['debit'] > 0)
-                : (str_contains($r['voucher_type_low'], 'receipt') && $r['credit'] > 0))
-            ->sum(fn ($r) => $isCreditor ? $r['debit'] : $r['credit']);
-    
+                ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
+                : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
+            ->reduce(fn ($t, $r) => bcadd($t, $isCreditor ? $r['debit'] : $r['credit'], 2), '0');
+
         return $invoices
             ->map(function ($r) use (&$pool, $isCreditor, $creditPeriod, $today) {
-                $original = (float) ($isCreditor ? $r['credit'] : $r['debit']);
-                $cleared  = min($pool, $original);
-                $pool    -= $cleared;
-                $pending  = round($original - $cleared, 2);
-    
+                $original = $isCreditor ? $r['credit'] : $r['debit'];
+                $cleared  = bccomp($pool, $original, 2) < 0 ? $pool : $original;
+                $pool     = bcsub($pool, $cleared, 2);
+                $pending  = bcsub($original, $cleared, 2);
+
                 $voucherDate = Carbon::parse($r['date'])->startOfDay();
                 $dueDate     = $this->resolveDueDate($r['due_date'] ?? null, $voucherDate, $creditPeriod);
-    
+
                 return [
                     'date'           => $voucherDate->toDateString(),
                     'due_date'       => $dueDate->toDateString(),
                     'voucher_number' => $r['voucher_number'] ?? null,
-                    'days'           => (int) $dueDate->diffInDays($today, false), // +ve = overdue
+                    'days'           => (int) $dueDate->diffInDays($today, false),
                     'original'       => $original,
-                    'cleared'        => round($cleared, 2),
+                    'cleared'        => $cleared,
                     'pending'        => $pending,
                 ];
             })
-            ->filter(fn ($i) => $i['pending'] > 0.009)   // fully cleared hata do
+            ->filter(fn ($i) => bccomp($i['pending'], '0', 2) > 0)
             ->values();
     }
  
@@ -1104,7 +1102,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
     public function companyLedgers($company)
     {
         try {
-            $com     = $company; // raw (still-encoded) company value, VoucherMapping lookup ke liye
+            $com     = $company;
             $company = urldecode($company);
             $owner   = Auth::guard('owner')->user();
     
@@ -1129,10 +1127,16 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
     
             $today = Carbon::now()->startOfDay();
     
-            $ledgers = $ledgerModels->map(function ($ledger) use ($vouchersByLedger, $today, $voucherMappings) {
+            $ownerTargets = OverdueTargetSetting::where('owner_id', $owner->id)
+                ->where('company_id', $tallyCompany->id)
+                ->pluck('diff_target', 'bucket_month');
+
+            $nowForTarget = now();
+
+            $ledgers = $ledgerModels->map(function ($ledger) use ($vouchersByLedger, $today, $voucherMappings, $ownerTargets, $nowForTarget) {
                 $under = $ledger->parent;
     
-                // due_date aur voucher_number bhi saath me
+          
                 $vouchers = $vouchersByLedger->get($ledger->id, collect())
                     ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
                         'due_date'       => $v->due_date ?? null,
@@ -1142,66 +1146,96 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 $isReceipt = fn ($v) => str_contains($v['voucher_type_low'], 'receipt');
                 $isPayment = fn ($v) => str_contains($v['voucher_type_low'], 'payment');
     
-                $sale = $purchase = $otherDebits = $otherCredits = $receipts = $payments = 0.0;
-    
+                $sale = $purchase = $otherDebits = $otherCredits = $receipts = $payments = '0';
+
                 if ($under === 'Sundry Creditors') {
-                    $purchase     = (float) $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'purchase' && $v['credit'] > 0)->sum('credit');
-                    $otherCredits = (float) $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'purchase' && $v['credit'] > 0)->sum('credit');
-                    $payments     = (float) $vouchers->filter(fn ($v) => $isPayment($v) && $v['debit'] > 0)->sum('debit');
+                    $purchase     = $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'purchase' && bccomp($v['credit'], '0', 2) > 0)
+                                        ->reduce(fn ($t, $v) => bcadd($t, $v['credit'], 2), '0');
+                    $otherCredits = $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'purchase' && bccomp($v['credit'], '0', 2) > 0)
+                                        ->reduce(fn ($t, $v) => bcadd($t, $v['credit'], 2), '0');
+                    $payments     = $vouchers->filter(fn ($v) => $isPayment($v) && bccomp($v['debit'], '0', 2) > 0)
+                                        ->reduce(fn ($t, $v) => bcadd($t, $v['debit'], 2), '0');
                 } else {
-                    $sale        = (float) $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'sales' && $v['debit'] > 0)->sum('debit');
-                    $otherDebits = (float) $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'sales' && $v['debit'] > 0)->sum('debit');
-                    $receipts    = (float) $vouchers->filter(fn ($v) => $isReceipt($v) && $v['credit'] > 0)->sum('credit');
+                    $sale        = $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'sales' && bccomp($v['debit'], '0', 2) > 0)
+                                        ->reduce(fn ($t, $v) => bcadd($t, $v['debit'], 2), '0');
+                    $otherDebits = $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'sales' && bccomp($v['debit'], '0', 2) > 0)
+                                        ->reduce(fn ($t, $v) => bcadd($t, $v['debit'], 2), '0');
+                    $receipts    = $vouchers->filter(fn ($v) => $isReceipt($v) && bccomp($v['credit'], '0', 2) > 0)
+                                        ->reduce(fn ($t, $v) => bcadd($t, $v['credit'], 2), '0');
                 }
     
                 $creditPeriod = (int) ($ledger->credit_period ?? 0);
-    
-                // Receipts ke against clear na hue invoices -> Balance Due / Not Due
+     
                 $openInvoices = $this->buildOpenInvoices($vouchers, $under, $creditPeriod, $today);
     
-                $due    = (float) $openInvoices->filter(fn ($i) => $i['days'] > 0)->sum('pending');
-                $notDue = (float) $openInvoices->filter(fn ($i) => $i['days'] <= 0)->sum('pending');
-    
-                $balance = (float) ($ledger->closing_balance ?? 0);
+                $balance = (string) ($ledger->closing_balance ?? '0');
+
+                $due = $openInvoices->filter(fn ($i) => $i['days'] > 0)
+                            ->reduce(fn ($t, $i) => bcadd($t, $i['pending'], 2), '0');
+
+              
+                $notDue = bcsub(ltrim($balance, '-+'), $due, 2);
+                if (bccomp($notDue, '0', 2) < 0) {
+                    $notDue = '0';
+                }
+ 
+                $pendingBal    = $openInvoices->reduce(fn ($t, $i) => bcadd($t, $i['pending'], 2), '0');
+                $targetBalance = '0';
+
+                for ($m = 1; $m <= 6; $m++) {
+                    $t = $ownerTargets[$m] ?? null;
+                    if ($t === null) {
+                        continue;
+                    }
+
+                    $monthEnd = $nowForTarget->copy()->startOfMonth()->subMonths($m)->endOfMonth();
+
+                    $overdueTill = $openInvoices
+                        ->filter(fn ($i) => $i['days'] > 0 && Carbon::parse($i['date'])->lte($monthEnd))
+                        ->reduce(fn ($s, $i) => bcadd($s, $i['pending'], 2), '0');
+
+                    $w1            = bcsub($overdueTill, bcdiv(bcmul($pendingBal, (string) $t, 6), '100', 2), 2);
+                    $targetBalance = bcsub($pendingBal, $w1, 2);
+                    break;
+                }
     
                 return [
-                    'unique_id' => $ledger->unique_ledger_id,
-                    'name'      => $ledger->ledger_name,
-                    'under'     => $under,
-                    'mobile'    => $ledger->ledger_mobile_number,
+                    'unique_id'         => $ledger->unique_ledger_id,
+                    'name'              => $ledger->ledger_name,
+                    'under'             => $under,
+                    'mobile'            => $ledger->ledger_mobile_number,
     
-                    'balance'       => $balance,
-                    'due'           => $due,
-                    'not_due'       => $notDue,
-                    'target'        => $ledger->target ?? 0,
-                    'sale'          => $sale,
+                    'balance'           => $balance,
+                    'due'               => $due,
+                    'not_due'           => $notDue,
+                    'target'            => $targetBalance,  
+                    'sale'              => $sale,
 
-                    'purchase'      => $purchase,
-                    'other_debits'  => $otherDebits,
-                    'other_credits' => $otherCredits,
-                    'receipts'      => $receipts,
-                    'payments'      => $payments,
+                    'purchase'          => $purchase,
+                    'other_debits'      => $otherDebits,
+                    'other_credits'     => $otherCredits,
+                    'receipts'          => $receipts,
+                    'payments'          => $payments,
     
-                    'interest_cost'     => $ledger->interest_cost ?? 0,
-                    'interest_received' => $ledger->interest_received ?? 0,
-                    'interest_paid'     => $ledger->interest_paid ?? 0,
-                    'interest_due'      => $ledger->interest_due ?? 0,
-                    'interest_waived'   => $ledger->interest_waived ?? 0,
+                    'interest_cost'     => (string) ($ledger->interest_cost ?? '0'),
+                    'interest_received' => (string) ($ledger->interest_received ?? '0'),
+                    'interest_paid'     => (string) ($ledger->interest_paid ?? '0'),
+                    'interest_due'      => (string) ($ledger->interest_due ?? '0'),
+                    'interest_waived'   => (string) ($ledger->interest_waived ?? '0'),
     
-                    'bad_debts'             => $ledger->bad_debts ?? 0,
-                    'total_debtors'         => $balance > 0 ? $balance : 0,
-                    'total_creditors'       => $balance < 0 ? abs($balance) : 0,
-                    'march_closing_pending' => $ledger->march_closing_pending ?? 0,
+                    'bad_debts'             => (string) ($ledger->bad_debts ?? '0'),
+                    'total_debtors'         => bccomp($balance, '0', 2) > 0 ? $balance : '0',
+                    'total_creditors'       => bccomp($balance, '0', 2) < 0 ? ltrim($balance, '-') : '0',
+                    'march_closing_pending' => (string) ($ledger->march_closing_pending ?? '0'),
     
-                    // Table me `status` column nahi, `mark` (red/green/unmarked) hai
-                    'status' => match ($ledger->mark) {
+                    'status'            => match ($ledger->mark) {
                         'green' => 'success',
                         'red'   => 'danger',
                         default => 'secondary',
                     },
-                    // `overlimit` string hai ("Yes"/"No"), seedha (bool) cast karne se "No" bhi true ho jata hai
-                    'overlimit' => filter_var($ledger->overlimit, FILTER_VALIDATE_BOOLEAN),
-                    'rank'      => $ledger->rank ?? null,
+                     
+                    'overlimit'         => filter_var($ledger->overlimit, FILTER_VALIDATE_BOOLEAN),
+                    'rank'              => $ledger->rank ?? null,
                 ];
             });
     
@@ -1244,7 +1278,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             ->where('tally_company_id', $tallyCompany->id)
             ->where('ledger_id', $ledgerModel->id);
 
-        // pehle id se try karo (agar dee gayi ho aur numeric ho), warna voucher_number se
         if ($request->filled('voucher_id') && is_numeric($request->voucher_id)) {
             $voucher = (clone $query)->where('id', $request->voucher_id)->first();
         } else {
@@ -1260,7 +1293,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         }
 
         $voucher->credit_period        = $request->credit_period . ' Days';
-        $voucher->credit_period_source = 'voucher'; // ya 'manual', jo bhi convention aap use karte ho ledger side
+        $voucher->credit_period_source = 'voucher';  
         $voucher->save();
 
         $voucherDate = Carbon::parse($voucher->date);
@@ -1311,41 +1344,111 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                         'due_date'              => $v->due_date ?? null,
                         'voucher_number'        => $v->voucher_number,
                         'credit_period'         => $v->credit_period,
-                        'credit_period_source'  => $v->credit_period_source,   // ← add this line
+                        'credit_period_source'  => $v->credit_period_source,   
                     ]);
 
-            // voucher_number -> uska apna DB credit_period (agar hai), lookup ke liye
             $creditPeriodByVoucherNumber       = $rows->pluck('credit_period', 'voucher_number');
-            $creditPeriodSourceByVoucherNumber = $rows->pluck('credit_period_source', 'voucher_number');   // ← add
+            $creditPeriodSourceByVoucherNumber = $rows->pluck('credit_period_source', 'voucher_number');    
 
-            $dueRows = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today)
-                ->filter(fn ($i) => $i['days'] > 0)
-                ->sortByDesc('days')
+            $isNotDue     = $request->query('type') === 'not_due';
+            $openInvoices = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today);
+
+            $selected = $isNotDue
+                ? $openInvoices->filter(fn ($i) => $i['days'] <= 0)->sortBy('days')
+                : $openInvoices->filter(fn ($i) => $i['days'] > 0)->sortByDesc('days');
+
+            $dueRows = $selected
                 ->map(function ($i) use ($creditPeriodByVoucherNumber, $creditPeriodSourceByVoucherNumber, $creditPeriod) {
-                        $voucherCP     = $creditPeriodByVoucherNumber->get($i['voucher_number']);
-                        $voucherSource = $creditPeriodSourceByVoucherNumber->get($i['voucher_number']);
+                    $voucherCP     = $creditPeriodByVoucherNumber->get($i['voucher_number']);
+                    $voucherSource = $creditPeriodSourceByVoucherNumber->get($i['voucher_number']);
 
-                        // (int) cast "30 Days" string se bhi automatically 30 nikal leta hai (PHP leading-digit parse)
-                        $resolvedCP = ($voucherSource === 'voucher') ? $voucherCP : $creditPeriod;
+                    $resolvedCP = ($voucherSource === 'voucher') ? $voucherCP : $creditPeriod;
 
-                        return [
-                            'id'             => $i['id'] ?? null,
-                            'date'           => $i['date'],
-                            'due_date'       => $i['due_date'],
-                            'voucher_number' => $i['voucher_number'],
-                            'days'           => $i['days'],
-                            'amount'         => $i['pending'],
-                            'original'       => $i['original'],
-                            'credit_period'  => (int) $resolvedCP,   // ← ab hamesha plain number frontend ko jayega
-                        ];
-                    })->values();
-        
-            
-                return response()->json([
-                    'vouchers'             => $dueRows,
-                    'total'                => round((float) $dueRows->sum('amount'), 2),
-                    'ledger_credit_period' => $creditPeriod,
-                ]);
+                    return [
+                        'id'             => $i['id'] ?? null,
+                        'date'           => $i['date'],
+                        'due_date'       => $i['due_date'],
+                        'voucher_number' => $i['voucher_number'],
+                        'days'           => $i['days'],
+                        'amount'         => $i['pending'],
+                        'original'       => $i['original'],
+                        'credit_period'  => (int) $resolvedCP,
+                    ];
+                })->values();
+
+            $total = $dueRows->reduce(fn ($t, $r) => bcadd($t, $r['amount'], 2), '0');
+
+            if ($isNotDue) {
+                $balanceAbs = ltrim((string) ($ledgerModel->closing_balance ?? '0'), '-+');
+                $dueSum     = $openInvoices->filter(fn ($i) => $i['days'] > 0)
+                                    ->reduce(fn ($t, $i) => bcadd($t, $i['pending'], 2), '0');
+
+                $notDueTotal = bcsub($balanceAbs, $dueSum, 2);
+                if (bccomp($notDueTotal, '0', 2) < 0) {
+                    $notDueTotal = '0';
+                }
+
+                $remaining = bcsub($notDueTotal, $total, 2);    
+
+                if (bccomp($remaining, '0', 2) > 0) {
+                    $isCreditor = $under === 'Sundry Creditors';
+                    $usedNumbers = $openInvoices->pluck('voucher_number')->all();
+
+                    $candidates = $rows
+                        ->filter(fn ($r) => !in_array($r['voucher_number'], $usedNumbers, true)
+                            && bccomp($isCreditor ? $r['credit'] : $r['debit'], '0', 2) > 0)
+                        ->sortByDesc(fn ($r) => Carbon::parse($r['date'])->timestamp)
+                        ->values();
+
+                    foreach ($candidates as $r) {
+                        if (bccomp($remaining, '0', 2) <= 0) {
+                            break;
+                        }
+
+                        $amt  = $isCreditor ? $r['credit'] : $r['debit'];
+                        $take = bccomp($remaining, $amt, 2) < 0 ? $remaining : $amt;
+
+                        $voucherDate = Carbon::parse($r['date'])->startOfDay();
+                        $dueDate     = $this->resolveDueDate($r['due_date'] ?? null, $voucherDate, $creditPeriod);
+
+                        $dueRows->push([
+                            'id'             => $r['id'] ?? null,
+                            'date'           => $voucherDate->toDateString(),
+                            'due_date'       => $dueDate->toDateString(),
+                            'voucher_number' => $r['voucher_number'],
+                            'days'           => (int) $dueDate->diffInDays($today, false),
+                            'amount'         => $take,
+                            'original'       => $amt,
+                            'credit_period'  => $creditPeriod,
+                        ]);
+
+                        $remaining = bcsub($remaining, $take, 2);
+                    }
+
+                    if (bccomp($remaining, '0', 2) > 0) {
+                        $dueRows->push([
+                            'id'             => null,
+                            'date'           => null,
+                            'due_date'       => null,
+                            'voucher_number' => 'Opening / Other adjustment',
+                            'days'           => 0,
+                            'amount'         => $remaining,
+                            'original'       => $remaining,
+                            'credit_period'  => 0,
+                        ]);
+                    }
+
+                    $dueRows = $dueRows->sortByDesc('date')->values();
+                }
+
+                $total = $notDueTotal;
+            }
+
+            return response()->json([
+                'vouchers'             => $dueRows,
+                'total'                => $total,
+                'ledger_credit_period' => $creditPeriod,
+            ]);
     
         } catch (\Throwable $e) {
             Log::error('Tally ledgerDueVouchers failed', [
@@ -1359,12 +1462,146 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
     }
  
 
+    public function ledgerTargetData(Request $request)
+    {
+        try {
+            $ownerId = Auth::guard('owner')->id();
+
+            $request->validate([
+                'company' => 'required|string',
+                'ledger'  => 'required|string',
+                'under'   => 'required|string',
+            ]);
+
+            $tallyCompany = TallyCompany::where('owner_id', $ownerId)
+                ->where('company_name', $request->company)
+                ->firstOrFail();
+
+            $targets = OverdueTargetSetting::where('owner_id', $ownerId)
+                ->where('company_id', $tallyCompany->id)
+                ->pluck('diff_target', 'bucket_month');
+
+                $pending = collect($this->getPendingInvoices($ownerId, $tallyCompany, $request->ledger));
+
+                $balance      = $pending->reduce(fn ($t, $p) => bcadd($t, $p['amount'], 2), '0');
+                $hasBalance   = bccomp($balance, '0', 2) > 0;
+                $now          = now();
+                $rows         = [];
+                $runningMaxW1 = null;
+
+                for ($i = 6; $i >= 0; $i--) {
+                    $monthEnd = $i === 0
+                        ? $now->copy()
+                        : $now->copy()->startOfMonth()->subMonths($i)->endOfMonth();
+
+                    $upto = $pending->filter(fn ($p) => Carbon::parse($p['date'])->lte($monthEnd));
+
+                    $overdue = $upto->filter(fn ($p) => $p['days'] > 0)
+                                    ->reduce(fn ($t, $p) => bcadd($t, $p['amount'], 2), '0');
+
+                    $notDue = $upto->filter(fn ($p) => $p['days'] <= 0)
+                                ->reduce(fn ($t, $p) => bcadd($t, $p['amount'], 2), '0');
+
+                    $row = [
+                        'month'      => $monthEnd->format('M-y'),
+                        'overdue'    => $overdue,
+                        'notDue'     => $notDue,
+                        'balance'    => $balance,
+                        'pctOverdue' => $hasBalance ? bcmul(bcdiv($overdue, $balance, 6), '100', 2) : '0',
+                        'pctNotDue'  => $hasBalance ? bcmul(bcdiv($notDue,  $balance, 6), '100', 2) : '0',
+                        'target'     => null,
+                        'w1'         => null,
+                        'w2'         => null,
+                        'targetBal'  => null,
+                    ];
+
+                    if ($i > 0) {
+                        $t = $targets[$i] ?? null;
+                        if ($t !== null) {
+                            $t  = (string) $t;
+                            $w1 = bcsub($overdue, bcdiv(bcmul($balance, $t, 6), '100', 2), 2);
+
+                            if ($runningMaxW1 === null || bccomp($w1, $runningMaxW1, 2) > 0) {
+                                $runningMaxW1 = $w1;
+                            }
+
+                            $row['target']    = $t;
+                            $row['w1']        = $w1;
+                            $row['w2']        = $runningMaxW1;
+                            $row['targetBal'] = bcsub($balance, $w1, 2);
+                        }
+                    }
+
+                    $rows[] = $row;
+                }
+
+            return response()->json(['rows' => $rows]);
+
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('Tally ledgerTargetData failed', [
+                'company' => $request->company,
+                'ledger'  => $request->ledger,
+                'error'   => $e->getMessage(),
+            ]);
+
+            return response()->json(['message' => 'Unable to fetch target data.'], 500);
+        }
+    }
+
+
+    private function getPendingInvoices(int $ownerId, $tallyCompany, string $ledger): array
+    {
+        $ledgerModel = TallyLedger::where('owner_id', $ownerId)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->where('ledger_name', $ledger)
+            ->first();
+
+        if (!$ledgerModel) {
+            return [];
+        }
+
+        $under        = $ledgerModel->parent;
+        $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+        $today        = Carbon::now()->startOfDay();
+
+        $voucherMappings = VoucherMapping::where('company', urlencode($tallyCompany->company_name))
+            ->pluck('mapped_to', 'voucher_type')
+            ->toArray();
+
+        $rows = TallyVoucher::where('owner_id', $ownerId)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->where('ledger_id', $ledgerModel->id)
+            ->get()
+            ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
+                'id'                   => $v->id,
+                'due_date'             => $v->due_date ?? null,
+                'voucher_number'       => $v->voucher_number,
+                'credit_period'        => $v->credit_period,
+                'credit_period_source' => $v->credit_period_source,
+            ]);
+
+        return $this->buildOpenInvoices($rows, $under, $creditPeriod, $today)
+                ->filter(fn ($i) => bccomp($i['pending'], '0', 2) > 0)
+                ->map(fn ($i) => [
+                    'date'   => $i['date'],
+                    'amount' => $i['pending'],     
+                    'days'   => (int) $i['days'],
+                ])
+                ->values()
+                ->all();
+    }
     private function classifyVoucherRow($v, ?string $under, array $voucherMappings): array
     {
         static $creditSideTypesForDebtor  = ['receipt', 'receipt note', 'credit note'];
         static $debitSideTypesForCreditor = ['payment', 'debit note'];
 
-        $amount = abs((float) $v->amount);
+        $amount = ltrim((string) $v->amount, '-+');   
+
+        $debit  = '0'; 
+        $credit = '0';
+
         $voucherType    = trim((string) $v->voucher_type);
         $voucherTypeLow = strtolower($voucherType);
 
@@ -1380,8 +1617,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             $mappedType = 'Other than Sales/Purchase';
         }
 
-        $debit  = 0;
-        $credit = 0;
 
         if ($under === 'Sundry Creditors') {
             if (in_array($voucherTypeLow, $debitSideTypesForCreditor, true)) {
@@ -1445,42 +1680,42 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         foreach ($invoices as $inv) {
             $original  = $isCreditor ? $inv['credit'] : $inv['debit'];
             $remaining = $original;
-            $matchedAgainst = [];  
+            $matchedAgainst = [];
 
-            while ($remaining > 0.009 && $clearingPointer < count($clearings)) {
+            while (bccomp($remaining, '0', 2) > 0 && $clearingPointer < count($clearings)) {
                 $c = &$clearings[$clearingPointer];
 
-                if ($c['remaining'] <= 0.009) {
+                if (bccomp($c['remaining'], '0', 2) <= 0) {
                     $clearingPointer++;
                     continue;
                 }
 
-                $take = min($remaining, $c['remaining']);
+                $take = bccomp($remaining, $c['remaining'], 2) < 0 ? $remaining : $c['remaining'];
 
-                $c['remaining'] -= $take;
-                $remaining      -= $take;
+                $c['remaining'] = bcsub($c['remaining'], $take, 2);
+                $remaining      = bcsub($remaining, $take, 2);
 
                 $matchedAgainst[] = [
                     'voucher_number' => $c['voucher_number'],
                     'date'           => $c['date'],
-                    'amount'         => round($take, 2),
+                    'amount'         => $take,
                 ];
 
-                if ($c['remaining'] <= 0.009) {
+                if (bccomp($c['remaining'], '0', 2) <= 0) {
                     $clearingPointer++;
                 }
 
                 unset($c);
             }
 
-            $cleared = round($original - $remaining, 2);
-            $pending = round($remaining, 2);
+            $cleared = bcsub($original, $remaining, 2);
+            $pending = $remaining;
 
-            if ($pending <= 0.009) {
+            if (bccomp($pending, '0', 2) <= 0) {
                 continue;
             }
 
-            $status = ($cleared > 0)
+            $status = bccomp($cleared, '0', 2) > 0
                 ? ($isCreditor ? 'Partially Paid' : 'Partially Received')
                 : 'Pending';
 
@@ -1489,11 +1724,11 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 'voucher_number'    => $inv['voucher_number'],
                 'voucher_type'      => $inv['voucher_type'],
                 'particulars'       => $inv['particulars'],
-                'original'          => round($original, 2),
+                'original'          => $original,
                 $isCreditor ? 'paid' : 'received' => $cleared,
                 'pending'           => $pending,
                 'status'            => $status,
-                'cleared_against'   => $matchedAgainst,  
+                'cleared_against'   => $matchedAgainst,
             ];
         }
 
@@ -1501,164 +1736,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
     }
 
 
-    private function cleanTallyXml(string $xml): string
-    {
-        $xml = preg_replace('/&#x?0*(?:[0-8]|0?[bB]|0?[cC]|1[4-9]|2[0-9]|3[01]);/i', '', $xml);
-        $xml = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $xml);
-        return $xml;
-    }
-
-
-    private function parseXml(string $xml)
-    {
-        libxml_use_internal_errors(true);
-        $xmlObj = simplexml_load_string($xml);
-        if ($xmlObj === false) {
-            foreach (libxml_get_errors() as $error) {
-                Log::warning('Tally XML parse error: ' . trim($error->message));
-            }
-            libxml_clear_errors();
-        }
-        return $xmlObj ?: null;
-    }
-
-
-    private function computeVoucherTotals(string $company, $mergeMap): array
-    {
-        $totals = [
-            'sale'          => [],
-            'receipt'       => [],
-            'purchase'      => [],
-            'payment'       => [],
-            'other_debit'   => [],
-            'other_credit'  => [],
-        ];
-
-        $typeMap = [];
-        foreach ($mergeMap as $row) {
-            $voucherTypeKey = strtolower(trim($row->voucher_type));
-            $typeMap[$voucherTypeKey] = strtolower(trim($row->mapped_to));
-        }
-
-        $saleTypes     = ['sales', 'cash sales', 'credit sale'];
-        $purchaseTypes = ['purchase', 'cash purchase', 'credit purchase'];
-
-        $xml    = $this->cleanTallyXml($this->tally->getVouchersForCompany($company));
-        $xmlObj = $this->parseXml($xml);
-
-        if (!$xmlObj) {
-            return $totals;
-        }
-
-        $vouchers = $xmlObj->xpath("//*[local-name()='VOUCHER']");
-        if (!$vouchers) {
-            return $totals;
-        }
-
-        $seenGuids = [];
-
-        foreach ($vouchers as $voucher) {
-            $isCancelled = strtolower(trim((string) ($voucher->ISCANCELLED ?? 'No'))) === 'yes';
-            $isOptional  = strtolower(trim((string) ($voucher->ISOPTIONAL  ?? 'No'))) === 'yes';
-            if ($isCancelled || $isOptional) {
-                continue;
-            }
-
-            $guid = trim((string) ($voucher->GUID ?? ''));
-            if ($guid !== '') {
-                if (isset($seenGuids[$guid])) {
-                    continue;
-                }
-                $seenGuids[$guid] = true;
-            }
-
-            $voucherTypeRaw = trim((string) ($voucher->VOUCHERTYPENAME ?? ''));
-            $voucherTypeKey = strtolower($voucherTypeRaw);
-
-            $entries = $voucher->xpath(".//*[local-name()='ALLLEDGERENTRIES.LIST']");
-            if (!$entries) {
-                continue;
-            }
-
-            if (in_array($voucherTypeKey, $saleTypes, true)) {
-                // ---- SALE ----
-                foreach ($entries as $entry) {
-                    $ledgerName = trim((string) ($entry->LEDGERNAME ?? ''));
-                    $amount     = (float) ($entry->AMOUNT ?? 0);
-                    if ($ledgerName === '') continue;
-
-                    $key = strtolower($ledgerName);
-                    $totals['sale'][$key] = ($totals['sale'][$key] ?? 0.0) + abs($amount);
-                }
-            } elseif (in_array($voucherTypeKey, $purchaseTypes, true)) {
-                // ---- PURCHASE ----
-                foreach ($entries as $entry) {
-                    $ledgerName = trim((string) ($entry->LEDGERNAME ?? ''));
-                    $amount     = (float) ($entry->AMOUNT ?? 0);
-                    if ($ledgerName === '') continue;
-
-                    $key = strtolower($ledgerName);
-                    $totals['purchase'][$key] = ($totals['purchase'][$key] ?? 0.0) + abs($amount);
-                }
-            } elseif ($voucherTypeKey === 'receipt') {
-                // ---- RECEIPT ----
-                foreach ($entries as $entry) {
-                    $ledgerName = trim((string) ($entry->LEDGERNAME ?? ''));
-                    $amount     = (float) ($entry->AMOUNT ?? 0);
-                    if ($ledgerName === '') continue;
-
-                    $key = strtolower($ledgerName);
-                    $totals['receipt'][$key] = ($totals['receipt'][$key] ?? 0.0) + abs($amount);
-                }
-            } elseif ($voucherTypeKey === 'payment') {
-                // ---- PAYMENT ----
-                foreach ($entries as $entry) {
-                    $ledgerName = trim((string) ($entry->LEDGERNAME ?? ''));
-                    $amount     = (float) ($entry->AMOUNT ?? 0);
-                    if ($ledgerName === '') continue;
-
-                    $key = strtolower($ledgerName);
-                    $totals['payment'][$key] = ($totals['payment'][$key] ?? 0.0) + abs($amount);
-                }
-            } else {
-                // ---- OTHER THAN SALE/PURCHASE (Journal, Contra, Debit Note, Credit Note, etc.) ----
-                $mappedTo = $typeMap[$voucherTypeKey] ?? null;
-                if ($mappedTo === null) {
-                    Log::warning('Tally voucher type not found in mapping table', [
-                        'company' => $company,
-                        'type'    => $voucherTypeRaw,
-                    ]);
-                }
-
-                foreach ($entries as $entry) {
-                    $ledgerName = trim((string) ($entry->LEDGERNAME ?? ''));
-                    $amount     = (float) ($entry->AMOUNT ?? 0);
-                    if ($ledgerName === '') continue;
-
-                    $key = strtolower($ledgerName);
-
-                    $isDeemedPositiveTag = $entry->{'ISDEEMEDPOSITIVE'} ?? null;
-
-                    if ($isDeemedPositiveTag !== null && $isDeemedPositiveTag !== '') {
-                        $isDebit = strtolower(trim((string) $isDeemedPositiveTag)) === 'yes';
-                    } else {
-                        $isDebit = $amount < 0;
-                    }
-
-                    if ($isDebit) {
-                        $totals['other_debit'][$key] = ($totals['other_debit'][$key] ?? 0.0) + abs($amount);
-                    } else {
-                        $totals['other_credit'][$key] = ($totals['other_credit'][$key] ?? 0.0) + abs($amount);
-                    }
-                }
-            }
-        }
-
-        return $totals;
-    }
-
-    
-    
     public function ledgerFieldVouchers(Request $request, $company, $ledger, $under)
     {
         $field   = $request->get('field');
@@ -1692,7 +1769,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             ->where('ledger_id', $ledgerModel->id)
             ->orderBy('date')
             ->get()
-            // 👇 id, due_date, credit_period, credit_period_source bhi saath me le lo
             ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
                 'id'                   => $v->id,
                 'due_date'             => $v->due_date ?? null,
@@ -1709,9 +1785,8 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         $filtered = $this->filterVouchersByField($vouchers, $field, $under);
 
         $rows = $filtered->map(function ($v) use ($ledgerCreditPeriod, $today) {
-            // per-voucher credit_period agar manually set hai to wahi, warna ledger ka default
             $resolvedCP = ($v['credit_period_source'] === 'voucher' && $v['credit_period'] !== null)
-                ? (int) $v['credit_period']   // "30 Days" se bhi (int) cast 30 nikal leta hai
+                ? (int) $v['credit_period']   
                 : $ledgerCreditPeriod;
 
             $days = 0;
@@ -1739,113 +1814,8 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         return response()->json(['vouchers' => $rows]);
     }
 
-
-    private function buildLedgerVouchers(string $company, string $ledger, $mergeMap): array
-    {
-        $ledgerKey = strtolower(trim($ledger));
-
-        $saleTypes     = ['sales', 'cash sales', 'credit sale'];
-        $purchaseTypes = ['purchase', 'cash purchase', 'credit purchase'];
-
-        $xml    = $this->cleanTallyXml($this->tally->getVouchersForCompany($company));
-        $xmlObj = $this->parseXml($xml);
-
-        if (!$xmlObj) {
-            return [];
-        }
-
-        $vouchers = $xmlObj->xpath("//*[local-name()='VOUCHER']");
-        if (!$vouchers) {
-            return [];
-        }
-
-        $seenGuids = [];
-        $result    = [];
-
-        foreach ($vouchers as $voucher) {
-            $isCancelled = strtolower(trim((string) ($voucher->ISCANCELLED ?? 'No'))) === 'yes';
-            $isOptional  = strtolower(trim((string) ($voucher->ISOPTIONAL  ?? 'No'))) === 'yes';
-            if ($isCancelled || $isOptional) {
-                continue;
-            }
-
-            $guid = trim((string) ($voucher->GUID ?? ''));
-            if ($guid !== '') {
-                if (isset($seenGuids[$guid])) {
-                    continue;
-                }
-                $seenGuids[$guid] = true;
-            }
-
-            $voucherTypeRaw = trim((string) ($voucher->VOUCHERTYPENAME ?? ''));
-            $voucherTypeKey = strtolower($voucherTypeRaw);
-
-            $entries = $voucher->xpath(".//*[local-name()='ALLLEDGERENTRIES.LIST']");
-            if (!$entries) {
-                continue;
-            }
-
-            $baseMappedType = null;
-            if (in_array($voucherTypeKey, $saleTypes, true)) {
-                $baseMappedType = 'sales';
-            } elseif (in_array($voucherTypeKey, $purchaseTypes, true)) {
-                $baseMappedType = 'purchase';
-            } elseif ($voucherTypeKey === 'receipt') {
-                $baseMappedType = 'receipt';
-            } elseif ($voucherTypeKey === 'payment') {
-                $baseMappedType = 'payment';
-            }
-
-            foreach ($entries as $entry) {
-                $ledgerName = trim((string) ($entry->LEDGERNAME ?? ''));
-                if ($ledgerName === '' || strtolower($ledgerName) !== $ledgerKey) {
-                    continue;
-                }
-
-                $amount     = (float) ($entry->AMOUNT ?? 0);
-                $mappedType = $baseMappedType;
-                $debit      = 0.0;
-                $credit     = 0.0;
-
-                if ($mappedType === 'sales' || $mappedType === 'payment') {
-                    $debit = abs($amount);
-                } elseif ($mappedType === 'purchase' || $mappedType === 'receipt') {
-                    $credit = abs($amount);
-                } else {
-                    $isDeemedPositiveTag = $entry->{'ISDEEMEDPOSITIVE'} ?? null;
-                    $isDebit = ($isDeemedPositiveTag !== null && $isDeemedPositiveTag !== '')
-                        ? strtolower(trim((string) $isDeemedPositiveTag)) === 'yes'
-                        : $amount < 0;
-
-                    if ($isDebit) {
-                        $debit      = abs($amount);
-                        $mappedType = 'other_debit';
-                    } else {
-                        $credit     = abs($amount);
-                        $mappedType = 'other_credit';
-                    }
-                }
-
-                $result[] = [
-                    'date'         => (string) ($voucher->DATE ?? ''), // raw Ymd - parseTallyDateForCompare/safeFormatTallyDate isi format ko expect karte hain
-                    'voucher_no'   => (string) ($voucher->VOUCHERNUMBER ?? ''),
-                    'voucher_type' => $voucherTypeRaw,
-                    'mapped_type'  => $mappedType,
-                    'particulars'  => (string) ($voucher->PARTYLEDGERNAME ?? $ledgerName),
-                    'debit'        => $debit,
-                    'credit'       => $credit,
-                ];
-            }
-        }
-
-        return $result;
-    }
-
-    
     private function filterVouchersByField($vouchers, string $field, ?string $under)
     {
-        $isCreditor = ($under === 'Sundry Creditors');
-
         return match ($field) {
             'Sale'      => $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'sales' && $v['debit'] > 0),
             'Purchase'  => $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'purchase' && $v['credit'] > 0),
@@ -1857,42 +1827,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         };
     }
 
-
-    private function parseTallyDateForCompare(?string $d): ?Carbon
-    {
-        if (empty($d)) {
-            return null;
-        }
     
-        try {
-            return Carbon::createFromFormat('Ymd', $d)->startOfDay();
-        } catch (\Throwable $e) {
-            try {
-                return Carbon::parse($d)->startOfDay();
-            } catch (\Throwable $e2) {
-                return null;
-            }
-        }
-    }
-
-
-    private function safeFormatTallyDate(?string $d): ?string
-    {
-        if (empty($d)) {
-            return null;
-        }
-        try {
-            return Carbon::createFromFormat('Ymd', $d)->format('d-m-Y');
-        } catch (\Throwable $e) {
-            try {
-                return Carbon::parse($d)->format('d-m-Y');
-            } catch (\Throwable $e2) {
-                return $d;
-            }
-        }
-    }
-
-
     public function ledgerVouchers(Request $request, $company, $ledger, $under = null)
     {
         $under = urldecode($under);
@@ -1919,8 +1854,8 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
  
             $vouchers = [];
 
-            $creditSideTypesForDebtor  = ['receipt', 'receipt note', 'credit note']; // money IN — reduces receivable
-            $debitSideTypesForCreditor = ['payment', 'debit note'];                  // money OUT — reduces payable
+            $creditSideTypesForDebtor  = ['receipt', 'receipt note', 'credit note'];
+            $debitSideTypesForCreditor = ['payment', 'debit note'];                 
 
             if ($tallyCompany && $tallyLedger) {
                 $voucherRows = TallyVoucher::where('owner_id', $owner->id)
@@ -1968,7 +1903,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             }
 
             $openingBalanceAllTime = (float) ($tallyLedger->opening_balance ?? 0);
-            $closingBalanceAllTime = (float) ($tallyLedger->closing_balance ?? 0);
 
             $today = Carbon::now();
             $currentFyStartYear = $today->month >= 4 ? (int) $today->year : (int) $today->year - 1;
@@ -2598,7 +2532,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 'id' => 4, 'ledger_id' => 102, 'ledger_name' => 'XYZ Enterprises', 'mobile' => '9000000002',
                 'type' => 'targets_months', 'type_label' => $typeLabels['targets_months'],
                 'balance' => 78900, 'target' => 80000, 'target_pct' => 98.63,
-                'due_date' => '2026-07-31', // used as Target Month for this type
+                'due_date' => '2026-07-31', 
                 'assigned_to' => 'Aman', 'assigned_by' => 'Owner',
                 'allocation_date' => '2026-07-15', 'action' => 'physical_visit', 'action_label' => $actionLabels['physical_visit'],
                 'frequency' => 'monthly', 'response_date' => '2026-07-20',
@@ -2716,9 +2650,97 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         return view('owner.tally.other.responses');
     }
 
-    public function overdueTarget()
+     public function overdueTarget($company)
     {
-        return view('owner.tally.other.overdue-target');
+        $company = urldecode($company);
+        $owner   = Auth::guard('owner')->user();
+
+        $tallyCompany = TallyCompany::where('owner_id', $owner->id)
+            ->where('company_name', $company)
+            ->firstOrFail();
+
+        $rows = OverdueTargetSetting::where('owner_id', $owner->id)
+            ->where('company_id', $tallyCompany->id)
+            ->orderBy('bucket_month')
+            ->get();
+
+        $settings = [];
+        foreach ($rows as $row) {
+            $settings[$row->bucket_month] = [
+                'receivable' => $row->receivable_target !== null ? (float) $row->receivable_target : null,
+                'payable'    => $row->payable_target !== null ? (float) $row->payable_target : null,
+                'diff'       => $row->diff_target !== null ? (float) $row->diff_target : null,
+            ];
+        }
+
+        return view('owner.tally.other.overdue-target', compact('settings', 'tallyCompany'));
+    }
+
+    public function saveOverdueTarget(Request $request)
+    {
+        $ownerId = Auth::guard('owner')->id();
+
+        $validated = $request->validate([
+            'company_id' => [
+                'required',
+                'integer',
+                Rule::exists('rms_tally_companies', 'id')->where('owner_id', $ownerId),
+            ],
+            'receivable'   => 'required|array|size:6',
+            'receivable.*' => 'nullable|numeric|min:0|max:100',
+            'payable'      => 'required|array|size:6',
+            'payable.*'    => 'nullable|numeric|min:0|max:100',
+        ]);
+
+        foreach (['receivable' => 'Receivable', 'payable' => 'Payable'] as $key => $label) {
+            $last = null;
+            foreach (array_values($validated[$key]) as $v) {
+                if ($v === null) {
+                    continue;
+                }
+                $v = (float) $v;
+                if ($last !== null && $v > $last) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => "$label target % must be in decreasing order.",
+                    ], 422);
+                }
+                $last = $v;
+            }
+        }
+
+        $companyId  = $validated['company_id'];
+        $receivable = array_values($validated['receivable']);
+        $payable    = array_values($validated['payable']);
+
+        DB::transaction(function () use ($ownerId, $companyId, $receivable, $payable) {
+            for ($i = 0; $i < 6; $i++) {
+                $rcv = $receivable[$i] ?? null;
+                $pay = $payable[$i] ?? null;
+
+                $diff = ($rcv !== null && $pay !== null)
+                    ? round((float) $rcv - (float) $pay, 2)
+                    : null;
+
+                OverdueTargetSetting::updateOrCreate(
+                    [
+                        'owner_id'     => $ownerId,
+                        'company_id'   => $companyId,
+                        'bucket_month' => $i + 1,
+                    ],
+                    [
+                        'receivable_target' => $rcv,
+                        'payable_target'    => $pay,
+                        'diff_target'       => $diff,
+                    ]
+                );
+            }
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Settings saved successfully.',
+        ]);
     }
 
 
@@ -2767,11 +2789,9 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ];
             })->values()->all();
 
-            // echo "<pre>"; print_r($ledgers); die;
-
             return view('owner.tally.other.default-settings', compact('ledgers', 'company'));
 
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             Log::error('Tally companyLedgers failed', [
                 'company' => $company,
                 'error'   => $e->getMessage(),
@@ -2834,8 +2854,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
 
         foreach ($ledgers as $ledger) {
             $dataToUpdate = [];
-
-            // $isBillByBillYes = strtolower((string) $ledger->maintain_bill_by_bill) === 'yes';
 
             if (!blank($creditPeriod) && $ledger->credit_period_source !== 'tally') {
                 $dataToUpdate['credit_period']        = $creditPeriod . ' Days';
@@ -2972,7 +2990,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 }
 
                 return [
-                    'id'                 => $ledger->id,   // <-- ADD THIS LINE
+                    'id'                 => $ledger->id,  
                     'name'               => $ledger->ledger_name,
                     'under'              => $ledger->parent,
                     'mobile'             => $ledger->ledger_mobile_number,
@@ -2990,7 +3008,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ];
             })->values()->all();
 
-            // echo "<pre>"; print_r($ledgers); die;
             return view('owner.tally.other.master-settings', compact('ledgers', 'company'));
 
         } catch (\Exception $e) {
@@ -3019,8 +3036,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                     return;
                 }
     
-                // Mobile numbers arrive as a comma-separated string,
-                // e.g. "9876543210,9123456780". Validate each piece.
                 $numbers = array_filter(array_map('trim', explode(',', $value)));
     
                 if (empty($numbers)) {
@@ -3038,7 +3053,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             'overlimit'          => 'nullable|string',
             'mark'               => 'nullable|in:red,green,unmarked',
             'red_reason'         => 'nullable|string|max:255',
-            // New: Credit Period (days) and Collector, editable for Sundry Debtors.
             'credit_period'      => 'nullable|integer|min:0',
             'assigned_collector' => 'nullable|integer|exists:collectors,id',
         ]);
@@ -3060,8 +3074,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             ], 422);
         }
     
-        // Normalize the mobile number list: trim, drop duplicates, rejoin with a
-        // single comma and no stray spaces, so what's stored is always clean.
         if (!empty($data['mobile'])) {
             $numbers = array_filter(array_map('trim', explode(',', $data['mobile'])));
             $data['mobile'] = implode(',', array_values(array_unique($numbers)));
@@ -3096,9 +3108,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 'ledger_mobile_number' => $data['mobile'] ?? $ledger->ledger_mobile_number,
             ]);
         } else {
-            // A credit_period key present in the request (even if it's an empty/zero value
-            // the user intentionally set) counts as a manual override, so we flip the
-            // source to 'default' — same pattern used for the mobile number source.
             $creditPeriodManuallySet = array_key_exists('credit_period', $data) && $request->filled('credit_period');
     
             $ledger->update([
@@ -3117,7 +3126,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             'success'              => true,
             'message'              => 'Ledger updated successfully.',
             'data'                 => $ledger,
-            // Frontend reads these to refresh the Tally/Default badges without a full reload.
             'mobile_source'        => $ledger->ledger_mobile_number_source ?? null,
             'credit_period_source' => $ledger->credit_period_source ?? null,
         ]);
@@ -3199,41 +3207,32 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
 
     }
     
-    // tally ke functions end
 
-
-
-    // manual ke functions starts
     public function manualDashboard()
     {
         return view('owner.manual.dashboard');
-
     }
 
     public function createStudent()
     {
         return view('owner.manual.students-create');
-
     }
 
 
     public function students()
     {
         return view('owner.manual.students');
-
     }
 
     public function editStudent()
     {
         return view('owner.manual.students-edit');
-
     }
 
     public function manualAccountants()
     {
         $accountants = Accountant::where('owner_id', auth()->id())->get();
         return view('owner.manual.accountant.accountants-list', compact('accountants'));
-
     }
 
     public function createmanualAccountant()
@@ -3483,7 +3482,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 'id' => 4, 'ledger_id' => 102, 'student_name' => 'Sneha Kapoor', 'mobile' => '9000000002',
                 'type' => 'targets_months', 'type_label' => $typeLabels['targets_months'],
                 'balance' => 78900, 'target' => 80000, 'target_pct' => 98.63,
-                'due_date' => '2026-07-31', // used as Target Month for this type
+                'due_date' => '2026-07-31', 
                 'assigned_to' => 'Aman', 'assigned_by' => 'Owner',
                 'allocation_date' => '2026-07-15', 'action' => 'physical_visit', 'action_label' => $actionLabels['physical_visit'],
                 'frequency' => 'monthly', 'response_date' => '2026-07-20',
@@ -3585,6 +3584,5 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         return view('owner.manual.set-debtor-emi');
     }
 
-    // manual ke functions end
 }
                                      
