@@ -11,14 +11,13 @@
 						fill="#4E3F6B">
 						RMS 
 					</text>
-
 				</svg>
 			</a>
             <div class="nav-control">
                 <div class="hamburger">
                     <span class="line"></span>
-						<span class="line"></span>
-						<span class="line"></span>
+					<span class="line"></span>
+					<span class="line"></span>
                 </div>
             </div>
         </div>
@@ -48,6 +47,10 @@
 				background-color: #eee;
 				color: #666;
 			}
+			#saveAllBtn:disabled {
+				opacity: .5;
+				cursor: not-allowed;
+			}
 		</style>
 
 		<div class="content-body default-height">
@@ -57,8 +60,15 @@
 					<!-- ===================== PAGE HEADER ===================== -->
 					<div class="col-12">
 						<div class="d-flex align-items-center justify-content-between mb-3">
-							<h3 class="mb-0">Overdue Target % Settings</h3>
+							<h3 class="mb-0">
+								Overdue Target % Settings
+							</h3>
 						</div>
+					</div>
+
+					<!-- ===================== ALERT MESSAGE ===================== -->
+					<div class="col-12">
+						<div id="alertBox"></div>
 					</div>
 
 					<!-- ===================== TARGET % SECTION ===================== -->
@@ -96,39 +106,93 @@
 		</div>
 
 		<script>
-			// Overdue buckets, matching the reference layout
 			const buckets = ["Till last 1 month", "Till last 2 month", "Till last 3 month", "Till last 4 month", "Till last 5 month", "Till last 6 month"];
 
-			function buildRows() {
-				const tbody = document.querySelector("#targetTable tbody");
-				tbody.innerHTML = buckets.map((label, i) => `
-					<tr>
-						<td>${label}</td>
-						<td>
-							<div class="input-group input-group-sm">
-								<input type="number" step="1" min="0" max="100"
-									class="form-control rcv-target-input" id="rcv-target-${i}"
-									placeholder="0" value="">
-								<span class="input-group-text">%</span>
-							</div>
-							<small class="text-danger row-error" id="rcv-error-${i}"></small>
-						</td>
-						<td>
-							<div class="input-group input-group-sm">
-								<input type="number" step="1" min="0" max="100"
-									class="form-control pay-target-input" id="pay-target-${i}"
-									placeholder="0" value="">
-								<span class="input-group-text">%</span>
-							</div>
-							<small class="text-danger row-error" id="pay-error-${i}"></small>
-						</td>
-						<td class="diff-cell fw-semibold" id="diff-${i}">-</td>
-					</tr>
-				`).join("");
+			// DB se aaya saved data: { "1": {receivable: 50, payable: 40, diff: 10}, ... }
+			let savedSettings = @json($settings ?? []);
+
+			const saveUrl   = "{{ route('owner.overdue-target.save') }}";
+			const csrf      = "{{ csrf_token() }}";
+			const companyId = {{ $tallyCompany->id }};
+
+			// value ko input ke liye safe string me convert karta hai
+			function val(v) {
+				return (v === null || v === undefined) ? "" : v;
 			}
 
-			// Returns null for a blank input instead of coercing it to 0,
-			// so empty fields don't get flagged by the order validation.
+			// alert() ki jagah page par Bootstrap alert dikhata hai
+			function showAlert(message, type = "success") {
+				const box = document.getElementById("alertBox");
+
+				const alertEl = document.createElement("div");
+				alertEl.className = `alert alert-${type} alert-dismissible fade show`;
+				alertEl.setAttribute("role", "alert");
+
+				const lines = String(message).split("\n");
+				if (lines.length > 1) {
+					const ul = document.createElement("ul");
+					ul.className = "mb-0";
+					lines.forEach(m => {
+						const li = document.createElement("li");
+						li.textContent = m;
+						ul.appendChild(li);
+					});
+					alertEl.appendChild(ul);
+				} else {
+					alertEl.appendChild(document.createTextNode(message));
+				}
+
+				const closeBtn = document.createElement("button");
+				closeBtn.type = "button";
+				closeBtn.className = "btn-close";
+				closeBtn.setAttribute("data-bs-dismiss", "alert");
+				alertEl.appendChild(closeBtn);
+
+				box.innerHTML = "";
+				box.appendChild(alertEl);
+				box.scrollIntoView({ behavior: "smooth", block: "start" });
+
+				// Sirf success 3 second baad auto close
+				if (type === "success") {
+					setTimeout(() => {
+						if (alertEl.isConnected) {
+							bootstrap.Alert.getOrCreateInstance(alertEl).close();
+						}
+					}, 3000);
+				}
+			}
+
+			function buildRows(data = {}) {
+				const tbody = document.querySelector("#targetTable tbody");
+				tbody.innerHTML = buckets.map((label, i) => {
+					const row = data[i + 1] || {};
+					return `
+						<tr>
+							<td>${label}</td>
+							<td>
+								<div class="input-group input-group-sm">
+									<input type="number" step="1" min="0" max="100"
+										class="form-control rcv-target-input" id="rcv-target-${i}"
+										placeholder="0" value="${val(row.receivable)}">
+									<span class="input-group-text">%</span>
+								</div>
+								<small class="text-danger row-error" id="rcv-error-${i}"></small>
+							</td>
+							<td>
+								<div class="input-group input-group-sm">
+									<input type="number" step="1" min="0" max="100"
+										class="form-control pay-target-input" id="pay-target-${i}"
+										placeholder="0" value="${val(row.payable)}">
+									<span class="input-group-text">%</span>
+								</div>
+								<small class="text-danger row-error" id="pay-error-${i}"></small>
+							</td>
+							<td class="diff-cell fw-semibold" id="diff-${i}">-</td>
+						</tr>
+					`;
+				}).join("");
+			}
+
 			function getValues(prefix) {
 				return buckets.map((_, i) => {
 					const raw = document.getElementById(`${prefix}-target-${i}`).value;
@@ -136,26 +200,31 @@
 				});
 			}
 
-			// Highlights inputs that break decreasing order (each value must not be greater than the previous bucket's value).
-			// Shows the warning right under the offending row's input only (single place, no duplicate summary).
-			// Blank inputs are skipped and never flagged.
 			function validateDecreasingOrder(values, prefix) {
 				let hasError = false;
-				values.forEach((val, i) => {
-					const input    = document.getElementById(`${prefix}-target-${i}`);
-					const rowErrEl = document.getElementById(`${prefix}-error-${i}`);
-					const prev     = i > 0 ? values[i - 1] : null;
-					const broken   = val !== null && prev !== null && val > prev;
+				let lastIdx  = -1; // index of last valid filled value
 
-					input.classList.toggle("is-invalid", broken);
+				values.forEach((v, i) => {
+					const input = document.getElementById(`${prefix}-target-${i}`);
+					const errEl = document.getElementById(`${prefix}-error-${i}`);
+					let msg = "";
 
-					if (broken) {
-						rowErrEl.innerText = `⚠ "${buckets[i]}" (${val}%) must not be greater than "${buckets[i - 1]}" (${prev}%)`;
-						hasError = true;
-					} else {
-						rowErrEl.innerText = "";
+					if (v !== null) {
+						if (Number.isNaN(v) || v < 0 || v > 100) {
+							msg = "⚠ Value must be between 0 and 100.";
+						} else {
+							if (lastIdx !== -1 && v > values[lastIdx]) {
+								msg = `⚠ "${buckets[i]}" (${v}%) must not be greater than "${buckets[lastIdx]}" (${values[lastIdx]}%)`;
+							}
+							lastIdx = i;
+						}
 					}
+
+					input.classList.toggle("is-invalid", msg !== "");
+					errEl.innerText = msg;
+					if (msg) hasError = true;
 				});
+
 				return hasError;
 			}
 
@@ -171,13 +240,16 @@
 						return;
 					}
 
-					const diff = (receivable[i] - payable[i]).toFixed(2);
-					const cls = diff > 0 ? "positive" : diff < 0 ? "negative" : "neutral";
-					cell.innerHTML = `<span class="diff-badge ${cls}">${diff}%</span>`;
+					const diff = (receivable[i] - payable[i]);
+					const cls  = diff > 0 ? "positive" : diff < 0 ? "negative" : "neutral";
+					cell.innerHTML = `<span class="diff-badge ${cls}">${diff.toFixed(2)}%</span>`;
 				});
 
-				validateDecreasingOrder(receivable, "rcv");
-				validateDecreasingOrder(payable, "pay");
+				const rcvBroken = validateDecreasingOrder(receivable, "rcv");
+				const payBroken = validateDecreasingOrder(payable, "pay");
+
+				// Validation pass hone par hi Save button active
+				document.getElementById("saveAllBtn").disabled = (rcvBroken || payBroken);
 			}
 
 			function bindLiveUpdates() {
@@ -185,36 +257,77 @@
 					.forEach(el => el.addEventListener("input", renderDifference));
 			}
 
+			// Saved data ke saath table load karta hai (page load + Reset dono me use hota hai)
 			function init() {
-				buildRows();
+				buildRows(savedSettings);
 				bindLiveUpdates();
 				renderDifference();
 			}
 
+			// Reset = last saved values wapas laata hai
 			document.getElementById("resetAllBtn").addEventListener("click", init);
 
-			// Save (UI only, wire this up to your backend endpoint)
-			document.getElementById("saveAllBtn").addEventListener("click", function () {
+			document.getElementById("saveAllBtn").addEventListener("click", async function () {
+				const btn        = this;
 				const receivable = getValues("rcv");
 				const payable    = getValues("pay");
 
-				const rcvBroken = validateDecreasingOrder(receivable, "rcv");
-				const payBroken = validateDecreasingOrder(payable, "pay");
-				if (rcvBroken || payBroken) {
-					alert("Target % values must be in decreasing order for both Receivable and Payable. Please fix the highlighted fields.");
+				// Safety check (button disabled hai toh yahan tak nahi aayega)
+				if (validateDecreasingOrder(receivable, "rcv") || validateDecreasingOrder(payable, "pay")) {
+					showAlert("Target % values must be in decreasing order for both Receivable and Payable. Please fix the highlighted fields.", "danger");
 					return;
 				}
 
-				const payload = {
-					receivable: buckets.map((label, i) => ({ bucket: label, target: receivable[i] })),
-					payable: buckets.map((label, i) => ({ bucket: label, target: payable[i] })),
-				};
-				console.log("Overdue target settings payload:", payload);
-				// TODO: POST `payload` to your save endpoint, e.g. fetch('/owner/overdue-target-settings', {...})
-				alert("Settings ready to save (see console for payload). Wire this button to your backend route.");
+				btn.disabled = true; // double-click se bachne ke liye
+				const oldText = btn.innerText;
+				btn.innerText = "Saving...";
+
+				try {
+					const res = await fetch(saveUrl, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"Accept": "application/json",
+							"X-CSRF-TOKEN": csrf
+						},
+						// diff client se nahi bhejte, server khud calculate karta hai
+						body: JSON.stringify({ company_id: companyId, receivable, payable })
+					});
+
+					const data = await res.json();
+
+					if (!res.ok) {
+						// Laravel validation errors (422) ya custom message
+						let msg = data.message || "Something went wrong.";
+						if (data.errors) {
+							msg = Object.values(data.errors).flat().join("\n");
+						}
+						showAlert(msg, "danger");
+						return;
+					}
+
+					// Local saved copy update karo taaki Reset naye saved data par jaye
+					savedSettings = {};
+					buckets.forEach((_, i) => {
+						const rcv = receivable[i];
+						const pay = payable[i];
+						savedSettings[i + 1] = {
+							receivable: rcv,
+							payable: pay,
+							diff: (rcv !== null && pay !== null) ? +(rcv - pay).toFixed(2) : null
+						};
+					});
+
+					showAlert(data.message || "Settings saved successfully.", "success");
+				} catch (e) {
+					console.error(e);
+					showAlert("Network error. Please try again.", "danger");
+				} finally {
+					btn.innerText = oldText;
+					renderDifference(); // button ki state validation ke hisaab se set hogi
+				}
 			});
 
 			init();
 		</script>
-
 		@include('owner.tally.components.footer')
