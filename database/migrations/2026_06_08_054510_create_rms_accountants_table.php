@@ -11,7 +11,7 @@ return new class extends Migration
         Schema::create('rms_accountants', function (Blueprint $table) {
             $table->id();
             $table->string('owner_id')->nullable();
-            // $table->enum('business_type', ['tally', 'manual']);
+            $table->enum('business_type', ['tally', 'manual']);
             $table->string('name');
             $table->string('email')->unique();
             $table->string('phone')->nullable();
