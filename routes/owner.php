@@ -215,6 +215,7 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
         Route::get('/tally/ledger-due-vouchers', [OwnerController::class, 'ledgerDueVouchers'])->name('owner.tally.ledger.due-vouchers');
 
         Route::get('/tally/ledger/target-data', [OwnerController::class, 'ledgerTargetData'])->name('owner.tally.ledger.target-data');
+        Route::get('/ledger/interest-data', [OwnerController::class, 'ledgerInterestData'])->name('owner.tally.ledger.interest-data');
         // EMI
         Route::get('/manual/set-debtor-emi', [OwnerController::class, 'manaualSetDebtorEMI'])->name('owner.manual.set-debtor-emi');
 

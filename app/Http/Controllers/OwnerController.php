@@ -654,7 +654,6 @@ class OwnerController extends Controller
                                     'updated_at'                    => $now,
                                 ];
 
-                      
                                 if (empty($tallyLedger->ledger_mobile_number_source)) {
                                     $updateData['ledger_mobile_number']        = $ledger['ledger_mobile_number'];
                                     $updateData['ledger_mobile_number_source'] = !empty($ledger['ledger_mobile_number']) ? 'tally' : null;
@@ -1203,8 +1202,9 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
 
                 $targetRows = $this->computeTargetRows($vouchers, $under, $creditPeriod, $ownerTargets, $nowForTarget, $extraNotDue);
 
-                $firstRow      = collect($targetRows)->reverse()->first(fn ($r) => $r['targetBal'] !== null);
-                $targetBalance = $firstRow['targetBal'] ?? '0';
+                $firstRow         = collect($targetRows)->reverse()->first(fn ($r) => $r['targetBal'] !== null);
+                $targetBalance    = $firstRow['targetBal'] ?? '0';
+                $targetCollection = $firstRow['targetCollection'] ?? '0';    
     
                 return [
                     'unique_id'         => $ledger->unique_ledger_id,
@@ -1216,6 +1216,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                     'due'               => $due,
                     'not_due'           => $notDue,
                     'target'            => $targetBalance,  
+                    'target_collection' => $targetCollection,
                     'sale'              => $sale,
 
                     'purchase'          => $purchase,
@@ -1257,7 +1258,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             return back()->with('error', 'Unable to fetch ledgers from Tally. Please try again.');
         }
     }
-
 
     public function updateCreditPeriod(Request $request)
     {
@@ -1585,6 +1585,148 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 'error'   => $e->getMessage(),
             ]);
             return response()->json(['message' => 'Unable to fetch target data.'], 500);
+        }
+    }
+
+
+    public function ledgerInterestData(Request $request)
+    {
+        try {
+            $ownerId = Auth::guard('owner')->id();
+
+            $request->validate([
+                'company' => 'required|string',
+                'ledger'  => 'required|string',
+                'under'   => 'nullable|string',
+            ]);
+
+            $tallyCompany = TallyCompany::where('owner_id', $ownerId)
+                ->where('company_name', $request->company)
+                ->firstOrFail();
+
+            $ledgerModel = TallyLedger::where('owner_id', $ownerId)
+                ->where('tally_company_id', $tallyCompany->id)
+                ->where('ledger_name', $request->ledger)
+                ->firstOrFail();
+
+            $under        = $ledgerModel->parent;
+            $isCreditor   = $under === 'Sundry Creditors';
+            $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+            $today        = Carbon::now()->startOfDay();
+
+            $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per month
+            $baseRate  = (string) config('app.base_interest_rate', 1);    // % per month
+
+            // amount * rate% * days / 30  => /3000
+            $interest = fn ($amt, $rate, $days) =>
+                $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '3000', 2) : '0.00';
+
+            $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
+
+            // ===== PENDING invoices (overdue) =====
+            $pending = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today)
+                ->filter(fn ($i) => $i['days'] > 0)
+                ->sortByDesc('days')
+                ->values()
+                ->map(fn ($i) => [
+                    'date'           => $i['date'],
+                    'due_date'       => $i['due_date'],
+                    'inv_no'         => $i['voucher_number'],
+                    'days'           => $i['days'],
+                    'amount'         => $i['pending'],
+                    'interest_due'   => $interest($i['pending'], $partyRate, $i['days']),
+                    'interest_due_b' => $interest($i['pending'], $baseRate, $i['days']),
+                ]);
+
+            // ===== RECEIVED invoices (late paid) : FIFO allocation =====
+            $receipts = $rows
+                ->filter(fn ($r) => $isCreditor
+                    ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
+                    : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
+                ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
+                ->map(fn ($r) => [
+                    'date'      => Carbon::parse($r['date'])->startOfDay(),
+                    'remaining' => $isCreditor ? $r['debit'] : $r['credit'],
+                ])
+                ->values()
+                ->all();
+
+            $invoices = $rows
+                ->filter(fn ($r) => $isCreditor
+                    ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
+                    : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
+                ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
+                ->values();
+
+            $received = collect();
+            $ptr = 0;
+
+            foreach ($invoices as $inv) {
+                $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
+                $voucherDate = Carbon::parse($inv['date'])->startOfDay();
+                $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
+
+                while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
+                    if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
+                        $ptr++;
+                        continue;
+                    }
+
+                    $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
+                        ? $need : $receipts[$ptr]['remaining'];
+
+                    $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
+                    $need = bcsub($need, $take, 2);
+
+                    $recdDate  = $receipts[$ptr]['date'];
+                    $delayDays = (int) $dueDate->diffInDays($recdDate, false);   // late kitna paid hua
+
+                    if ($delayDays > 0) {
+                        $daysSince = (int) $recdDate->diffInDays($today, false);
+
+                        $intPending = $interest($take, $partyRate, $delayDays);
+                        $intOnInt   = $interest($intPending, $partyRate, $daysSince);
+
+                        $intPendingB = $interest($take, $baseRate, $delayDays);
+                        $intOnIntB   = $interest($intPendingB, $baseRate, $daysSince);
+
+                        $received->push([
+                            'inv_no'         => $inv['voucher_number'],
+                            'recd_date'      => $recdDate->toDateString(),
+                            'int_pending'    => $intPending,
+                            'days'           => $daysSince,
+                            'int_on_int'     => $intOnInt,
+                            'interest_due'   => bcadd($intPending, $intOnInt, 2),
+                            'int_pending_b'  => $intPendingB,
+                            'int_on_int_b'   => $intOnIntB,
+                            'interest_due_b' => bcadd($intPendingB, $intOnIntB, 2),
+                        ]);
+                    }
+                }
+            }
+
+            $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
+            $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
+
+            return response()->json([
+                'party_rate'     => $partyRate,
+                'base_rate'      => $baseRate,
+                'total'          => bcadd($receivedTotal, $pendingTotal, 2),
+                'received_total' => $receivedTotal,
+                'pending_total'  => $pendingTotal,
+                'received'       => $received->values(),
+                'pending'        => $pending,
+            ]);
+
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('Tally ledgerInterestData failed', [
+                'company' => $request->company,
+                'ledger'  => $request->ledger,
+                'error'   => $e->getMessage(),
+            ]);
+            return response()->json(['message' => 'Unable to fetch interest data.'], 500);
         }
     }
 
