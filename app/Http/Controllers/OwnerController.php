@@ -654,7 +654,6 @@ class OwnerController extends Controller
                                     'updated_at'                    => $now,
                                 ];
 
-                      
                                 if (empty($tallyLedger->ledger_mobile_number_source)) {
                                     $updateData['ledger_mobile_number']        = $ledger['ledger_mobile_number'];
                                     $updateData['ledger_mobile_number_source'] = !empty($ledger['ledger_mobile_number']) ? 'tally' : null;
@@ -1062,46 +1061,54 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         return $voucherDate->copy()->startOfDay()->addDays($creditPeriod);
     }
  
-    private function buildOpenInvoices($rows, string $under, int $creditPeriod, Carbon $today)
-    {
-        $isCreditor = $under === 'Sundry Creditors';
+    private function buildOpenInvoices($rows, string $under, int $creditPeriod, Carbon $today, ?Carbon $asOf = null)
+{
+    $isCreditor = $under === 'Sundry Creditors';
 
-        $invoices = $rows
-            ->filter(fn ($r) => $isCreditor
-                ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
-                : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
-            ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
-            ->values();
-
-        $pool = $rows
-            ->filter(fn ($r) => $isCreditor
-                ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
-                : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
-            ->reduce(fn ($t, $r) => bcadd($t, $isCreditor ? $r['debit'] : $r['credit'], 2), '0');
-
-        return $invoices
-            ->map(function ($r) use (&$pool, $isCreditor, $creditPeriod, $today) {
-                $original = $isCreditor ? $r['credit'] : $r['debit'];
-                $cleared  = bccomp($pool, $original, 2) < 0 ? $pool : $original;
-                $pool     = bcsub($pool, $cleared, 2);
-                $pending  = bcsub($original, $cleared, 2);
-
-                $voucherDate = Carbon::parse($r['date'])->startOfDay();
-                $dueDate     = $this->resolveDueDate($r['due_date'] ?? null, $voucherDate, $creditPeriod);
-
-                return [
-                    'date'           => $voucherDate->toDateString(),
-                    'due_date'       => $dueDate->toDateString(),
-                    'voucher_number' => $r['voucher_number'] ?? null,
-                    'days'           => (int) $dueDate->diffInDays($today, false),
-                    'original'       => $original,
-                    'cleared'        => $cleared,
-                    'pending'        => $pending,
-                ];
-            })
-            ->filter(fn ($i) => bccomp($i['pending'], '0', 2) > 0)
-            ->values();
+    // ✅ Date-wise: asOf tak ke hi vouchers (invoice + receipt dono)
+    if ($asOf) {
+        $cut  = $asOf->copy()->endOfDay();
+        $rows = $rows->filter(fn ($r) => Carbon::parse($r['date'])->lte($cut));
     }
+    $refDay = ($asOf ?? $today)->copy()->startOfDay();
+
+    $invoices = $rows
+        ->filter(fn ($r) => $isCreditor
+            ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
+            : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
+        ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
+        ->values();
+
+    $pool = $rows
+        ->filter(fn ($r) => $isCreditor
+            ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
+            : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
+        ->reduce(fn ($t, $r) => bcadd($t, $isCreditor ? $r['debit'] : $r['credit'], 2), '0');
+
+    return $invoices
+        ->map(function ($r) use (&$pool, $isCreditor, $creditPeriod, $refDay) {
+            $original = $isCreditor ? $r['credit'] : $r['debit'];
+            $cleared  = bccomp($pool, $original, 2) < 0 ? $pool : $original;
+            $pool     = bcsub($pool, $cleared, 2);
+            $pending  = bcsub($original, $cleared, 2);
+
+            $voucherDate = Carbon::parse($r['date'])->startOfDay();
+            $dueDate     = $this->resolveDueDate($r['due_date'] ?? null, $voucherDate, $creditPeriod);
+
+            return [
+                'id'             => $r['id'] ?? null,
+                'date'           => $voucherDate->toDateString(),
+                'due_date'       => $dueDate->toDateString(),
+                'voucher_number' => $r['voucher_number'] ?? null,
+                'days'           => (int) $dueDate->diffInDays($refDay, false), // asOf ke hisaab se
+                'original'       => $original,
+                'cleared'        => $cleared,
+                'pending'        => $pending,
+            ];
+        })
+        ->filter(fn ($i) => bccomp($i['pending'], '0', 2) > 0)
+        ->values();
+}
  
  
     public function companyLedgers($company)
@@ -1126,9 +1133,11 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ->get()
                 ->groupBy('ledger_id');
     
-            $voucherMappings = VoucherMapping::where('company', $com)
+            $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
                 ->pluck('mapped_to', 'voucher_type')
                 ->toArray();
+
+            // echo "<pre>"; print_r($company); echo "</pre>"; die;
     
             $today = Carbon::now()->startOfDay();
     
@@ -1191,10 +1200,11 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                     $extraNotDue = '0';
                 }
 
-                $targetRows = $this->computeTargetRows($openInvoices, $ownerTargets, $nowForTarget, $extraNotDue);
+                $targetRows = $this->computeTargetRows($vouchers, $under, $creditPeriod, $ownerTargets, $nowForTarget, $extraNotDue);
 
-                $firstRow      = collect($targetRows)->reverse()->first(fn ($r) => $r['targetBal'] !== null);
-                $targetBalance = $firstRow['targetBal'] ?? '0';
+                $firstRow         = collect($targetRows)->reverse()->first(fn ($r) => $r['targetBal'] !== null);
+                $targetBalance    = $firstRow['targetBal'] ?? '0';
+                $targetCollection = $firstRow['targetCollection'] ?? '0';    
     
                 return [
                     'unique_id'         => $ledger->unique_ledger_id,
@@ -1206,6 +1216,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                     'due'               => $due,
                     'not_due'           => $notDue,
                     'target'            => $targetBalance,  
+                    'target_collection' => $targetCollection,
                     'sale'              => $sale,
 
                     'purchase'          => $purchase,
@@ -1248,7 +1259,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
         }
     }
 
-
     public function updateCreditPeriod(Request $request)
     {
         $request->validate([
@@ -1275,13 +1285,11 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             ->where('tally_company_id', $tallyCompany->id)
             ->where('ledger_id', $ledgerModel->id);
 
+        $voucher = null;
+
         if ($request->filled('voucher_id') && is_numeric($request->voucher_id)) {
             $voucher = (clone $query)->where('id', $request->voucher_id)->first();
-        } else {
-            $voucher = null;
-        }
-
-        if (!$voucher && $request->filled('voucher_number')) {
+        } elseif ($request->filled('voucher_number')) {
             $voucher = (clone $query)->where('voucher_number', $request->voucher_number)->first();
         }
 
@@ -1289,27 +1297,15 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             return response()->json(['message' => 'Voucher not found for this ledger.'], 404);
         }
 
-        $voucherDate = Carbon::parse($voucher->date);
-        $newDueDate  = $voucherDate->copy()->addDays((int) $request->credit_period);
+        $newDueDate = Carbon::parse($voucher->date)->startOfDay()
+            ->addDays((int) $request->credit_period);
 
         $voucher->credit_period        = $request->credit_period . ' Days';
         $voucher->credit_period_source = 'voucher';
         $voucher->due_date             = $newDueDate->toDateString();
         $voucher->save();
 
-        $daysOverdue = max(0, (int) $newDueDate->copy()->startOfDay()->diffInDays(today(), false));
-
-        return response()->json([
-            'success'  => true,
-            'due_date' => $newDueDate->format('Y-m-d'),
-            'days'     => $daysOverdue,
-        ]);
-
-        $voucherDate = Carbon::parse($voucher->date);
-        $newDueDate  = $voucherDate->copy()->addDays((int) $request->credit_period);
-        $daysOverdue = now()->diffInDays($newDueDate, false) < 0
-            ? now()->diffInDays($newDueDate)
-            : 0;
+        $daysOverdue = max(0, (int) $newDueDate->diffInDays(today(), false));
 
         return response()->json([
             'success'  => true,
@@ -1317,7 +1313,6 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             'days'     => $daysOverdue,
         ]);
     }
- 
  
     public function ledgerDueVouchers(Request $request)
     {
@@ -1340,7 +1335,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
             $today        = Carbon::now()->startOfDay();
     
-            $voucherMappings = VoucherMapping::where('company', $com)
+            $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
                 ->pluck('mapped_to', 'voucher_type')
                 ->toArray();
                 
@@ -1471,7 +1466,77 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
     }
  
 
-    public function ledgerTargetData(Request $request)
+    
+
+    private function computeTargetRows($rows, string $under, int $creditPeriod, $targets, ?Carbon $now = null, string $extraNotDue = '0'): array
+{
+    $now   = $now ?? now();
+    $today = $now->copy()->startOfDay();
+
+    $sumPending = fn ($c) => $c->reduce(fn ($t, $p) => bcadd($t, $p['pending'], 2), '0');
+
+    // Balance Today = aaj ke open invoices + unmatched amount
+    $openToday  = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today);
+    $balance    = bcadd($sumPending($openToday), $extraNotDue, 2);
+    $hasBalance = bccomp($balance, '0', 2) > 0;
+
+    $out          = [];
+    $runningMaxW1 = null;
+
+    for ($i = 6; $i >= 0; $i--) {
+        $monthEnd = $i === 0
+            ? $now->copy()
+            : $now->copy()->startOfMonth()->subMonths($i)->endOfMonth();
+
+        $cutoff = $monthEnd->copy()->startOfDay();
+
+        // ✅ Us month-end tak ke invoices + receipts se pending
+        $snap = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today, $cutoff);
+
+        $overdue = $sumPending($snap->filter(fn ($p) => $p['days'] > 0));   // due_date < cutoff
+        $notDue  = bcadd($sumPending($snap->filter(fn ($p) => $p['days'] <= 0)), $extraNotDue, 2);
+
+        $row = [
+            'month'      => $monthEnd->format('M-y'),
+            'overdue'    => $overdue,
+            'notDue'     => $notDue,
+            'balance'    => $balance,
+            'pctOverdue' => $hasBalance ? bcmul(bcdiv($overdue, $balance, 6), '100', 2) : '0',
+            'pctNotDue'  => $hasBalance ? bcmul(bcdiv($notDue,  $balance, 6), '100', 2) : '0',
+            'target'           => null,
+            'w1'               => null,
+            'w2'               => null,
+            'targetCollection' => null,
+            'targetBal'        => null,
+        ];
+
+        if ($i > 0) {
+            $t = $targets[$i] ?? null;
+            if ($t !== null) {
+                $t  = (string) $t;
+                $w1 = bcsub($overdue, bcdiv(bcmul($balance, $t, 6), '100', 2), 2);
+                if (bccomp($w1, '0', 2) < 0) {
+                    $w1 = '0.00';
+                }
+                if ($runningMaxW1 === null || bccomp($w1, $runningMaxW1, 2) > 0) {
+                    $runningMaxW1 = $w1;
+                }
+
+                $row['target']           = $t;
+                $row['w1']               = $w1;
+                $row['w2']               = $runningMaxW1;
+                $row['targetCollection'] = $runningMaxW1;
+                $row['targetBal']        = bcsub($balance, $w1, 2);
+            }
+        }
+
+        $out[] = $row;
+    }
+
+    return $out;
+}
+
+     public function ledgerTargetData(Request $request)
     {
         try {
             $ownerId = Auth::guard('owner')->id();
@@ -1490,13 +1555,16 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ->where('company_id', $tallyCompany->id)
                 ->pluck('receivable_target', 'bucket_month');
 
-            $pending = $this->getPendingInvoices($ownerId, $tallyCompany, $request->ledger);
-
             $ledgerModel = TallyLedger::where('owner_id', $ownerId)
                 ->where('tally_company_id', $tallyCompany->id)
                 ->where('ledger_name', $request->ledger)
-                ->first();
+                ->firstOrFail();
 
+            $under        = $ledgerModel->parent;
+            $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+            $rows         = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
+
+            $pending     = $this->buildOpenInvoices($rows, $under, $creditPeriod, Carbon::now()->startOfDay());
             $balanceAbs  = ltrim((string) ($ledgerModel->closing_balance ?? '0'), '-+');
             $pendingSum  = $pending->reduce(fn ($t, $i) => bcadd($t, $i['pending'], 2), '0');
             $extraNotDue = bcsub($balanceAbs, $pendingSum, 2);
@@ -1505,7 +1573,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             }
 
             return response()->json([
-                'rows' => $this->computeTargetRows($pending, $targets, null, $extraNotDue),
+                'rows' => $this->computeTargetRows($rows, $under, $creditPeriod, $targets, null, $extraNotDue),
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -1516,86 +1584,173 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 'ledger'  => $request->ledger,
                 'error'   => $e->getMessage(),
             ]);
-
             return response()->json(['message' => 'Unable to fetch target data.'], 500);
         }
     }
 
-    private function computeTargetRows($pending, $targets, ?Carbon $now = null, string $extraNotDue = '0'): array
+
+    public function ledgerInterestData(Request $request)
     {
-        $now = $now ?? now();
+        try {
+            $ownerId = Auth::guard('owner')->id();
 
-        $items = $pending->map(fn ($p) => [
-            'amount'   => $p['pending'],
-            'date'     => Carbon::parse($p['date'])->startOfDay(),
-            'due_date' => Carbon::parse($p['due_date'])->startOfDay(),
-        ]);
+            $request->validate([
+                'company' => 'required|string',
+                'ledger'  => 'required|string',
+                'under'   => 'nullable|string',
+            ]);
 
-        $sum = fn ($c) => $c->reduce(fn ($t, $p) => bcadd($t, $p['amount'], 2), '0');
+            $tallyCompany = TallyCompany::where('owner_id', $ownerId)
+                ->where('company_name', $request->company)
+                ->firstOrFail();
 
-        // open invoices ka pending + jo amount kisi invoice se match nahi hua
-        $balance      = bcadd($sum($items), $extraNotDue, 2);
-        $hasBalance   = bccomp($balance, '0', 2) > 0;
-        $rows         = [];
-        $runningMaxW1 = null;
+            $ledgerModel = TallyLedger::where('owner_id', $ownerId)
+                ->where('tally_company_id', $tallyCompany->id)
+                ->where('ledger_name', $request->ledger)
+                ->firstOrFail();
 
-        for ($i = 6; $i >= 0; $i--) {
-            $monthEnd = $i === 0
-                ? $now->copy()
-                : $now->copy()->startOfMonth()->subMonths($i)->endOfMonth();
+            $under        = $ledgerModel->parent;
+            $isCreditor   = $under === 'Sundry Creditors';
+            $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+            $today        = Carbon::now()->startOfDay();
 
-            $cutoff = $monthEnd->copy()->startOfDay();
-            $upto   = $items->filter(fn ($p) => $p['date']->lte($monthEnd));
+            $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per month
+            $baseRate  = (string) config('app.base_interest_rate', 1);    // % per month
 
-            $overdue = $sum($upto->filter(fn ($p) => $p['due_date']->lt($cutoff)));
-            $notDue  = bcadd(
-                $sum($upto->filter(fn ($p) => $p['due_date']->gte($cutoff))),
-                $extraNotDue,
-                2
-            );
+            // amount * rate% * days / 30  => /3000
+            $interest = fn ($amt, $rate, $days) =>
+                $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '3000', 2) : '0.00';
 
-            $row = [
-                'month'      => $monthEnd->format('M-y'),
-                'overdue'    => $overdue,
-                'notDue'     => $notDue,
-                'balance'    => $balance,
-                'pctOverdue' => $hasBalance ? bcmul(bcdiv($overdue, $balance, 6), '100', 2) : '0',
-                'pctNotDue'  => $hasBalance ? bcmul(bcdiv($notDue,  $balance, 6), '100', 2) : '0',
-                'target'     => null,
-                'w1'         => null,
-                'w2'         => null,
-                'targetCollection' => null,
-                'targetBal'  => null,
-            ];
+            $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
 
-            if ($i > 0) {
-                $t = $targets[$i] ?? null;
-                if ($t !== null) {
-                    $t  = (string) $t;
-                    $w1 = bcsub($overdue, bcdiv(bcmul($balance, $t, 6), '100', 2), 2);
+            // ===== PENDING invoices (overdue) =====
+            $pending = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today)
+                ->filter(fn ($i) => $i['days'] > 0)
+                ->sortByDesc('days')
+                ->values()
+                ->map(fn ($i) => [
+                    'date'           => $i['date'],
+                    'due_date'       => $i['due_date'],
+                    'inv_no'         => $i['voucher_number'],
+                    'days'           => $i['days'],
+                    'amount'         => $i['pending'],
+                    'interest_due'   => $interest($i['pending'], $partyRate, $i['days']),
+                    'interest_due_b' => $interest($i['pending'], $baseRate, $i['days']),
+                ]);
 
-                    if (bccomp($w1, '0', 2) < 0) {
-                        $w1 = '0.00';   // negative collection nahi hoti
+            // ===== RECEIVED invoices (late paid) : FIFO allocation =====
+            $receipts = $rows
+                ->filter(fn ($r) => $isCreditor
+                    ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
+                    : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
+                ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
+                ->map(fn ($r) => [
+                    'date'      => Carbon::parse($r['date'])->startOfDay(),
+                    'remaining' => $isCreditor ? $r['debit'] : $r['credit'],
+                ])
+                ->values()
+                ->all();
+
+            $invoices = $rows
+                ->filter(fn ($r) => $isCreditor
+                    ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
+                    : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
+                ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
+                ->values();
+
+            $received = collect();
+            $ptr = 0;
+
+            foreach ($invoices as $inv) {
+                $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
+                $voucherDate = Carbon::parse($inv['date'])->startOfDay();
+                $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
+
+                while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
+                    if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
+                        $ptr++;
+                        continue;
                     }
 
-                    if ($runningMaxW1 === null || bccomp($w1, $runningMaxW1, 2) > 0) {
-                        $runningMaxW1 = $w1;
-                    }
+                    $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
+                        ? $need : $receipts[$ptr]['remaining'];
 
-                    $row['target']    = $t;
-                    $row['w1']        = $w1;
-                    $row['w2']        = $runningMaxW1;
-                    $row['targetCollection'] = $runningMaxW1;
-                    $row['targetBal'] = bcsub($balance, $w1, 2);
+                    $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
+                    $need = bcsub($need, $take, 2);
+
+                    $recdDate  = $receipts[$ptr]['date'];
+                    $delayDays = (int) $dueDate->diffInDays($recdDate, false);   // late kitna paid hua
+
+                    if ($delayDays > 0) {
+                        $daysSince = (int) $recdDate->diffInDays($today, false);
+
+                        $intPending = $interest($take, $partyRate, $delayDays);
+                        $intOnInt   = $interest($intPending, $partyRate, $daysSince);
+
+                        $intPendingB = $interest($take, $baseRate, $delayDays);
+                        $intOnIntB   = $interest($intPendingB, $baseRate, $daysSince);
+
+                        $received->push([
+                            'inv_no'         => $inv['voucher_number'],
+                            'recd_date'      => $recdDate->toDateString(),
+                            'int_pending'    => $intPending,
+                            'days'           => $daysSince,
+                            'int_on_int'     => $intOnInt,
+                            'interest_due'   => bcadd($intPending, $intOnInt, 2),
+                            'int_pending_b'  => $intPendingB,
+                            'int_on_int_b'   => $intOnIntB,
+                            'interest_due_b' => bcadd($intPendingB, $intOnIntB, 2),
+                        ]);
+                    }
                 }
             }
 
-            $rows[] = $row;
-        }
+            $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
+            $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
-        return $rows;
+            return response()->json([
+                'party_rate'     => $partyRate,
+                'base_rate'      => $baseRate,
+                'total'          => bcadd($receivedTotal, $pendingTotal, 2),
+                'received_total' => $receivedTotal,
+                'pending_total'  => $pendingTotal,
+                'received'       => $received->values(),
+                'pending'        => $pending,
+            ]);
+
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('Tally ledgerInterestData failed', [
+                'company' => $request->company,
+                'ledger'  => $request->ledger,
+                'error'   => $e->getMessage(),
+            ]);
+            return response()->json(['message' => 'Unable to fetch interest data.'], 500);
+        }
     }
 
+    // naya helper: raw classified rows
+    private function getLedgerVoucherRows(int $ownerId, $tallyCompany, $ledgerModel)
+    {
+        $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
+            ->pluck('mapped_to', 'voucher_type')
+            ->toArray();
+
+        return TallyVoucher::where('owner_id', $ownerId)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->where('ledger_id', $ledgerModel->id)
+            ->get()
+            ->map(fn ($v) => $this->classifyVoucherRow($v, $ledgerModel->parent, $voucherMappings) + [
+                'id'                   => $v->id,
+                'due_date'             => $v->due_date ?? null,
+                'voucher_number'       => $v->voucher_number,
+                'credit_period'        => $v->credit_period,
+                'credit_period_source' => $v->credit_period_source,
+            ]);
+    }
+
+    // purana method ab helper use karega
     private function getPendingInvoices(int $ownerId, $tallyCompany, string $ledger)
     {
         $ledgerModel = TallyLedger::where('owner_id', $ownerId)
@@ -1607,27 +1762,14 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             return collect();
         }
 
-        $under        = $ledgerModel->parent;
-        $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
-        $today        = Carbon::now()->startOfDay();
+        $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
 
-        $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
-            ->pluck('mapped_to', 'voucher_type')
-            ->toArray();
-
-        $rows = TallyVoucher::where('owner_id', $ownerId)
-            ->where('tally_company_id', $tallyCompany->id)
-            ->where('ledger_id', $ledgerModel->id)
-            ->get()
-            ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
-                'id'                   => $v->id,
-                'due_date'             => $v->due_date ?? null,
-                'voucher_number'       => $v->voucher_number,
-                'credit_period'        => $v->credit_period,
-                'credit_period_source' => $v->credit_period_source,
-            ]);
-
-        return $this->buildOpenInvoices($rows, $under, $creditPeriod, $today);
+        return $this->buildOpenInvoices(
+            $rows,
+            $ledgerModel->parent,
+            (int) ($ledgerModel->credit_period ?? 0),
+            Carbon::now()->startOfDay()
+        );
     }
     private function classifyVoucherRow($v, ?string $under, array $voucherMappings): array
     {
@@ -1888,7 +2030,12 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ->where('tally_company_id', $tallyCompany->id ?? 0)
                 ->where('ledger_name', $ledger)
                 ->first();
- 
+              
+            $ledgerVoucher = TallyVoucher::where('owner_id', $owner->id)
+                ->where('ledger_id', $tallyLedger->id)
+                ->get();
+
+            // echo "<pre>"; print_r($ledgerVoucher); die;
             $vouchers = [];
 
             $creditSideTypesForDebtor  = ['receipt', 'receipt note', 'credit note'];

@@ -12,7 +12,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('owner_id')->constrained('rms_owners')->cascadeOnDelete();
             $table->unsignedBigInteger('accountant_id')->nullable();
-            // $table->enum('business_type', ['tally', 'manual']);
+            $table->enum('business_type', ['tally', 'manual']);
             $table->string('name');
             $table->string('email')->unique();
             $table->string('phone')->unique();
