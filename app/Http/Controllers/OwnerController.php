@@ -1745,6 +1745,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                                 'int_pending_b'     => $intPendingB,
                                 'int_on_int_b'      => $intOnIntB,
                                 'interest_due_b'    => bcadd($intPendingB, $intOnIntB, 2),
+                                'is_settled' => strtolower((string) $settlementStatus) === 'settled',   // ✅ NEW
                             ]);
                         }
                     }
@@ -1753,14 +1754,27 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
             $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
+            $settledRows = $received->filter(fn ($r) => $r['is_settled']);
+
+            $settlementRequestTotal = $settledRows
+                ->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
+
+            $settlementReceivedTotal = $settledRows
+                ->reduce(fn ($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
+
+            $interestWaivedTotal = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
+
             return response()->json([
-                'party_rate'     => $partyRate,
-                'base_rate'      => $baseRate,
-                'total'          => bcadd($receivedTotal, $pendingTotal, 2),
-                'received_total' => $receivedTotal,
-                'pending_total'  => $pendingTotal,
-                'received'       => $received->values(),
-                'pending'        => $pending,
+                'party_rate'                => $partyRate,
+                'base_rate'                 => $baseRate,
+                'total'                     => bcadd($receivedTotal, $pendingTotal, 2),
+                'received_total'            => $receivedTotal,
+                'pending_total'             => $pendingTotal,
+                'settlement_request_total'  => $settlementRequestTotal,    // ✅ NEW
+                'settlement_received_total' => $settlementReceivedTotal,   // ✅ NEW
+                'interest_waived_total'     => $interestWaivedTotal,       // ✅ NEW
+                'received'                  => $received->values(),
+                'pending'                   => $pending,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
