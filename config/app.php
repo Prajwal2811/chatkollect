@@ -212,5 +212,5 @@ return [
         // 'ExampleClass' => App\Example\ExampleClass::class,
     ])->toArray(),
 
-    'base_interest_rate' => env('BASE_INTEREST_RATE', 1),
+    'base_interest_rate' => env('BASE_INTEREST_RATE', 12),
 ];
