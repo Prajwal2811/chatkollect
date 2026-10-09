@@ -711,10 +711,16 @@
                                                     <td id="intTotal" class="text-end fw-bold">-</td>
                                                 </tr>
                                                 <tr>
-                                                    <th>Interest Due Invoices <span class="int-cleared-label">Received</span></th>
-                                                    <td id="intSummaryReceived" class="text-end fw-bold">-</td>
                                                     <th>Interest Due Invoices Pending</th>
                                                     <td id="intSummaryPending" class="text-end fw-bold">-</td>
+                                                    <th>Settlement Request Amount</th>
+                                                    <td id="intSettlementRequest" class="text-end fw-bold">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Interest Received Amount</th>
+                                                    <td id="intSettlementReceived" class="text-end fw-bold text-success">-</td>
+                                                    <th>Interest Waived</th>
+                                                    <td id="intWaivedTotal" class="text-end fw-bold text-danger">-</td>
                                                 </tr>
                                             </tbody>
                                         </table>
@@ -1441,7 +1447,7 @@
 
                     $('.int-cleared-label').text(isCreditor ? 'Paid' : 'Recd');
                     $('#intReceivedLabel').text(isCreditor ? 'Paid' : 'Received');
-                    $('#intPartyRate, #intTotal, #intReceivedTotal, #intPendingTotal, #intSummaryReceived, #intSummaryPending').text('-');
+                    $('#intPartyRate, #intTotal, #intReceivedTotal, #intPendingTotal, #intSummaryReceived, #intSummaryPending, #intSettlementRequest, #intSettlementReceived, #intWaivedTotal').text('-');
                     $('#intReceivedBody').html(emptyR);
                     $('#intPendingBody').html(emptyP);
 
@@ -1464,6 +1470,9 @@
                             $('#intPendingTotal').text(rs(res.pending_total ?? 0));
                             $('#intSummaryReceived').text(rs(res.received_total ?? 0));
                             $('#intSummaryPending').text(rs(res.pending_total ?? 0));
+                            $('#intSettlementRequest').text(rs(res.settlement_request_total ?? 0));
+                            $('#intSettlementReceived').text(rs(res.settlement_received_total ?? 0));
+                            $('#intWaivedTotal').text(rs(res.interest_waived_total ?? 0));
 
                             let rHtml = '';
                             (res.received || []).forEach(function (r) {
