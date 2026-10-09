@@ -648,8 +648,8 @@ class OwnerController extends Controller
                                     'parent'                        => $ledger['parent'],
                                     'opening_balance'               => $ledger['opening_balance'],
                                     'closing_balance'               => $ledger['closing_balance'],
-                                    'maintain_bill_by_bill'         => $ledger['maintain_bill_by_bill'],
-                                    'activate_interest_calculation' => $ledger['activate_interest_calculation'],
+                                    // 'maintain_bill_by_bill'         => $ledger['maintain_bill_by_bill'],
+                                    // 'activate_interest_calculation' => $ledger['activate_interest_calculation'],
                                     'balance_synced_at'             => $now,
                                     'updated_at'                    => $now,
                                 ];
@@ -692,8 +692,8 @@ class OwnerController extends Controller
                                     'interest_rate'                 => $ledger['interest_rate'],
                                     'interest_style'                => $ledger['interest_style'],
                                     'interest_rate_source'          => !empty($ledger['interest_rate']) ? 'tally' : null,
-                                    'maintain_bill_by_bill'         => $ledger['maintain_bill_by_bill'],
-                                    'activate_interest_calculation' => $ledger['activate_interest_calculation'],
+                                    // 'maintain_bill_by_bill'         => $ledger['maintain_bill_by_bill'],
+                                    // 'activate_interest_calculation' => $ledger['activate_interest_calculation'],
                                     'balance_synced_at'             => $now,
                                     'created_at'                    => $now,
                                     'updated_at'                    => $now,
@@ -1060,6 +1060,19 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
     
         return $voucherDate->copy()->startOfDay()->addDays($creditPeriod);
     }
+
+
+    // Sale aur Interest Breakdown dono yahi use karenge
+    private function overdueDays($dueDate, Carbon $today): int
+    {
+        if (empty($dueDate)) {
+            return 0;
+        }
+
+        $due = Carbon::parse($dueDate)->startOfDay();
+
+        return $due->lt($today) ? (int) $due->diffInDays($today, false) : 0;
+    }
  
     private function buildOpenInvoices($rows, string $under, int $creditPeriod, Carbon $today, ?Carbon $asOf = null)
 {
@@ -1137,7 +1150,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ->pluck('mapped_to', 'voucher_type')
                 ->toArray();
 
-            // echo "<pre>"; print_r($company); echo "</pre>"; die;
+            // echo "<pre>"; print_r($vouchersByLedger); echo "</pre>"; die;
     
             $today = Carbon::now()->startOfDay();
     
@@ -1614,11 +1627,15 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
             $today        = Carbon::now()->startOfDay();
 
-            $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per month
-            $baseRate  = (string) config('app.base_interest_rate', 1);    // % per month
+            $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per annum
+            $baseRate  = (string) config('app.base_interest_rate', 12);   // % per annum
 
-            // amount * rate% * days / 30  => /3000
-            $interest = fn ($amt, $rate, $days) =>
+            // Int Pending: amount * rate% * days / 365  => /36500
+            $interestYearly = fn ($amt, $rate, $days) =>
+                $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '36500', 2) : '0.00';
+
+            // Int on Int: amount * (rate/100) * (days/30)  => /3000
+            $interestOnInt = fn ($amt, $rate, $days) =>
                 $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '3000', 2) : '0.00';
 
             $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
@@ -1628,15 +1645,19 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ->filter(fn ($i) => $i['days'] > 0)
                 ->sortByDesc('days')
                 ->values()
-                ->map(fn ($i) => [
-                    'date'           => $i['date'],
-                    'due_date'       => $i['due_date'],
-                    'inv_no'         => $i['voucher_number'],
-                    'days'           => $i['days'],
-                    'amount'         => $i['pending'],
-                    'interest_due'   => $interest($i['pending'], $partyRate, $i['days']),
-                    'interest_due_b' => $interest($i['pending'], $baseRate, $i['days']),
-                ]);
+                ->map(function ($i) use ($interestYearly, $partyRate, $baseRate, $today) {
+                    $days = $this->overdueDays($i['due_date'], $today);
+
+                    return [
+                        'date'           => $i['date'],
+                        'due_date'       => $i['due_date'],
+                        'inv_no'         => $i['voucher_number'],
+                        'days'           => $days,
+                        'amount'         => $i['pending'],
+                        'interest_due'   => $interestYearly($i['pending'], $partyRate, $days),
+                        'interest_due_b' => $interestYearly($i['pending'], $baseRate, $days),
+                    ];
+                });
 
             // ===== RECEIVED invoices (late paid) : FIFO allocation =====
             $receipts = $rows
@@ -1661,49 +1682,73 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             $received = collect();
             $ptr = 0;
 
-            foreach ($invoices as $inv) {
-                $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
-                $voucherDate = Carbon::parse($inv['date'])->startOfDay();
-                $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
+                foreach ($invoices as $inv) {
+                    $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
+                    $voucherDate = Carbon::parse($inv['date'])->startOfDay();
+                    $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
 
-                while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
-                    if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
-                        $ptr++;
-                        continue;
-                    }
+                    // Invoice ka settlement (ek hi baar, rows mein allocate hoga)
+                    $settlementStatus = $inv['settlement_status'] ?? null;
+                    $settlementLeft   = is_numeric($inv['settlement_amount'] ?? null)
+                        ? (string) $inv['settlement_amount']
+                        : '0';
+                    $hasSettlement = !empty($settlementStatus) || bccomp($settlementLeft, '0', 2) > 0;
 
-                    $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
-                        ? $need : $receipts[$ptr]['remaining'];
+                    while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
+                        if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
+                            $ptr++;
+                            continue;
+                        }
 
-                    $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
-                    $need = bcsub($need, $take, 2);
+                        $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
+                            ? $need : $receipts[$ptr]['remaining'];
 
-                    $recdDate  = $receipts[$ptr]['date'];
-                    $delayDays = (int) $dueDate->diffInDays($recdDate, false);   // late kitna paid hua
+                        $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
+                        $need = bcsub($need, $take, 2);
 
-                    if ($delayDays > 0) {
-                        $daysSince = (int) $recdDate->diffInDays($today, false);
+                        $recdDate  = $receipts[$ptr]['date'];
+                        $delayDays = (int) $dueDate->diffInDays($recdDate, false);
 
-                        $intPending = $interest($take, $partyRate, $delayDays);
-                        $intOnInt   = $interest($intPending, $partyRate, $daysSince);
+                        if ($delayDays > 0) {
+                            $daysSince = (int) $recdDate->diffInDays($today, false);
 
-                        $intPendingB = $interest($take, $baseRate, $delayDays);
-                        $intOnIntB   = $interest($intPendingB, $baseRate, $daysSince);
+                            $intPending = $interestYearly($take, $partyRate, $delayDays);
+                            $intOnInt   = $interestOnInt($intPending, $partyRate, $delayDays);
+                            $interestDue = bcadd($intPending, $intOnInt, 2);   // ✅ Interest Due
 
-                        $received->push([
-                            'inv_no'         => $inv['voucher_number'],
-                            'recd_date'      => $recdDate->toDateString(),
-                            'int_pending'    => $intPending,
-                            'days'           => $daysSince,
-                            'int_on_int'     => $intOnInt,
-                            'interest_due'   => bcadd($intPending, $intOnInt, 2),
-                            'int_pending_b'  => $intPendingB,
-                            'int_on_int_b'   => $intOnIntB,
-                            'interest_due_b' => bcadd($intPendingB, $intOnIntB, 2),
-                        ]);
+                            $intPendingB = $interestYearly($take, $baseRate, $delayDays);
+                            $intOnIntB   = $interestOnInt($intPendingB, $baseRate, $delayDays);
+
+                            // ✅ Settlement ko Interest Due se jodo
+                            if ($hasSettlement) {
+                                // is row ka settlement: bacha hua settlement, par Interest Due se zyada nahi
+                                $settlementAmt  = bccomp($settlementLeft, $interestDue, 2) < 0 ? $settlementLeft : $interestDue;
+                                $settlementLeft = bcsub($settlementLeft, $settlementAmt, 2);
+                                $interestWaived = bcsub($interestDue, $settlementAmt, 2);   // Interest Due - Settlement
+                            } else {
+                                $settlementAmt  = '0.00';
+                                $interestWaived = '0.00';
+                            }
+
+                            $received->push([
+                                'inv_no'            => $inv['voucher_number'],
+                                'recd_date'         => $recdDate->toDateString(),
+                                'amount'            => $take,
+                                'int_pending'       => $intPending,
+                                'days'              => $delayDays,
+                                'days_since'        => $daysSince,
+                                'int_on_int'        => $intOnInt,
+                                'interest_due'      => $interestDue,
+                                'settlement_status' => $settlementStatus,
+                                'settlement_amount' => $settlementAmt,
+                                'interest_waived'   => $interestWaived,
+                                'int_pending_b'     => $intPendingB,
+                                'int_on_int_b'      => $intOnIntB,
+                                'interest_due_b'    => bcadd($intPendingB, $intOnIntB, 2),
+                            ]);
+                        }
                     }
                 }
-            }
 
             $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
             $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
@@ -1747,6 +1792,8 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 'voucher_number'       => $v->voucher_number,
                 'credit_period'        => $v->credit_period,
                 'credit_period_source' => $v->credit_period_source,
+                'settlement_status'    => $v->settlement_status ?? null,   // ✅ NEW
+                'settlement_amount'    => (string) ($v->settlement_amount ?? '0'),   // ✅ NEW
             ]);
     }
 
@@ -1968,13 +2015,8 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ? (int) $v['credit_period']   
                 : $ledgerCreditPeriod;
 
-            $days = 0;
-            if (!empty($v['due_date'])) {
-                $dueDateCarbon = Carbon::parse($v['due_date'])->startOfDay();
-                if ($dueDateCarbon->lt($today)) {
-                    $days = $today->diffInDays($dueDateCarbon);
-                }
-            }
+            // purana
+            $days = $this->overdueDays($v['due_date'] ?? null, $today);
 
             return [
                 'id'            => $v['id'] ?? null,
@@ -3040,13 +3082,13 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
             $dataToUpdate = [];
 
             if (!blank($creditPeriod) && $ledger->credit_period_source !== 'tally') {
-                $dataToUpdate['credit_period']        = $creditPeriod . ' Days';
-                $dataToUpdate['credit_period_source'] = 'default';
+                $dataToUpdate['credit_period'] = $creditPeriod . ' Days';
+                // credit_period_source ko touch nahi karna
             }
 
             if (!blank($interestRate) && $ledger->interest_rate_source !== 'tally') {
-                $dataToUpdate['interest_rate']        = $interestRate;
-                $dataToUpdate['interest_rate_source'] = 'default';
+                $dataToUpdate['interest_rate'] = $interestRate;
+                // interest_rate_source ko touch nahi karna
             }
 
             if (!blank($collectorId)) {
@@ -3076,12 +3118,15 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                     : null;
 
                 return [
-                    'name'                  => $l->name ?? $l->ledger_name ?? '-',
-                    'mobile'                => $l->mobile,
-                    'credit_period'         => $l->credit_period,
-                    'interest_rate'         => $l->interest_rate,
-                    'maintain_bill_by_bill' => $l->maintain_bill_by_bill,
-                    'collector_name'        => $collector->name ?? null,
+                    'id'                          => $l->id,
+                    'name'                        => $l->ledger_name,
+                    'mobile'                      => $l->ledger_mobile_number,
+                    'ledger_mobile_number_source' => $l->ledger_mobile_number_source,
+                    'credit_period'               => $l->credit_period,
+                    'credit_period_source'        => $l->credit_period_source,
+                    'interest_rate'               => $l->interest_rate,
+                    'interest_rate_source'        => $l->interest_rate_source,
+                    'collector_name'              => $collector->name ?? null,
                 ];
             });
 
@@ -3192,6 +3237,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ];
             })->values()->all();
 
+            // echo "<pre>"; print_r($ledgers); echo "</pre>"; exit;
             return view('owner.tally.other.master-settings', compact('ledgers', 'company'));
 
         } catch (\Exception $e) {
@@ -3289,19 +3335,21 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
     
         if ($data['under'] === 'Sundry Creditors') {
             $ledger->update([
-                'ledger_mobile_number' => $data['mobile'] ?? $ledger->ledger_mobile_number,
+                'ledger_mobile_number'        => $data['mobile'] ?? $ledger->ledger_mobile_number,
+                'ledger_mobile_number_source' => !empty($data['mobile']) ? 'manual' : $ledger->ledger_mobile_number_source,
             ]);
         } else {
             $creditPeriodManuallySet = array_key_exists('credit_period', $data) && $request->filled('credit_period');
     
             $ledger->update([
-                'ledger_mobile_number' => $data['mobile'] ?? $ledger->ledger_mobile_number,
+                'ledger_mobile_number'        => $data['mobile'] ?? $ledger->ledger_mobile_number,
+                'ledger_mobile_number_source' => !empty($data['mobile']) ? 'manual' : $ledger->ledger_mobile_number_source,
                 'balance_limit'        => $data['balance_limit'] ?? null,
                 'overlimit'            => $data['overlimit'] ?? null,
                 'mark'                 => $mark,
                 'red_reason'           => $mark === 'red' ? $data['red_reason'] : null,
                 'credit_period'        => $data['credit_period'] ?? $ledger->credit_period,
-                'credit_period_source' => $creditPeriodManuallySet ? 'default' : $ledger->credit_period_source,
+                'credit_period_source' => $creditPeriodManuallySet ? 'manual' : $ledger->credit_period_source,
                 'assigned_collector'   => $data['assigned_collector'] ?? null,
             ]);
         }

@@ -31,8 +31,8 @@ return new class extends Migration
             $table->string('interest_rate')->nullable();
             $table->string('interest_style')->nullable();
             $table->string('interest_rate_source')->nullable();
-            $table->string('maintain_bill_by_bill')->nullable();
-            $table->string('activate_interest_calculation')->nullable();
+            // $table->string('maintain_bill_by_bill')->nullable();
+            // $table->string('activate_interest_calculation')->nullable();
             $table->foreignId('assigned_collector')->nullable();
             $table->timestamp('balance_synced_at')->nullable();    // last time balance refresh hua
             $table->decimal('balance_limit', 15, 2)->nullable();
