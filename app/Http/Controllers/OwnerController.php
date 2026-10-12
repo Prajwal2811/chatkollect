@@ -1714,7 +1714,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
 
                             $intPending = $interestYearly($take, $partyRate, $delayDays);
                             $intOnInt   = $interestOnInt($intPending, $partyRate, $delayDays);
-                            $interestDue = bcadd($intPending, $intOnInt, 2);   // ✅ Interest Due
+                            $interestDue = bcadd($intPending, $intOnInt, 2);   
 
                             $intPendingB = $interestYearly($take, $baseRate, $delayDays);
                             $intOnIntB   = $interestOnInt($intPendingB, $baseRate, $delayDays);
@@ -1745,18 +1745,17 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                                 'int_pending_b'     => $intPendingB,
                                 'int_on_int_b'      => $intOnIntB,
                                 'interest_due_b'    => bcadd($intPendingB, $intOnIntB, 2),
-                                'is_settled' => strtolower((string) $settlementStatus) === 'settled',   // ✅ NEW
+                                'is_settled' => strtolower((string) $settlementStatus) === 'settled',  
                             ]);
                         }
                     }
                 }
-            
-            $received = $received
+                
+                $received = $received
                 ->groupBy('inv_no')
                 ->map(function ($group) {
                     $first = $group->first();
                     $sum = fn ($key) => $group->reduce(fn ($t, $r) => bcadd($t, (string) $r[$key], 2), '0');
-            
                     return array_merge($first, [
                         'recd_date'         => $group->last()['recd_date'],
                         'days'              => $group->max('days'),
@@ -1772,7 +1771,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                     ]);
                 })
                 ->values();
-            
+ 
             $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
             $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
