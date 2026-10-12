@@ -1750,7 +1750,29 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                         }
                     }
                 }
-
+            
+            $received = $received
+                ->groupBy('inv_no')
+                ->map(function ($group) {
+                    $first = $group->first();
+                    $sum = fn ($key) => $group->reduce(fn ($t, $r) => bcadd($t, (string) $r[$key], 2), '0');
+            
+                    return array_merge($first, [
+                        'recd_date'         => $group->last()['recd_date'],
+                        'days'              => $group->max('days'),
+                        'amount'            => $sum('amount'),
+                        'int_pending'       => $sum('int_pending'),
+                        'int_on_int'        => $sum('int_on_int'),
+                        'interest_due'      => $sum('interest_due'),
+                        'settlement_amount' => $sum('settlement_amount'),
+                        'interest_waived'   => $sum('interest_waived'),
+                        'int_pending_b'     => $sum('int_pending_b'),
+                        'int_on_int_b'      => $sum('int_on_int_b'),
+                        'interest_due_b'    => $sum('interest_due_b'),
+                    ]);
+                })
+                ->values();
+            
             $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
             $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
