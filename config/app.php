@@ -213,4 +213,5 @@ return [
     ])->toArray(),
 
     'base_interest_rate' => env('BASE_INTEREST_RATE', 12),
+
 ];

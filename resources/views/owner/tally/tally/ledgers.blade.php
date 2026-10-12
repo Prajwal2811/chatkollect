@@ -813,8 +813,6 @@
                         </div>
                     </div>
 
-                    
-
                     <!-- Debtor Ranking Modal -->
                     <div class="modal fade" id="debtorRankingModal" tabindex="-1" aria-hidden="true">
                         <div class="modal-dialog modal-dialog-centered modal-fullscreen-lg-down" style="max-width: 1300px;">
@@ -1435,6 +1433,7 @@
                 // ===== INTEREST COST modal: DB se data =====
                 function renderInterestData(ledger, under) {
                     const amt = n => (n === null || n === undefined || n === '') ? '-' : fmtExact(n);
+
                     const rs  = n => '₹ ' + amt(n);
                     const fmtD = d => {
                         if (!d) return '-';
@@ -1454,6 +1453,7 @@
                     $('#intReceivedCount, #intPendingCount').text('0');
                     bootstrap.Tab.getOrCreateInstance(document.getElementById('intTabReceivedBtn')).show();
 
+ 
                     $('#ledgerVoucherLoading').removeClass('d-none');
 
                     $.ajax({
@@ -1497,10 +1497,10 @@
                             $('#intReceivedBody').html(rHtml || '<tr><td colspan="10" class="text-center text-muted">No data found</td></tr>');
 
                             $('#intReceivedCount').text((res.received || []).length);
-
                             let pHtml = '';
                             (res.pending || []).forEach(function (r) {
                                 pHtml += `<tr>
+ 
                                     <td class="text-start">${fmtD(r.date)}</td>
                                     <td>${fmtD(r.due_date)}</td>
                                     <td>${r.inv_no ?? '-'}</td>
