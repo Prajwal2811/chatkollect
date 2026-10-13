@@ -705,20 +705,26 @@
                                         <table class="table table-bordered align-middle mb-3">
                                             <tbody>
                                                 <tr>
-                                                    <th width="30%">Rate Of Interest</th>
-                                                    <td id="intPartyRate" class="text-end">-</td>
-                                                    <th width="30%">Interest Due Total</th>
-                                                    <td id="intTotal" class="text-end fw-bold">-</td>
+                                                    <th width="25%">Rate Of Interest</th>
+                                                    <td id="intPartyRate" class="text-end" width="25%">-</td>
+                                                    <th width="25%">Interest Due Invoices <span id="intTabLabel">Received</span></th>
+                                                    <td id="intTabDue" class="text-end fw-bold" width="25%">-</td>
                                                 </tr>
                                                 <tr>
-                                                    <th>Interest Due Invoices Pending</th>
-                                                    <td id="intSummaryPending" class="text-end fw-bold">-</td>
+                                                    <th>Interest Due Invoices <span class="int-cleared-label">Received</span></th>
+                                                    <td id="intSummaryReceived" class="text-end fw-bold">-</td>
                                                     <th>Settlement Request Amount</th>
                                                     <td id="intSettlementRequest" class="text-end fw-bold">-</td>
                                                 </tr>
                                                 <tr>
+                                                    <th>Interest Due Invoices Pending</th>
+                                                    <td id="intSummaryPending" class="text-end fw-bold">-</td>
                                                     <th>Interest Received Amount</th>
                                                     <td id="intSettlementReceived" class="text-end fw-bold text-success">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Interest Due Total</th>
+                                                    <td id="intTotal" class="text-end fw-bold">-</td>
                                                     <th>Interest Waived</th>
                                                     <td id="intWaivedTotal" class="text-end fw-bold text-danger">-</td>
                                                 </tr>
@@ -768,9 +774,9 @@
                                                     </tbody>
                                                     <tfoot>
                                                         <tr>
-                                                            <th colspan="6" class="text-end">Interest Due Invoices <span class="int-cleared-label">Received</span></th>
+                                                            <th colspan="5" class="text-end">Interest Due Invoices <span class="int-cleared-label">Received</span></th>
                                                             <th id="intReceivedTotal">-</th>
-                                                            <th colspan="3"></th>
+                                                            <th colspan="4"></th>
                                                         </tr>
                                                     </tfoot>
                                                 </table>
@@ -787,15 +793,19 @@
                                                             <th class="text-center">Days</th>
                                                             <th>Amount</th>
                                                             <th>Interest Due</th>
+                                                            <th class="text-center">Settlement Status</th>
+                                                            <th>Settlement Amount</th>
+                                                            <th>Interest Waived</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody id="intPendingBody">
-                                                        <tr><td colspan="6" class="text-center text-muted">No data loaded</td></tr>
+                                                        <tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>
                                                     </tbody>
                                                     <tfoot>
                                                         <tr>
                                                             <th colspan="5" class="text-end">Interest Due Invoices Pending</th>
                                                             <th id="intPendingTotal">-</th>
+                                                            <th colspan="3"></th>
                                                         </tr>
                                                     </tfoot>
                                                 </table>
@@ -1442,11 +1452,11 @@
                     };
                     const isCreditor = (under === 'Sundry Creditors');
                     const emptyR = '<tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>';
-                    const emptyP = '<tr><td colspan="6" class="text-center text-muted">No data loaded</td></tr>';
+                    const emptyP = '<tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>';
 
                     $('.int-cleared-label').text(isCreditor ? 'Paid' : 'Recd');
                     $('#intReceivedLabel').text(isCreditor ? 'Paid' : 'Received');
-                    $('#intPartyRate, #intTotal, #intReceivedTotal, #intPendingTotal, #intSummaryReceived, #intSummaryPending, #intSettlementRequest, #intSettlementReceived, #intWaivedTotal').text('-');
+                    $('#intPartyRate, #intTotal, #intReceivedTotal, #intPendingTotal, #intSummaryReceived, #intSummaryPending, #intTabDue, #intSettlementRequest, #intSettlementReceived, #intWaivedTotal').text('-');
                     $('#intReceivedBody').html(emptyR);
                     $('#intPendingBody').html(emptyP);
 
@@ -1470,9 +1480,10 @@
                             $('#intPendingTotal').text(rs(res.pending_total ?? 0));
                             $('#intSummaryReceived').text(rs(res.received_total ?? 0));
                             $('#intSummaryPending').text(rs(res.pending_total ?? 0));
-                            $('#intSettlementRequest').text(rs(res.settlement_request_total ?? 0));
-                            $('#intSettlementReceived').text(rs(res.settlement_received_total ?? 0));
-                            $('#intWaivedTotal').text(rs(res.interest_waived_total ?? 0));
+                            window.intData       = res;
+                            window.intIsCreditor = isCreditor;
+                            updateInterestSummary('received');
+
 
                             let rHtml = '';
                             (res.received || []).forEach(function (r) {
@@ -1497,21 +1508,29 @@
                             $('#intReceivedBody').html(rHtml || '<tr><td colspan="10" class="text-center text-muted">No data found</td></tr>');
 
                             $('#intReceivedCount').text((res.received || []).length);
-                            let pHtml = '';
-                            (res.pending || []).forEach(function (r) {
-                                pHtml += `<tr>
- 
-                                    <td class="text-start">${fmtD(r.date)}</td>
-                                    <td>${fmtD(r.due_date)}</td>
-                                    <td>${r.inv_no ?? '-'}</td>
-                                    <td class="text-center"><span class="badge bg-danger">${r.days ?? '-'} days</span></td>
-                                    <td>${rs(r.amount)}</td>
-                                    <td class="fw-bold">${rs(r.interest_due)}</td>
-                                </tr>`;
-                            });
-                            $('#intPendingBody').html(pHtml || '<tr><td colspan="6" class="text-center text-muted">No data found</td></tr>');
 
-                            $('#intPendingCount').text((res.pending || []).length);
+                            let pHtml = '';
+                                (res.pending || []).forEach(function (r) {
+                                    pHtml += `<tr>
+                                        <td class="text-start">${fmtD(r.date)}</td>
+                                        <td>${fmtD(r.due_date)}</td>
+                                        <td>${r.inv_no ?? '-'}</td>
+                                        <td class="text-center"><span class="badge bg-danger">${r.days ?? '-'} days</span></td>
+                                        <td>${rs(r.amount)}</td>
+                                        <td class="fw-bold">${rs(r.interest_due)}</td>
+                                        <td class="text-center">
+                                            ${r.settlement_status
+                                                ? `<span class="badge ${r.settlement_status === 'settled' ? 'bg-success' : 'bg-warning text-dark'}">
+                                                    ${r.settlement_status.charAt(0).toUpperCase() + r.settlement_status.slice(1)}
+                                                </span>`
+                                                : '-'}
+                                        </td>
+                                        <td>${rs(r.settlement_amount)}</td>
+                                        <td class="fw-bold">${rs(r.interest_waived)}</td>
+                                    </tr>`;
+                                });
+                                $('#intPendingBody').html(pHtml || '<tr><td colspan="9" class="text-center text-muted">No data found</td></tr>');
+                                $('#intPendingCount').text((res.pending || []).length);
                         },
                         error: function () {
                             $('#ledgerVoucherLoading').addClass('d-none');
@@ -1519,6 +1538,27 @@
                         }
                     });
                 }
+
+
+
+                // ===== Interest summary: tab ke hisaab se right column update =====
+                function updateInterestSummary(tab) {
+                    const d = window.intData;
+                    if (!d) return;
+
+                    const rs = n => '₹ ' + fmtExact(n ?? 0);
+                    const isPending = (tab === 'pending');
+                    const clearedWord = window.intIsCreditor ? 'Paid' : 'Received';
+
+                    $('#intTabLabel').text(isPending ? 'Pending' : clearedWord);
+                    $('#intTabDue').text(rs(isPending ? d.pending_total : d.received_total));
+                    $('#intSettlementRequest').text(rs(isPending ? d.pending_settlement_request_total : d.settlement_request_total));
+                    $('#intSettlementReceived').text(rs(isPending ? d.pending_settlement_received_total : d.settlement_received_total));
+                    $('#intWaivedTotal').text(rs(isPending ? d.pending_interest_waived_total : d.interest_waived_total));
+                }
+
+                $(document).on('shown.bs.tab', '#intTabReceivedBtn', function () { updateInterestSummary('received'); });
+                $(document).on('shown.bs.tab', '#intTabPendingBtn',  function () { updateInterestSummary('pending'); });
                 // ===== Per-ledger, per-field (Balance / Balance Overdue / Target / Sale / ...) voucher modal =====
                 //
                 // "Balance"         -> #ledgerBalanceTable (Original / Received-Paid / Pending)

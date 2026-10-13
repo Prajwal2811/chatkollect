@@ -18,6 +18,8 @@ use App\Models\WhatsappTemplate;
 use App\Models\WhatsappTemplateParameter;
 use App\Models\OverdueTargetSetting;
 use App\Models\TallyCompany;
+use App\Models\TallyResponse;
+use App\Models\TallySolution;
 
 use App\Services\TallyService;
 
@@ -1649,6 +1651,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                     $days = $this->overdueDays($i['due_date'], $today);
 
                     return [
+                        'id'             => $i['id'] ?? null,   // ✅ NEW
                         'date'           => $i['date'],
                         'due_date'       => $i['due_date'],
                         'inv_no'         => $i['voucher_number'],
@@ -1666,8 +1669,11 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                     : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
                 ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
                 ->map(fn ($r) => [
-                    'date'      => Carbon::parse($r['date'])->startOfDay(),
-                    'remaining' => $isCreditor ? $r['debit'] : $r['credit'],
+                    'voucher_number'    => $r['voucher_number'],
+                    'date'              => Carbon::parse($r['date'])->startOfDay(),
+                    'remaining'         => $isCreditor ? $r['debit'] : $r['credit'],
+                    'settlement_status' => $r['settlement_status'] ?? null,
+                    'settlement_left'   => is_numeric($r['settlement_amount'] ?? null) ? (string) $r['settlement_amount'] : '0',
                 ])
                 ->values()
                 ->all();
@@ -1681,18 +1687,12 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
 
             $received = collect();
             $ptr = 0;
+            $settlementLeftById = []; 
 
                 foreach ($invoices as $inv) {
                     $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
                     $voucherDate = Carbon::parse($inv['date'])->startOfDay();
                     $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
-
-                    // Invoice ka settlement (ek hi baar, rows mein allocate hoga)
-                    $settlementStatus = $inv['settlement_status'] ?? null;
-                    $settlementLeft   = is_numeric($inv['settlement_amount'] ?? null)
-                        ? (string) $inv['settlement_amount']
-                        : '0';
-                    $hasSettlement = !empty($settlementStatus) || bccomp($settlementLeft, '0', 2) > 0;
 
                     while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
                         if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
@@ -1719,16 +1719,18 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                             $intPendingB = $interestYearly($take, $baseRate, $delayDays);
                             $intOnIntB   = $interestOnInt($intPendingB, $baseRate, $delayDays);
 
-                            // ✅ Settlement ko Interest Due se jodo
-                            if ($hasSettlement) {
-                                // is row ka settlement: bacha hua settlement, par Interest Due se zyada nahi
-                                $settlementAmt  = bccomp($settlementLeft, $interestDue, 2) < 0 ? $settlementLeft : $interestDue;
-                                $settlementLeft = bcsub($settlementLeft, $settlementAmt, 2);
-                                $interestWaived = bcsub($interestDue, $settlementAmt, 2);   // Interest Due - Settlement
-                            } else {
-                                $settlementAmt  = '0.00';
-                                $interestWaived = '0.00';
-                            }
+                            $rStatus = strtolower((string) ($receipts[$ptr]['settlement_status'] ?? ''));
+$rLeft   = $receipts[$ptr]['settlement_left'];
+$isSettledPiece = ($rStatus === 'settled');
+
+if ($isSettledPiece) {
+    $settlementAmt = bccomp($rLeft, $interestDue, 2) < 0 ? $rLeft : $interestDue;
+    $receipts[$ptr]['settlement_left'] = bcsub($rLeft, $settlementAmt, 2);
+    $interestWaived = bcsub($interestDue, $settlementAmt, 2);
+    $settledRequest = $interestDue;
+} else {
+    $settlementAmt = $interestWaived = $settledRequest = '0.00';
+}
 
                             $received->push([
                                 'inv_no'            => $inv['voucher_number'],
@@ -1739,13 +1741,14 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                                 'days_since'        => $daysSince,
                                 'int_on_int'        => $intOnInt,
                                 'interest_due'      => $interestDue,
-                                'settlement_status' => $settlementStatus,
                                 'settlement_amount' => $settlementAmt,
                                 'interest_waived'   => $interestWaived,
                                 'int_pending_b'     => $intPendingB,
                                 'int_on_int_b'      => $intOnIntB,
                                 'interest_due_b'    => bcadd($intPendingB, $intOnIntB, 2),
-                                'is_settled' => strtolower((string) $settlementStatus) === 'settled',  
+                                'settlement_status' => $rStatus ?: null,
+                                'is_settled'        => $isSettledPiece,
+                                'settled_request'   => $settledRequest,
                             ]);
                         }
                     }
@@ -1769,23 +1772,54 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                         'int_pending_b'     => $sum('int_pending_b'),
                         'int_on_int_b'      => $sum('int_on_int_b'),
                         'interest_due_b'    => $sum('interest_due_b'),
+
+                        'is_settled'        => $group->contains('is_settled', true),
+                        'settlement_status' => $group->contains('is_settled', true) ? 'settled' : $first['settlement_status'],
+                        'settled_request'   => $sum('settled_request'),
                     ]);
                 })
                 ->values();
+
+            $rowsById = $rows->keyBy('id');
+
+            $pending = $pending->map(function ($p) use ($rowsById, $settlementLeftById) {
+                $src    = $rowsById->get($p['id']);
+                $status = $src['settlement_status'] ?? null;
+
+                $left = $settlementLeftById[$p['id']]
+                    ?? (is_numeric($src['settlement_amount'] ?? null) ? (string) $src['settlement_amount'] : '0');
+
+                $isSettled = strtolower((string) $status) === 'settled';
+                $amt = $isSettled ? (bccomp($left, $p['interest_due'], 2) < 0 ? $left : $p['interest_due']) : '0.00';
+
+                return $p + [
+                    'settlement_status' => $status,
+                    'settlement_amount' => $amt,
+                    'interest_waived'   => $isSettled ? bcsub($p['interest_due'], $amt, 2) : '0.00',
+                ];
+            })->values();
                 
             $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
             $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
             $settledRows = $received->filter(fn ($r) => $r['is_settled']);
 
-            $settlementRequestTotal = $settledRows
+            $settlementRequestTotal  = $received->reduce(fn ($t, $r) => bcadd($t, $r['settled_request'], 2), '0');
+            $settlementReceivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
+            $interestWaivedTotal     = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
+
+            $pendingSettled = $pending->filter(fn ($r) => strtolower((string) ($r['settlement_status'] ?? '')) === 'settled');
+
+            $pendingSettlementRequestTotal = $pendingSettled
                 ->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
-            $settlementReceivedTotal = $settledRows
+            $pendingSettlementReceivedTotal = $pendingSettled
                 ->reduce(fn ($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
 
-            $interestWaivedTotal = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
+            $pendingInterestWaivedTotal = bcsub($pendingSettlementRequestTotal, $pendingSettlementReceivedTotal, 2);
 
+
+            
             return response()->json([
                 'party_rate'                => $partyRate,
                 'base_rate'                 => $baseRate,
@@ -1794,9 +1828,12 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 'pending_total'             => $pendingTotal,
                 'settlement_request_total'  => $settlementRequestTotal,    // ✅ NEW
                 'settlement_received_total' => $settlementReceivedTotal,   // ✅ NEW
-                'interest_waived_total'     => $interestWaivedTotal,       // ✅ NEW
                 'received'                  => $received->values(),
                 'pending'                   => $pending,
+                'interest_waived_total'             => $interestWaivedTotal,
+                'pending_settlement_request_total'  => $pendingSettlementRequestTotal,
+                'pending_settlement_received_total' => $pendingSettlementReceivedTotal,
+                'pending_interest_waived_total'     => $pendingInterestWaivedTotal,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -2113,7 +2150,7 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
                 ->where('ledger_id', $tallyLedger->id)
                 ->get();
 
-            // echo "<pre>"; print_r($ledgerVoucher); die;
+            echo "<pre>"; print_r($ledgerVoucher); die;
             $vouchers = [];
 
             $creditSideTypesForDebtor  = ['receipt', 'receipt note', 'credit note'];
@@ -2909,7 +2946,70 @@ private function buildUniqueId(string $name, int $primaryId, int $minDigits = 2)
 
     public function responses()
     {
-        return view('owner.tally.other.responses');
+        $ownerId = Auth::guard('owner')->id();
+
+        $responses = TallyResponse::where('owner_id', $ownerId)->latest()->get();
+        $solutions = TallySolution::where('owner_id', $ownerId)->latest()->get();
+
+        return view('owner.tally.other.responses', compact('responses', 'solutions'));
+    }
+
+    // ---------- RESPONSE ----------
+    public function responseSubmit(Request $request)
+    {
+        $request->validate(['response' => 'required|string']);
+
+        $ownerId = Auth::guard('owner')->id();
+
+        if ($request->filled('response_id')) {
+            $item = TallyResponse::where('owner_id', $ownerId)->findOrFail($request->response_id);
+            $item->update(['response' => $request->response]);
+            $message = 'Response updated successfully';
+        } else {
+            $item = TallyResponse::create([
+                'owner_id' => $ownerId,
+                'response' => $request->response,
+            ]);
+            $message = 'Response saved successfully';
+        }
+
+        return response()->json(['status' => true, 'message' => $message, 'data' => $item]);
+    }
+
+    public function responseDelete($id)
+    {
+        TallyResponse::where('owner_id', Auth::guard('owner')->id())->findOrFail($id)->delete();
+
+        return response()->json(['status' => true, 'message' => 'Response deleted successfully']);
+    }
+
+    // ---------- SOLUTION ----------
+    public function solutionSubmit(Request $request)
+    {
+        $request->validate(['solution' => 'required|string']);
+
+        $ownerId = Auth::guard('owner')->id();
+
+        if ($request->filled('solution_id')) {
+            $item = TallySolution::where('owner_id', $ownerId)->findOrFail($request->solution_id);
+            $item->update(['solution' => $request->solution]);
+            $message = 'Solution updated successfully';
+        } else {
+            $item = TallySolution::create([
+                'owner_id' => $ownerId,
+                'solution' => $request->solution,
+            ]);
+            $message = 'Solution saved successfully';
+        }
+
+        return response()->json(['status' => true, 'message' => $message, 'data' => $item]);
+    }
+
+    public function solutionDelete($id)
+    {
+        TallySolution::where('owner_id', Auth::guard('owner')->id())->findOrFail($id)->delete();
+
+        return response()->json(['status' => true, 'message' => 'Solution deleted successfully']);
     }
 
      public function overdueTarget($company)
