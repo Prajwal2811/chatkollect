@@ -122,6 +122,12 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
         Route::get('/company/{company}/ai-templates', [OwnerController::class, 'aiTemplates'])->name('owner.other.ai-templates');
         Route::get('/company/{company}/responses', [OwnerController::class, 'responses'])->name('owner.other.responses');
 
+        Route::post('tally/responses/submit', [OwnerController::class, 'responseSubmit'])->name('owner.tally.responses.submit');
+        Route::delete('tally/responses/{id}', [OwnerController::class, 'responseDelete'])->name('owner.tally.responses.delete');
+
+        Route::post('tally/solutions/submit', [OwnerController::class, 'solutionSubmit'])->name('owner.tally.solutions.submit');
+        Route::delete('tally/solutions/{id}', [OwnerController::class, 'solutionDelete'])->name('owner.tally.solutions.delete');
+
         Route::get('/company/{company}/overdue-target', [OwnerController::class, 'overdueTarget'])->name('owner.other.overdue-target');
         Route::post('/overdue-target/save', [OwnerController::class, 'saveOverdueTarget'])->name('owner.overdue-target.save');
 
