@@ -27,7 +27,6 @@ return new class extends Migration
             $table->string('credit_period')->nullable();
             $table->date('due_date')->nullable();
             $table->string('credit_period_source')->nullable();
-            $table->string('settlement_status')->nullable();
             $table->enum('settlement_status', ['settled', 'pending'])->default('pending');
             $table->string('settlement_amount')->nullable();
             $table->timestamps();
