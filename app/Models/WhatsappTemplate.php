@@ -11,8 +11,9 @@ class WhatsappTemplate extends Model
 
     protected $table = 'rms_whatsapp_templates';
     
-    protected $fillable = [
+     protected $fillable = [
         'owner_id',
+        'company_id',
         'followup_type',
         'name',
         'tone',
