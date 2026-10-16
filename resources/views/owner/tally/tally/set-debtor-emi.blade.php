@@ -1,10 +1,23 @@
 @include('owner.tally.components.header')
+
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<style>
+    .select2-container .select2-selection--single {
+        height: calc(1.5em + .75rem + 2px);
+        border: 1px solid #ced4da;
+        padding: .25rem .5rem;
+    }
+    .select2-container--default .select2-selection--single .select2-selection__arrow {
+        height: 100%;
+    }
+</style>
+
 <div id="main-wrapper">
     <div class="nav-header">
         <a href="#" class="brand-logo">
             <svg width="120" height="50" viewBox="0 0 120 50" xmlns="http://www.w3.org/2000/svg">
                 <text x="55" y="32" font-size="22" font-family="Arial, sans-serif" font-weight="bold" fill="#4E3F6B">
-                    RMS 
+                    RMS
                 </text>
             </svg>
         </a>
@@ -21,15 +34,6 @@
 
     <div class="content-body default-height">
 
-        @php
-            // ---- DUMMY DEBTOR MASTER (replace with real DB query in controller) ----
-            $debtors = [
-                ['id' => 1, 'name' => 'Rajesh Kumar',   'balance' => 100000, 'roi' => 15],
-                ['id' => 2, 'name' => 'Anita Sharma',   'balance' => 250000, 'roi' => 12],
-                ['id' => 3, 'name' => 'Suresh Traders', 'balance' => 75000,  'roi' => 18],
-            ];
-        @endphp
-
         <div class="container-fluid">
             <div class="row">
                 <div class="col-12">
@@ -43,7 +47,7 @@
                                     <label class="form-label">Debtor Name</label>
                                     <select id="debtorSelect" class="form-control">
                                         <option value="">-- Select --</option>
-                                        @foreach($debtors as $d)
+                                        @foreach($ledgers as $d)
                                             <option
                                                 value="{{ $d['id'] }}"
                                                 data-balance="{{ $d['balance'] }}"
@@ -51,12 +55,6 @@
                                                 {{ $d['name'] }}
                                             </option>
                                         @endforeach
-                                        {{-- @foreach($ledgers as $d)
-                                            <option
-                                                value="{{ $d['name'] }}">
-                                                {{ $d['name'] }}
-                                            </option>
-                                        @endforeach --}}
                                     </select>
                                 </div>
                                 <div class="col-6 col-md-3">
@@ -120,7 +118,7 @@
                                 </table>
                             </div>
 
-                        </div>-
+                        </div>
                     </div>
                 </div>
             </div>
@@ -129,9 +127,11 @@
     </div>
 </div>
 
+{{-- Agar tumhare template me Select2 pehle se loaded hai to ye line hata do --}}
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 
 <script>
-    document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', function () {
 
     const debtorSelect   = document.getElementById('debtorSelect');
     const balanceField   = document.getElementById('balanceField');
@@ -146,6 +146,13 @@
     const scheduleBody   = document.getElementById('scheduleBody');
 
     let dataTableInstance = null;
+
+    // ---- Searchable debtor dropdown (real-time search) ----
+    $('#debtorSelect').select2({
+        placeholder: '-- Select --',
+        width: '100%',
+        allowClear: true
+    });
 
     startDateField.valueAsDate = new Date();
 
@@ -171,7 +178,6 @@
 
     // ---- Renders the schedule rows into the table ----
     function renderScheduleTable(rows) {
-        // If DataTable was already initialized on this table, destroy it first
         if (window.jQuery && $.fn.DataTable && $.fn.DataTable.isDataTable('#example11')) {
             $('#example11').DataTable().destroy();
         }
@@ -199,7 +205,6 @@
         });
         scheduleBody.appendChild(frag);
 
-        // Re-init DataTable if the plugin is available
         if (window.jQuery && $.fn.DataTable) {
             dataTableInstance = $('#example11').DataTable();
         }
@@ -217,16 +222,16 @@
         monthsWithInterest.value = '';
         emiWarning.classList.add('d-none');
         emiWarning.textContent = '';
-        renderScheduleTable([]); // clear table
+        renderScheduleTable([]);
 
         if (!balance || !roi || !emi || !startDateVal) {
             return;
         }
 
-        // ---- Months Required WITHOUT Interest (simple division) ----
+        // ---- Months Required WITHOUT Interest ----
         monthsWithoutInterest.value = Math.ceil(balance / emi);
 
-        // ---- Months Required WITH Interest (amortization loop) ----
+        // ---- Months Required WITH Interest ----
         const monthlyRate = (roi / 12) / 100;
         const firstInterest = Math.round(balance * monthlyRate);
 
@@ -262,7 +267,7 @@
                 showWarning(
                     `Monthly collection is too low from month ${monthCount} onward. It must be at least ₹${formatNumber(minEmi)}.`
                 );
-                renderScheduleTable(rows); // show whatever was valid so far
+                renderScheduleTable(rows);
                 return;
             }
 
@@ -338,14 +343,15 @@
         recalculate();
     });
 
-    debtorSelect.addEventListener('change', function () {
+    // jQuery listener (Select2 jQuery ka change event fire karta hai)
+    $(debtorSelect).on('change', function () {
         balanceField.setAttribute('readonly', 'readonly');
         editBalanceBtn.innerHTML = '<i class="fa fa-pencil"></i>';
         editBalanceBtn.classList.remove('btn-outline-success');
         editBalanceBtn.classList.add('btn-outline-secondary');
 
         const opt = this.options[this.selectedIndex];
-        if (!opt.value) {
+        if (!opt || !opt.value) {
             balanceField.value = 0;
             roiField.value = '0%';
         } else {

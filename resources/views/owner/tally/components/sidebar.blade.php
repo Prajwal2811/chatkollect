@@ -184,7 +184,7 @@
                         </a>
                         <ul aria-expanded="false">
                             <li>
-                                <a href="{{  route('owner.other.templates' , ['company' => urlencode($company)]) }}"><i class="fas fa-file-alt"></i> Templates</a>
+                                <a href="{{  route('owner.other.templates' , ['company' => $company]) }}"><i class="fas fa-file-alt"></i> Templates</a>
                             </li>
                             <li>
                                 <a href="{{ route('owner.other.responses', ['company' => urlencode($company)]) }}"><i class="fas fa-comments"></i> Response/Solution</a>

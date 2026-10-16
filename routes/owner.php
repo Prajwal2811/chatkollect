@@ -115,10 +115,14 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
         Route::get('/tally/company/{company}/followup-history', [OwnerController::class, 'followupHistory'])->name('owner.tally.company.followup_history');
 
 
-        // Other
+        // WhatsApp Templates
         Route::get('/company/{company}/templates', [OwnerController::class, 'templates'])->name('owner.other.templates');
-        Route::post('/company/{company}/save-templates', [OwnerController::class, 'storeTemplates'])->name('owner.other.templates.store');
-        Route::post('/company/{company}/save-parameters', [OwnerController::class, 'storeParameter'])->name('owner.other.template.parameters.store');
+        Route::post('/company/{company}/templates', [OwnerController::class, 'storeTemplate'])->name('owner.other.templates.store');
+        Route::post('/company/{company}/template-parameters', [OwnerController::class, 'storeParameter'])->name('owner.other.template.parameters.store');
+        Route::put('/templates/{company}/{id}', [OwnerController::class, 'updateTemplate'])->name('owner.other.templates.update');
+        Route::delete('/templates/{company}/{id}', [OwnerController::class, 'deleteTemplate'])->name('owner.other.templates.destroy');
+
+            
         Route::get('/company/{company}/ai-templates', [OwnerController::class, 'aiTemplates'])->name('owner.other.ai-templates');
         Route::get('/company/{company}/responses', [OwnerController::class, 'responses'])->name('owner.other.responses');
 
