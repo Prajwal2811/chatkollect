@@ -192,6 +192,14 @@
                     .ranking-table thead th.th-green {
                         background: #00e000;
                     }
+
+                    /* ===== Interest Cost modal (Excel-style) ===== */
+                    .int-xl td, .int-xl th { padding: 4px 8px; font-size: 14px; vertical-align: middle; }
+                    .int-xl .int-name   { background: #e9e9ef; border-radius: 12px; }
+                    .int-xl .int-pink   { background: #e99a9a; font-weight: 700; text-align: center; }
+                    .int-xl .int-yellow { background: #ffff00; font-weight: 700; text-align: center; }
+                    .int-xl .int-green  { background: #00ff00; font-weight: 700; text-align: center; }
+                    .int-xl .int-head th { font-weight: 400; background: #fff; }
                     
                 </style>
 
@@ -320,24 +328,33 @@
                         // Priority Rank = RANK(H, H-range, 0)  -> descending
                         // Debtor Rank   = RANK(H, H-range, 1)  -> ascending   (column J)
                         // Class         = Debtor Rank / COUNTA(J) * 100  ->  <=15 A, <=50 B, <=85 C, baaki D
-                        $applyRanks = function ($list) {
-                            $list = $list->map(function ($l) {
-                                $overdue = $l['rows']['Balance Overdue'];
-                                $notDue  = $l['rows']['Not Due'];
-                                $target  = $l['rows']['Balance Target'];
-                                $total   = bcadd($overdue, $notDue, 2);
-                                $l['pct_target'] = bccomp($total, '0', 2) !== 0 ? round($target / $total * 100) : 0;
+                        $applyRanks = function ($list) use ($num) {
+                            $list = $list->map(function ($l) use ($num) {
+                                $overdue    = $l['rows']['Balance Overdue'];
+                                $notDue     = $l['rows']['Not Due'];
+                                $collection = $num($l['target_collection'] ?? 0);
+                                $total      = bcadd($overdue, $notDue, 2);
+
+                                $l['has_due']    = bccomp($total, '0', 2) > 0;
+                                $l['pct_target'] = $l['has_due'] ? round($collection / $total * 100) : null;
                                 return $l;
                             });
 
-                            $pcts  = $list->pluck('pct_target');
-                            $count = $list->count();
+                            // sirf active debtors ka pool
+                            $pcts  = $list->filter(fn ($l) => $l['has_due'])->pluck('pct_target');
+                            $count = $pcts->count();
 
                             return $list->map(function ($l) use ($pcts, $count) {
-                                $p = $l['pct_target'];
+                                if (!$l['has_due']) {
+                                    $l['priority_rank'] = null;
+                                    $l['debtor_rank']   = null;
+                                    $l['rank']          = null;
+                                    return $l;
+                                }
 
-                                $l['priority_rank'] = $pcts->filter(fn ($x) => $x > $p)->count() + 1;   // RANK(...,0)
-                                $l['debtor_rank']   = $pcts->filter(fn ($x) => $x < $p)->count() + 1;   // RANK(...,1)
+                                $p = $l['pct_target'];
+                                $l['priority_rank'] = $pcts->filter(fn ($x) => $x > $p)->count() + 1;
+                                $l['debtor_rank']   = $pcts->filter(fn ($x) => $x < $p)->count() + 1;
 
                                 $share = $count > 0 ? ($l['debtor_rank'] / $count) * 100 : 0;
                                 $l['rank'] = $share <= 15 ? 'A' : ($share <= 50 ? 'B' : ($share <= 85 ? 'C' : 'D'));
@@ -396,11 +413,11 @@
                         $breakdownCreditor = $computeBreakdown($creditorLedgers);
 
                         // ===== Debtor Ranking table (image wali UI) =====
-                        $rankingRows = $debtorLedgers->map(function ($l) {
+                        $rankingRows = $debtorLedgers->map(function ($l) use ($num) {
                             $overdue = $l['rows']['Balance Overdue'];
                             $notDue  = $l['rows']['Not Due'];
                             $target  = $l['rows']['Balance Target'];
-
+                            $targetCollection = $num($l['target_collection'] ?? 0);
                             $total    = bcadd($overdue, $notDue, 2);
                             $hasTotal = bccomp($total, '0', 2) !== 0;
 
@@ -410,23 +427,15 @@
                                 'not_due'     => $notDue,
                                 'total_due'   => $total,
                                 'target'      => $target,
+                                'target_collection' => $targetCollection, 
                                 'pct_overdue' => $hasTotal ? round($overdue / $total * 100, 2) : 0,
                                 'pct_not_due' => $hasTotal ? round($notDue  / $total * 100, 2) : 0,
-                                'pct_target'  => $hasTotal ? round($target  / $total * 100)    : 0,
-                                'class'       => $l['rank'] ?? 'D',
-                                // agar controller se already aa rahe hon to wahi use honge
-                                'debtor_rank'   => $l['debtor_rank']   ?? null,
-                                'priority_rank' => $l['priority_rank'] ?? null,
+                                'pct_target'    => $l['pct_target'],        // pehle recalculate ho raha tha
+                                'class'         => $l['rank'],              // pehle: $l['rank'] ?? 'D'
+                                'debtor_rank'   => $l['debtor_rank'],
+                                'priority_rank' => $l['priority_rank'],
                             ];
                         })->values();
-
-                        // Fallback ranks: %Target ke basis par (same % = same rank)
-                        $pctList = $rankingRows->pluck('pct_target');
-                        $rankingRows = $rankingRows->map(function ($r) use ($pctList) {
-                            $r['debtor_rank']   = $r['debtor_rank']   ?? ($pctList->filter(fn ($p) => $p < $r['pct_target'])->count() + 1);
-                            $r['priority_rank'] = $r['priority_rank'] ?? ($pctList->filter(fn ($p) => $p > $r['pct_target'])->count() + 1);
-                            return $r;
-                        });
 
                         $rowClassMap = [
                             'Balance'               => 'table-warning',
@@ -688,6 +697,111 @@
                                             </tbody>
                                         </table>
                                     </div>
+
+                                    <!-- ===== INTEREST COST table ===== -->
+                                    <div class="table-responsive d-none" id="ledgerVoucherInterestWrap" style="max-height: 55vh; overflow: auto;">
+
+                                        <!-- Summary -->
+                                        <table class="table table-bordered align-middle mb-3">
+                                            <tbody>
+                                                <tr>
+                                                    <th width="30%">Rate Of Interest</th>
+                                                    <td id="intPartyRate" class="text-end">-</td>
+                                                    <th width="30%">Interest Due Total</th>
+                                                    <td id="intTotal" class="text-end fw-bold">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Interest Due Invoices Pending</th>
+                                                    <td id="intSummaryPending" class="text-end fw-bold">-</td>
+                                                    <th>Settlement Request Amount</th>
+                                                    <td id="intSettlementRequest" class="text-end fw-bold">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Interest Received Amount</th>
+                                                    <td id="intSettlementReceived" class="text-end fw-bold text-success">-</td>
+                                                    <th>Interest Waived</th>
+                                                    <td id="intWaivedTotal" class="text-end fw-bold text-danger">-</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+
+                                        <!-- Tabs -->
+                                        <ul class="nav nav-pills mb-3" id="interestTabs" role="tablist">
+                                            <li class="nav-item me-2" role="presentation">
+                                                <button class="nav-link active" id="intTabReceivedBtn" type="button" role="tab"
+                                                        data-bs-toggle="pill" data-bs-target="#intTabReceived"
+                                                        aria-controls="intTabReceived" aria-selected="true">
+                                                    Interest Due Invoices <span id="intReceivedLabel">Received</span>
+                                                    <span class="badge bg-primary ms-1" id="intReceivedCount">0</span>
+                                                </button>
+                                            </li>
+                                            <li class="nav-item me-2" role="presentation">
+                                                <button class="nav-link" id="intTabPendingBtn" type="button" role="tab"
+                                                        data-bs-toggle="pill" data-bs-target="#intTabPending"
+                                                        aria-controls="intTabPending" aria-selected="false">
+                                                    Interest Due Invoices Pending
+                                                    <span class="badge bg-primary ms-1" id="intPendingCount">0</span>
+                                                </button>
+                                            </li>
+                                        </ul>
+
+                                        <div class="tab-content">
+                                            <!-- Tab 1: Invoices Received / Paid -->
+                                            <div class="tab-pane fade show active" id="intTabReceived" role="tabpanel" aria-labelledby="intTabReceivedBtn">
+                                                <table class="table table-bordered table-hover align-middle mb-0 text-end">
+                                                    <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                        <tr>
+                                                            <th class="text-start">INV No</th>
+                                                            <th>Inv <span class="int-cleared-label">Recd</span> Date</th>
+                                                            {{-- <th>Amount</th> --}}
+                                                            <th>Int Pending</th>
+                                                            <th class="text-center">Days</th>
+                                                            <th>Int on Int</th>
+                                                            <th>Interest Due</th>
+                                                            <th class="text-center">Settlement Status</th>   <!-- NEW -->
+                                                            <th>Settlement Amount</th>                        <!-- NEW -->
+                                                            <th>Interest Waived</th>                          <!-- NEW -->
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody id="intReceivedBody">
+                                                        <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
+                                                    </tbody>
+                                                    <tfoot>
+                                                        <tr>
+                                                            <th colspan="6" class="text-end">Interest Due Invoices <span class="int-cleared-label">Received</span></th>
+                                                            <th id="intReceivedTotal">-</th>
+                                                            <th colspan="3"></th>
+                                                        </tr>
+                                                    </tfoot>
+                                                </table>
+                                            </div>
+
+                                            <!-- Tab 2: Invoices Pending -->
+                                            <div class="tab-pane fade" id="intTabPending" role="tabpanel" aria-labelledby="intTabPendingBtn">
+                                                <table class="table table-bordered table-hover align-middle mb-0 text-end">
+                                                    <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                        <tr>
+                                                            <th class="text-start">Date</th>
+                                                            <th>Due Date</th>
+                                                            <th>INV No</th>
+                                                            <th class="text-center">Days</th>
+                                                            <th>Amount</th>
+                                                            <th>Interest Due</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody id="intPendingBody">
+                                                        <tr><td colspan="6" class="text-center text-muted">No data loaded</td></tr>
+                                                    </tbody>
+                                                    <tfoot>
+                                                        <tr>
+                                                            <th colspan="5" class="text-end">Interest Due Invoices Pending</th>
+                                                            <th id="intPendingTotal">-</th>
+                                                        </tr>
+                                                    </tfoot>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                                 <div class="modal-footer justify-content-between">
                                     <a href="javascript:void(0);" id="ledgerVoucherViewAllLink" target="_blank" class="btn btn-outline-primary btn-sm">
@@ -709,7 +823,7 @@
                                 </div>
                                 <div class="modal-body">
                                     <div class="mb-2">
-                                        <div class="input-group input-group-sm" style="max-width:300px;">
+                                        <div class="input-group input-group-sm" style="max-width:100%;">
                                             <span class="input-group-text"><i class="fa fa-search"></i></span>
                                             <input type="text" id="debtorRankingSearch" class="form-control" placeholder="Search debtor...">
                                         </div>
@@ -720,10 +834,11 @@
                                             <thead>
                                                 <tr>
                                                     <th>Debtor</th>
-                                                    <th class="text-end">Overdue</th>
+                                                    <th class="text-end">Monthwise Balance Overdue  & target  report</th>
                                                     <th class="text-end">Not Due</th>
                                                     <th class="text-end">Total Due</th>
-                                                    <th class="text-end">Target</th>
+                                                    <th class="text-end">Target Balance</th>
+                                                    <th class="text-end">Target Collection</th>
                                                     <th class="text-end">%Overdue</th>
                                                     <th class="text-end">% Not Due</th>
                                                     <th class="text-end">% Target</th>
@@ -740,19 +855,22 @@
                                                         <td class="text-end">{{ $fmt($r['not_due']) }}</td>
                                                         <td class="text-end">{{ $fmt($r['total_due']) }}</td>
                                                         <td class="text-end">{{ $fmt($r['target']) }}</td>
+                                                        <td class="text-end">{{ $fmt($r['target_collection']) }}</td> 
                                                         <td class="text-end">{{ $r['pct_overdue'] }}%</td>
                                                         <td class="text-end">{{ $r['pct_not_due'] }}%</td>
-                                                        <td class="text-end">{{ $r['pct_target'] }}</td>
-                                                        <td>{{ $r['priority_rank'] }}</td>
-                                                        <td>{{ $r['debtor_rank'] }}</td>
+                                                        <td class="text-end">{{ $r['pct_target'] ?? '-' }}</td>
+                                                        <td>{{ $r['priority_rank'] ?? '-' }}</td>
+                                                        <td>{{ $r['debtor_rank'] ?? '-' }}</td>
                                                         <td>
-                                                            <span class="badge" style="background-color: {{ $rankColorMap[$r['class']] ?? '#adb5bd' }};">
-                                                                {{ $r['class'] }}
-                                                            </span>
+                                                            @if($r['class'])
+                                                                <span class="badge" style="background-color: {{ $rankColorMap[$r['class']] }};">{{ $r['class'] }}</span>
+                                                            @else
+                                                                -
+                                                            @endif
                                                         </td>
                                                     </tr>
                                                 @empty
-                                                    <tr><td colspan="11" class="text-center text-muted">No Debtors Found</td></tr>
+                                                    <tr><td colspan="12" class="text-center text-muted">No Debtors Found</td></tr>
                                                 @endforelse
                                             </tbody>
                                         </table>
@@ -970,6 +1088,8 @@
                                                     @endphp
 
                                                     <div class="accordion-item mb-3 border rounded shadow-sm"
+                                                        data-ledger="{{ $l['name'] }}"
+                                                        data-under="{{ $l['under'] ?? '' }}"
                                                         data-status="{{ $l['status'] ?? 'secondary' }}"
                                                         data-rank="{{ $rk }}"
                                                         data-overlimit="{{ !empty($l['overlimit']) ? 1 : 0 }}"
@@ -1024,7 +1144,7 @@
                                                                                         <th width="40%">{{ $label }}</th>
                                                                                         <td>
                                                                                             <span class="ledger-field-value">
-                                                                                                <strong>₹ {{ $fmt($value) }}</strong>
+                                                                                                <strong @if($label === 'Interest Cost') class="js-interest-cost-val" @endif>₹ {{ $fmt($value) }}</strong>
                                                                                                 <i class="fa fa-file-invoice"></i>
                                                                                             </span>
                                                                                         </td>
@@ -1105,6 +1225,8 @@
                                                         $rankLabel = $rankLabelMap[$rk] ?? 'Unranked';
                                                     @endphp
                                                     <div class="accordion-item mb-3 border rounded shadow-sm"
+                                                        data-ledger="{{ $l['name'] }}"
+                                                        data-under="{{ $l['under'] ?? '' }}"
                                                         data-status="{{ $l['status'] ?? 'secondary' }}"
                                                         data-rank="{{ $rk }}"
                                                         data-overlimit="{{ !empty($l['overlimit']) ? 1 : 0 }}"
@@ -1159,7 +1281,7 @@
                                                                                         <th width="40%">{{ $label }}</th>
                                                                                         <td>
                                                                                             <span class="ledger-field-value">
-                                                                                                <strong>₹ {{ $fmt($value) }}</strong>
+                                                                                                <strong @if($label === 'Interest Cost') class="js-interest-cost-val" @endif>₹ {{ $fmt($value) }}</strong>
                                                                                                 <i class="fa fa-file-invoice"></i>
                                                                                             </span>
                                                                                         </td>
@@ -1307,6 +1429,96 @@
                     });
                 }
 
+
+                // ===== INTEREST COST modal: DB se data =====
+                function renderInterestData(ledger, under) {
+                    const amt = n => (n === null || n === undefined || n === '') ? '-' : fmtExact(n);
+
+                    const rs  = n => '₹ ' + amt(n);
+                    const fmtD = d => {
+                        if (!d) return '-';
+                        const o = new Date(d);
+                        return isNaN(o.getTime()) ? d : fmtDateShared(o);
+                    };
+                    const isCreditor = (under === 'Sundry Creditors');
+                    const emptyR = '<tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>';
+                    const emptyP = '<tr><td colspan="6" class="text-center text-muted">No data loaded</td></tr>';
+
+                    $('.int-cleared-label').text(isCreditor ? 'Paid' : 'Recd');
+                    $('#intReceivedLabel').text(isCreditor ? 'Paid' : 'Received');
+                    $('#intPartyRate, #intTotal, #intReceivedTotal, #intPendingTotal, #intSummaryReceived, #intSummaryPending, #intSettlementRequest, #intSettlementReceived, #intWaivedTotal').text('-');
+                    $('#intReceivedBody').html(emptyR);
+                    $('#intPendingBody').html(emptyP);
+
+                    $('#intReceivedCount, #intPendingCount').text('0');
+                    bootstrap.Tab.getOrCreateInstance(document.getElementById('intTabReceivedBtn')).show();
+
+ 
+                    $('#ledgerVoucherLoading').removeClass('d-none');
+
+                    $.ajax({
+                        url: "{{ route('owner.tally.ledger.interest-data') }}",
+                        method: "GET",
+                        dataType: "json",
+                        data: { company: currentCompanyName, ledger: ledger, under: under },
+                        success: function (res) {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+
+                            $('#intPartyRate').text(res.party_rate != null ? res.party_rate + '%' : '-');
+                            $('#intTotal').text(rs(res.total ?? 0));
+                            $('#intReceivedTotal').text(rs(res.received_total ?? 0));
+                            $('#intPendingTotal').text(rs(res.pending_total ?? 0));
+                            $('#intSummaryReceived').text(rs(res.received_total ?? 0));
+                            $('#intSummaryPending').text(rs(res.pending_total ?? 0));
+                            $('#intSettlementRequest').text(rs(res.settlement_request_total ?? 0));
+                            $('#intSettlementReceived').text(rs(res.settlement_received_total ?? 0));
+                            $('#intWaivedTotal').text(rs(res.interest_waived_total ?? 0));
+
+                            let rHtml = '';
+                            (res.received || []).forEach(function (r) {
+                                rHtml += `<tr>
+                                    <td class="text-start">${r.inv_no ?? '-'}</td>
+                                    <td>${fmtD(r.recd_date)}</td>
+                                    <td>${rs(r.int_pending)}</td>
+                                    <td class="text-center"><span class="badge bg-danger">${r.days ?? '-'} days</span></td>
+                                    <td>${rs(r.int_on_int)}</td>
+                                    <td class="fw-bold">${rs(r.interest_due)}</td>
+                                    <td class="text-center">
+                                        ${r.settlement_status
+                                            ? `<span class="badge ${r.settlement_status === 'settled' ? 'bg-success' : 'bg-warning text-dark'}">
+                                                ${r.settlement_status.charAt(0).toUpperCase() + r.settlement_status.slice(1)}
+                                            </span>`
+                                            : '-'}
+                                    </td>
+                                    <td>${rs(r.settlement_amount)}</td>
+                                    <td class="fw-bold">${rs(r.interest_waived)}</td>
+                                </tr>`;
+                            });
+                            $('#intReceivedBody').html(rHtml || '<tr><td colspan="10" class="text-center text-muted">No data found</td></tr>');
+
+                            $('#intReceivedCount').text((res.received || []).length);
+                            let pHtml = '';
+                            (res.pending || []).forEach(function (r) {
+                                pHtml += `<tr>
+ 
+                                    <td class="text-start">${fmtD(r.date)}</td>
+                                    <td>${fmtD(r.due_date)}</td>
+                                    <td>${r.inv_no ?? '-'}</td>
+                                    <td class="text-center"><span class="badge bg-danger">${r.days ?? '-'} days</span></td>
+                                    <td>${rs(r.amount)}</td>
+                                    <td class="fw-bold">${rs(r.interest_due)}</td>
+                                </tr>`;
+                            });
+                            $('#intPendingBody').html(pHtml || '<tr><td colspan="6" class="text-center text-muted">No data found</td></tr>');
+
+                            $('#intPendingCount').text((res.pending || []).length);
+                        },
+                        error: function () {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+                            $('#ledgerVoucherError').removeClass('d-none').text('Could not load interest data.');
+                        }
+                    });
+                }
                 // ===== Per-ledger, per-field (Balance / Balance Overdue / Target / Sale / ...) voucher modal =====
                 //
                 // "Balance"         -> #ledgerBalanceTable (Original / Received-Paid / Pending)
@@ -1320,17 +1532,18 @@
                     let isTarget   = (field === 'Balance Target');
                     let isSale     = (field === 'Sale');
                     let isCreditor = (under === 'Sundry Creditors');
+                    let isInterest = (field === 'Interest Cost');
 
                     $('#ledgerVoucherModalTitle').text(
-                        ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? (isNotDue ? ' (Not Due Vouchers)' : ' (Overdue Vouchers)') : (isTarget ? ' (Month-wise)' : ' Vouchers')))
+                        ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? (isNotDue ? ' (Not Due Vouchers)' : ' (Overdue Vouchers)') : (isTarget ? ' (Month-wise)' : (isInterest ? ' (Interest Breakdown)' : ' Vouchers'))))
                     );
                     $('#ledgerVoucherError').addClass('d-none').text('');
                     $('#ledgerVoucherLoading').removeClass('d-none');
-
-                    $('#ledgerVoucherNormalWrap').toggleClass('d-none', isBalance || isDue || isTarget);
+                    $('#ledgerVoucherNormalWrap').toggleClass('d-none', isBalance || isDue || isTarget || isInterest);
                     $('#ledgerVoucherBalanceWrap').toggleClass('d-none', !isBalance);
                     $('#ledgerVoucherDueWrap').toggleClass('d-none', !isDue);
                     $('#ledgerVoucherTargetWrap').toggleClass('d-none', !isTarget);
+                    $('#ledgerVoucherInterestWrap').toggleClass('d-none', !isInterest);
 
                     $('#ledgerVoucherBody').html('<tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>');
                     $('#ledgerBalanceBody').html('<tr><td colspan="5" class="text-center text-muted">No vouchers loaded</td></tr>');
@@ -1369,6 +1582,11 @@
                     // ===== TARGET: DB se data =====
                     if (isTarget) {
                         renderTargetData(ledger, under);
+                        return;
+                    }
+
+                    if (isInterest) {
+                        renderInterestData(ledger, under);
                         return;
                     }
 
@@ -1905,6 +2123,11 @@
 
                 // Live search - Voucher Modal (Normal / Balance / Balance Overdue / Target, jo table visible ho usi me)
                 $(document).on('input', '#ledgerVoucherSearch', function () {
+                    if (!$('#ledgerVoucherInterestWrap').hasClass('d-none')) {
+                        filterModalTableRows('ledgerVoucherSearch', 'intReceivedBody');
+                        filterModalTableRows('ledgerVoucherSearch', 'intPendingBody');
+                        return;
+                    }
                     let tbodyId = 'ledgerVoucherBody';
                     if (!$('#ledgerVoucherBalanceWrap').hasClass('d-none')) {
                         tbodyId = 'ledgerBalanceBody';
@@ -1934,6 +2157,30 @@
                 });
                 $('#debtorRankingModal').on('hidden.bs.modal', function () {
                     $('#debtorRankingSearch').val('').trigger('input');
+                });
+
+                $(document).on('shown.bs.collapse', '.accordion-collapse', function () {
+                    const $item = $(this).closest('.accordion-item[data-ledger]');
+                    const $val  = $item.find('.js-interest-cost-val');
+                    if (!$item.length || !$val.length || $item.data('intLoaded')) return;
+
+                    $item.data('intLoaded', true);
+                    $.ajax({
+                        url: "{{ route('owner.tally.ledger.interest-data') }}",
+                        method: "GET",
+                        dataType: "json",
+                        data: {
+                            company: currentCompanyName,
+                            ledger: $item.attr('data-ledger'),
+                            under: $item.attr('data-under')
+                        },
+                        success: function (res) {
+                            $val.text('₹ ' + fmtExact(res.total ?? 0));
+                        },
+                        error: function () {
+                            $item.data('intLoaded', false);
+                        }
+                    });
                 });
             </script>
         </div>

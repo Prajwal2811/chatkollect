@@ -25,6 +25,8 @@ class TallyVoucher extends Model
         'master_id',
         'credit_period_source',
         'due_date',
+        'settlement_status',
+        'settlement_amount',
     ];
 
     protected $casts = [

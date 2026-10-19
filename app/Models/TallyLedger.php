@@ -33,8 +33,8 @@ class TallyLedger extends Model
         'overlimit',
         'mark',
         'red_reason',
-        'maintain_bill_by_bill',          // ← add if missing
-        'activate_interest_calculation',  // ← add if missing
+        // 'maintain_bill_by_bill',          // ← add if missing
+        // 'activate_interest_calculation',  // ← add if missing
         
     ];
 

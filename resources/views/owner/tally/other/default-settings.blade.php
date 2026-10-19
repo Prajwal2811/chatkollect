@@ -100,38 +100,6 @@
                 color: #d99b00;
             }
 
-            /* Bill-by-bill indicator */
-            .billwise-badge {
-                display: inline-flex;
-                align-items: center;
-                gap: 4px;
-                font-size: 11px;
-                font-weight: 600;
-                padding: 3px 8px;
-                border-radius: 20px;
-                cursor: help;
-            }
-
-            .billwise-badge.is-yes {
-                background: #fdeeee;
-                color: #b02a2a;
-                border: 1px solid #f3caca;
-            }
-
-            .billwise-badge.is-no {
-                background: #eef7ee;
-                color: #2e7d32;
-                border: 1px solid #cfe9cf;
-            }
-
-            .billwise-note {
-                display: block;
-                margin-top: 3px;
-                font-size: 11px;
-                color: #b02a2a;
-                font-weight: 500;
-            }
-
             /* Value-source indicator (Tally vs Default) */
             .source-badge {
                 display: inline-block;
@@ -155,6 +123,12 @@
                 background: #fff7ed;
                 color: #9a3412;
                 border: 1px solid #fed7aa;
+            }
+
+            .source-badge.source-manual {
+                background: #ecfdf5;
+                color: #065f46;
+                border: 1px solid #a7f3d0;
             }
 
             /* Source filter bar */
@@ -182,18 +156,6 @@
             @php
                 $fmt = fn ($n) => number_format((float) $n, 2);
 
-                // Helper: detect whether a ledger has "Maintain balances bill-by-bill" = Yes in Tally.
-                // Accepts common truthy representations coming from the Tally XML/JSON import
-                // (Yes / yes / 1 / true) so it works regardless of how the importer normalizes it.
-                $isBillWise = function ($l) {
-                    $val = $l['maintain_bill_by_bill'] ?? $l['maintain_balance_bill_by_bill'] ?? null;
-                    return in_array(
-                        strtolower(trim((string) $val)),
-                        ['yes'],
-                        true
-                    );
-                };
-
                 // Helper: render a small "Tally" / "Default" badge next to a value, based on
                 // credit_period_source / interest_rate_source / ledger_mobile_number_source
                 // coming from the backend.
@@ -201,21 +163,17 @@
                 $sourceBadge = function ($source) {
                     $source = strtolower(trim((string) $source));
 
-                    if ($source === 'tally') {
-                        return '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>';
-                    }
-
-                    if ($source === 'default') {
-                        return '<span class="source-badge source-default" title="This value is the common default you set">Default</span>';
-                    }
-
-                    return '';
+                    return match ($source) {
+                        'tally'   => '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>',
+                        'default' => '<span class="source-badge source-default" title="This value is the common default you set">Default</span>',
+                        'manual'  => '<span class="source-badge source-manual" title="This value was entered manually">Manual</span>',
+                        default   => '',
+                    };
                 };
 
-                // Normalized (lowercase, trimmed) source value used for row data-attributes / filtering.
                 $sourceKey = function ($source) {
                     $source = strtolower(trim((string) $source));
-                    return in_array($source, ['tally', 'default'], true) ? $source : '';
+                    return in_array($source, ['tally', 'default', 'manual'], true) ? $source : '';
                 };
 
                 $debtorLedgers   = collect($ledgers)->filter(fn ($l) => ($l['under'] ?? '') == 'Sundry Debtors')->values();
@@ -355,6 +313,7 @@
                                                     <option value="">All</option>
                                                     <option value="tally">Tally</option>
                                                     <option value="default">Default</option>
+                                                    <option value="manual">Manual</option>
                                                 </select>
                                             </div>
                                             <div>
@@ -363,6 +322,7 @@
                                                     <option value="">All</option>
                                                     <option value="tally">Tally</option>
                                                     <option value="default">Default</option>
+                                                    <option value="manual">Manual</option>
                                                 </select>
                                             </div>
                                             <div>
@@ -371,6 +331,7 @@
                                                     <option value="">All</option>
                                                     <option value="tally">Tally</option>
                                                     <option value="default">Default</option>
+                                                    <option value="manual">Manual</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -454,7 +415,6 @@
                                             <tbody>
                                                 @forelse($debtorLedgers as $index => $l)
                                                     @php
-                                                        $billWise = $isBillWise($l);
                                                         $creditSrc = $sourceKey($l['credit_period_source'] ?? null);
                                                         $interestSrc = $sourceKey($l['interest_rate_source'] ?? null);
                                                         $mobileSrc = $sourceKey($l['ledger_mobile_number_source'] ?? null);
@@ -507,6 +467,7 @@
                                                     <option value="">All</option>
                                                     <option value="tally">Tally</option>
                                                     <option value="default">Default</option>
+                                                    <option value="manual">Manual</option>
                                                 </select>
                                             </div>
                                             <div>
@@ -515,6 +476,7 @@
                                                     <option value="">All</option>
                                                     <option value="tally">Tally</option>
                                                     <option value="default">Default</option>
+                                                    <option value="manual">Manual</option>
                                                 </select>
                                             </div>
                                             <div>
@@ -523,6 +485,7 @@
                                                     <option value="">All</option>
                                                     <option value="tally">Tally</option>
                                                     <option value="default">Default</option>
+                                                    <option value="manual">Manual</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -606,7 +569,6 @@
                                             <tbody>
                                                 @forelse($creditorLedgers as $index => $l)
                                                     @php
-                                                        $billWise = $isBillWise($l);
                                                         $creditSrc = $sourceKey($l['credit_period_source'] ?? null);
                                                         $interestSrc = $sourceKey($l['interest_rate_source'] ?? null);
                                                         $mobileSrc = $sourceKey($l['ledger_mobile_number_source'] ?? null);
@@ -700,19 +662,15 @@
         function sourceBadgeHtml(source) {
             const s = String(source || '').toLowerCase().trim();
 
-            if (s === 'tally') {
-                return '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>';
-            }
-            if (s === 'default') {
-                return '<span class="source-badge source-default" title="This value is the common default you set">Default</span>';
-            }
+            if (s === 'tally')   return '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>';
+            if (s === 'default') return '<span class="source-badge source-default" title="This value is the common default you set">Default</span>';
+            if (s === 'manual')  return '<span class="source-badge source-manual" title="This value was entered manually">Manual</span>';
             return '';
         }
 
-        // Normalize a source value to 'tally' | 'default' | '' for data-attributes / filtering.
         function sourceKeyJs(source) {
             const s = String(source || '').toLowerCase().trim();
-            return (s === 'tally' || s === 'default') ? s : '';
+            return ['tally', 'default', 'manual'].includes(s) ? s : '';
         }
 
         // ---------- Source (Tally / Default) filter for both tables ----------
@@ -817,7 +775,6 @@
         }
 
         function buildDebtorRow(l, index) {
-            const billWise = String(l.maintain_bill_by_bill || '').toLowerCase() === 'yes';
             const creditSrc = sourceKeyJs(l.credit_period_source);
             const interestSrc = sourceKeyJs(l.interest_rate_source);
             const mobileSrc = sourceKeyJs(l.ledger_mobile_number_source);
@@ -843,7 +800,6 @@
         }
 
         function buildCreditorRow(l, index) {
-            const billWise = String(l.maintain_bill_by_bill || '').toLowerCase() === 'yes';
             const creditSrc = sourceKeyJs(l.credit_period_source);
             const interestSrc = sourceKeyJs(l.interest_rate_source);
             const mobileSrc = sourceKeyJs(l.ledger_mobile_number_source);

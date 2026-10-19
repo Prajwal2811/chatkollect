@@ -257,33 +257,49 @@
                                                         data-month="{{ $rowMonth }}"
                                                         data-name="{{ $row['name'] }}"
                                                         data-mobile="{{ $row['mobile'] }}"
-                                                        data-balance="{{ $row['balance'] ?? 0 }}"
-                                                        data-target="{{ $row['target'] ?? 0 }}"
+                                                        data-balance="{{ $row['closing_balance'] ?? 0 }}"
+                                                        data-target="{{ $row['targetBalance'] ?? 0 }}"
                                                         data-followup-type="{{ $rowType }}">
                                                         <td>{{ $row['id'] }}</td>
                                                         <td>{{ $row['name'] }}</td>
                                                         <td>{{ $row['mobile'] }}</td>
 
                                                         <td class="followup-type-cell">
-                                                            <span class="badge type-pill">{{ $rowType }}</span>
+                                                            @if($row['clearStatus'] == 0)<span class="badge type-pill">{{ $rowType }}</span>@endif
                                                         </td>
 
                                                         <td class="followup-details-cell">
                                                             <div class="d-flex flex-wrap gap-2">
-                                                                @foreach($chips as $chip)
-                                                                    <span class="detail-chip">
-                                                                        <strong>{{ $chip['label'] }}:</strong> {{ $chip['value'] }}
-                                                                    </span>
-                                                                @endforeach
+                                                                @if($row['clearStatus'] == 0)
+                                                                    @foreach($chips as $chip)
+                                                                        <span class="detail-chip">
+                                                                            <strong>{{ $chip['label'] }}:</strong> {{ $chip['value'] }}
+                                                                        </span>
+                                                                    @endforeach
+                                                                @else
+                                                                   @php $chips1[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance'] ?? 0), 2)]; @endphp
+                                                                    @foreach($chips1 as $chip)
+                                                                        <span class="detail-chip">
+                                                                            <strong>{{ $chip['label'] }}:</strong> {{ $chip['value'] }}
+                                                                        </span>
+                                                                    @endforeach
+                                                                @endif
                                                             </div>
                                                         </td>
 
                                                         <td>
                                                             @php
-                                                                $accountantStatus = rand(0, 1) ? 'Pending' : 'Responded';
+                                                            
+                                                                $accountantStatus = $row['clearStatus'] == 0 ? $row['status'] ?: 'Not Assign Yet' : 'Not Assign Yet';
+
+                                                                $statusClass = match ($accountantStatus) {
+                                                                    'Pending' => 'bg-warning',
+                                                                    'Responded' => 'bg-success',
+                                                                    default => 'bg-secondary',
+                                                                };
                                                             @endphp
 
-                                                            <span class="badge accountant-status-badge {{ $accountantStatus === 'Pending' ? 'bg-warning' : 'bg-success' }}">
+                                                            <span class="badge accountant-status-badge {{ $statusClass }}">
                                                                 {{ $accountantStatus }}
                                                             </span>
                                                         </td>
@@ -338,14 +354,18 @@
                                                         </div>
                                                     </div>
                                                 </div>
+                                                <form id="quickSmartForm">
+                                                    @csrf
 
+                                                    <input type="hidden" name="company_id" value="1">
+                                                    <input type="hidden" name="type" value="Follow Up-Balances" id="hiddenTypeInput">
                                                 <div class="card-body">
                                                     <div class="d-flex align-items-center gap-2 mb-3 bulk-action-bar" data-pane="pane-{{ $key }}">
                                                         <span class="small text-muted">
                                                             Applies to <span class="visible-count">0</span> ledgers currently shown
                                                         </span>
 
-                                                        <select class="form-select form-select-sm bulk-action-select" style="width:200px;">
+                                                        <select name="action" class="form-select form-select-sm bulk-action-select" style="width:180px;">
                                                             <option value="" selected>Select action</option>
                                                             <option value="allocate_tele_call">Allocate to tele call</option>
                                                             <option value="call">Call</option>
@@ -354,9 +374,16 @@
                                                             <option value="escalation">Escalation</option>
                                                             <option value="no_action">No action</option>
                                                         </select>
-
+                                                        
+                                                        <select name="frequency" id="allocateFrequencyBulk" class="form-select form-select-sm" style="width:180px;">
+                                                            <option value="" selected>Select frequency</option>
+                                                            <option value="daily">Daily</option>
+                                                            <option value="weekly">Weekly</option>
+                                                            <option value="monthly">Monthly</option>
+                                                        </select>
+                                                       
                                                         {{-- WhatsApp Template dropdown for bulk actions, hidden by default --}}
-                                                        <select class="form-select form-select-sm bulk-template-select" style="width:180px; display:none;">
+                                                        <select name="template" class="form-select form-select-sm bulk-template-select" style="width:180px; display:none;">
                                                             <option value="" selected>Select template</option>
                                                             <option value="template_1">Template 1</option>
                                                             <option value="template_2">Template 2</option>
@@ -369,7 +396,7 @@
                                                             <label class="mb-0 small text-muted" for="pctTargetFilter-{{ $key }}">Show:</label>
 
                                                             @if($key === 'targets_months')
-                                                                <select id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:160px;" data-pane="pane-{{ $key }}" data-filter-type="month">
+                                                                <select name="TargetFilterMonth" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="month">
                                                                     @foreach(range(0, 5) as $m)
                                                                         @php
                                                                             $monthValue = now()->subMonths($m)->format('Y-m');
@@ -379,21 +406,21 @@
                                                                     @endforeach
                                                                 </select>
                                                             @elseif($key === 'days_agewise')
-                                                                <select id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:170px;" data-pane="pane-{{ $key }}" data-filter-type="agewise">
+                                                                <select name="TargetFilterAgewise" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="agewise">
                                                                     <option value="total" selected>Total</option>
                                                                     <option value="15">More than 15 days</option>
                                                                     <option value="45">More than 45 days</option>
                                                                     <option value="90">More than 90 days</option>
                                                                 </select>
                                                             @elseif($key === 'days_10_20_30')
-                                                                <select id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:170px;" data-pane="pane-{{ $key }}" data-filter-type="days3">
+                                                                <select name="TargetFilterDays3" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="days3">
                                                                     <option value="all" selected>All Days</option>
                                                                     <option value="10">More than 10 days</option>
                                                                     <option value="20">More than 20 days</option>
                                                                     <option value="30">More than 30 days</option>
                                                                 </select>
                                                             @else
-                                                                <select id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:160px;" data-pane="pane-{{ $key }}" data-filter-type="pct">
+                                                                <select name="TargetFilterPct" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="pct">
                                                                     <option value="top_25">Top -25 %</option>
                                                                     <option value="top_50">Top -50 %</option>
                                                                     <option value="top_75">Top -75 %</option>
@@ -405,9 +432,101 @@
                                                             @endif
                                                         </div>
 
-                                                        <button type="button" class="btn btn-success btn-sm bulk-apply-btn">Submit</button>
+                                                        <button type="submit" class="btn btn-success btn-sm bulk-apply-btn"  id="quickSmartSubmit">Submit</button>
                                                     </div>
+</form>
 
+<div id="quickSmartMessage"></div>
+<script>
+    document.querySelectorAll('#followupTabsNav button[data-bs-toggle="tab"]').forEach(function (tab) {
+
+    tab.addEventListener('shown.bs.tab', function (event) {
+
+        const selectedType = event.target.textContent.trim();
+        const hiddenTypeInput = document.getElementById('hiddenTypeInput');
+
+        console.log('Selected Type:', selectedType);
+        console.log('Hidden Input:', hiddenTypeInput);
+
+        if (hiddenTypeInput) {
+            hiddenTypeInput.value = selectedType;
+
+            console.log('Hidden Input Value:', hiddenTypeInput.value);
+        }
+    });
+
+});
+
+$(document).on('submit', '#quickSmartForm', function(e) {
+    e.preventDefault();
+
+    let form = $(this);
+    let submitBtn = $('#quickSmartSubmit');
+
+    // Clear previous errors
+    $('.text-danger').text('');
+    $('#quickSmartMessage').html('');
+
+    submitBtn.prop('disabled', true).text('Saving...');
+
+    $.ajax({
+        url: "{{ route('owner.tally.followup.saveBulkFollows') }}",
+        type: "POST",
+        data: form.serialize(),
+
+        success: function(response) {
+
+            if (response.status) {
+
+                $('#quickSmartMessage').html(
+                    '<div class="alert alert-success">' +
+                    response.message +
+                    '</div>'
+                );
+
+                // Optional: reset form
+                form[0].reset();
+
+            } else {
+
+                $('#quickSmartMessage').html(
+                    '<div class="alert alert-danger">' +
+                    response.message +
+                    '</div>'
+                );
+            }
+        },
+
+        error: function(xhr) {
+
+            if (xhr.status === 422) {
+
+                let errors = xhr.responseJSON.errors;
+
+                $.each(errors, function(field, messages) {
+
+                    $('.error-' + field).text(messages[0]);
+
+                    $('[name="' + field + '"]')
+                        .addClass('is-invalid');
+                });
+
+            } else {
+
+                $('#quickSmartMessage').html(
+                    '<div class="alert alert-danger">' +
+                    'Something went wrong. Please try again.' +
+                    '</div>'
+                );
+            }
+        },
+
+        complete: function() {
+            submitBtn.prop('disabled', false).text('Save');
+        }
+    });
+});
+</script>
                                                     <div class="table-responsive">
                                                         @php
                                                             $dummyRows = collect(range(1, 10))->map(function ($dummyIndex) use ($key) {
@@ -417,7 +536,7 @@
                                                                 $dummyDays    = $dummyIndex * 9;
                                                                 $dummyMonth   = now()->subMonths($dummyIndex % 6)->format('Y-m');
 
-                                                                $accountantStatuses = ['Already Assigned', 'Pending', 'Responded','Not assign Yet'];
+                                                                $accountantStatuses = ['Already Assigned', 'Pendingsssss', 'Responded','Not assign Yet'];
                                                                 $accountantStatus   = $accountantStatuses[array_rand($accountantStatuses)];
 
                                                                 return [
@@ -454,27 +573,34 @@
                                                                 </tr>
                                                             </thead>
                                                             <tbody>
-                                                                @foreach($dummyRows as $row)
+                                                                @php $i=1 ; @endphp
+                                                                @forelse($followUps as $row)
+                                                                @php
+                                                                    $dummyPct = $row['targetBalance'] > 0
+                                                                        ? round(($row['closing_balance'] / $row['targetBalance']) * 100, 2)
+                                                                        : 0;
+                                                                @endphp
+
                                                                     <tr
-                                                                        data-target-pct="{{ $row['pct'] }}"
-                                                                        data-days="{{ $row['days'] }}"
-                                                                        data-month="{{ $row['month'] }}"
+                                                                        data-target-pct="{{ abs($dummyPct) }}"
+                                                                        data-days="{{ rand(100, 999) }}"
+                                                                        data-month="{{ now()->subMonths(6)->format('Y-m') }}"
                                                                         data-id="{{ $row['id'] }}">
-                                                                        <td>{{ $row['sr'] }}</td>
+                                                                        <td>{{ $i }}</td>
                                                                         <td>{{ $row['name'] }}</td>
                                                                         <td>{{ $row['mobile'] }}</td>
-                                                                        <td>{{ number_format($row['balance'], 2) }}</td>
-                                                                        <td>{{ number_format($row['target'], 2) }}</td>
+                                                                        <td>{{ abs(  $row['closing_balance'] ?? 0 ) }}</td>
+                                                                        <td>{{ number_format( $row['targetBalance'] ?? 0  , 2) }}</td>
                                                                         @if($key === 'targets_months')
-                                                                            <td>{{ \Carbon\Carbon::createFromFormat('Y-m', $row['month'])->format('M Y') }}</td>
+                                                                            <td>{{ \Carbon\Carbon::createFromFormat('Y-m',  '2026-10')->format('M Y') }}</td>
                                                                         @elseif($key === 'days_agewise' || $key === 'days_10_20_30')
-                                                                            <td>{{ $row['days'] }}</td>
+                                                                            <td>{{ rand(100, 999) }}</td>
                                                                         @else
-                                                                            <td>{{ $row['pct'] }}%</td>
+                                                                            <td>{{ 12 }}%</td>
                                                                         @endif
                                                                         <td>
                                                                            @php
-                                                                                $badgeClass = match($row['accountant_status']) {
+                                                                                $badgeClass = match($row['status']) {
                                                                                     'Already Assigned' => 'bg-primary',
                                                                                     'Pending'           => 'bg-warning',
                                                                                     'Responded'         => 'bg-success',
@@ -484,11 +610,12 @@
                                                                             @endphp
                                                                              
                                                                             <span class="badge accountant-status-badge {{ $badgeClass }}">
-                                                                                {{ $row['accountant_status'] }}
+                                                                                {{ $row['status'] }}
                                                                             </span>
                                                                         </td>
                                                                     </tr>
-                                                                @endforeach
+                                                            @php $i++ ; @endphp
+                                                            @endforeach
                                                             </tbody>
                                                         </table>
                                                     </div>
@@ -583,7 +710,7 @@
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
-
+                        <div id="ajaxPopUpAlertWrapper"></div>
                         <p class="small text-muted mb-2">
                             Ledger: <span id="allocateSelectedName" class="fw-bold">-</span>
                         </p>
@@ -862,8 +989,8 @@
                     followupTable = $('#example12').DataTable({ fixedHeader: false });
                 }
 
-                function showAjaxAlert(message, type = 'success') {
-                    const wrapper = document.getElementById('ajaxAlertWrapper');
+                function showAjaxAlert(message, type = 'success',divId) {
+                    const wrapper = document.getElementById(divId);
                     if (!wrapper) return;
 
                     const alertId = 'ajaxAlert_' + Date.now();
@@ -905,7 +1032,7 @@
                     const allRows = document.querySelectorAll('#example12 tbody tr.ledger-row');
 
                     if (allRows.length === 0) {
-                        showAjaxAlert('No records found to clear.', 'danger');
+                        showAjaxAlert('No records found to clear.', 'danger', 'ajaxAlertWrapper');
                         return;
                     }
 
@@ -920,11 +1047,45 @@
                     });
 
                     if (matchedCount === 0) {
-                        showAjaxAlert(noRecordsMessage, 'danger');
+                        showAjaxAlert(noRecordsMessage, 'danger', 'ajaxAlertWrapper');
                         return;
                     }
+                    
+                    // Select URL based on statusClass
+                    const url = statusClass === 'bg-success'
+                        ? "{{ route('owner.tally.followup.clear-responded-status') }}"
+                        : "{{ route('owner.tally.followup.clear-status') }}";
 
-                    showAjaxAlert(successMessage, 'success');
+                    
+                    fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                        }
+                    })
+                    .then(function (response) {
+                        if (!response.ok) throw new Error('Request failed');
+                        return response.json().catch(() => ({}));
+                    })
+                    .then(function (data) {
+                        showAjaxAlert(successMessage, 'success', 'ajaxAlertWrapper');
+
+                        // allocateModal.hide();
+                        // selectedLedgerId = null;
+                        // selectedLedgerRow = null;
+                        setTimeout(function () {
+                            window.location.reload();
+                        }, 500);
+                    })
+                    .catch(function () {
+                        showAjaxAlert('Something went wrong while allocating. Please try again.', 'danger', 'ajaxAlertWrapper');
+                    })
+                    .finally(function () {
+                        self.disabled = false;
+                        self.textContent = originalText;
+                    });
+                        
                 }
 
                 // ================= CLEAR PENDING -> CONFIRM VIA ITS OWN MODAL =================
@@ -1086,12 +1247,12 @@
                         const templateValue = templateSelect ? templateSelect.value : '';
 
                         if (!actionValue) {
-                            showAjaxAlert('Please select an action.', 'danger');
+                            showAjaxAlert('Please select an action.', 'danger', 'ajaxPopUpAlertWrapper');
                             return;
                         }
 
                         if (actionValue === 'whatsapp' && !templateValue) {
-                            showAjaxAlert('Please select a WhatsApp template.', 'danger');
+                            showAjaxAlert('Please select a WhatsApp template.', 'danger', 'ajaxPopUpAlertWrapper');
                             return;
                         }
 
@@ -1111,20 +1272,20 @@
                         const templateValue = document.getElementById('allocateTemplate').value;
 
                         if (!selectedLedgerId) {
-                            showAjaxAlert('Please select a ledger.', 'danger');
+                            showAjaxAlert('Please select a ledger.', 'danger', 'ajaxPopUpAlertWrapper');
                             return;
                         }
                         if (!selectedTypeEl) {
-                            showAjaxAlert('Please select a Follow Up type.', 'danger');
+                            showAjaxAlert('Please select a Follow Up type.', 'danger', 'ajaxPopUpAlertWrapper');
                             return;
                         }
                         if (!actionValue || !frequencyValue) {
-                            showAjaxAlert('Please select both Action and Frequency.', 'danger');
+                            showAjaxAlert('Please select both Action and Frequency.', 'danger', 'ajaxPopUpAlertWrapper');
                             return;
                         }
                         // template required if action is whatsapp
                         if (actionValue === 'whatsapp' && !templateValue) {
-                            showAjaxAlert('Please select a WhatsApp template.', 'danger');
+                            showAjaxAlert('Please select a WhatsApp template.', 'danger', 'ajaxPopUpAlertWrapper');
                             return;
                         }
 
@@ -1133,7 +1294,7 @@
                         this.textContent = 'Assigning...';
                         const self = this;
 
-                        fetch("{{ url('owner/followup/update-action') }}", {
+                        fetch("{{ route('owner.tally.followup.update-action') }}", {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
@@ -1152,13 +1313,16 @@
                             return response.json().catch(() => ({}));
                         })
                         .then(function (data) {
-                            showAjaxAlert(data.message ?? 'Follow up allocated successfully!', 'success');
+                            showAjaxAlert(data.message ?? 'Follow up allocated successfully!', 'success', 'ajaxAlertWrapper');
                             allocateModal.hide();
                             selectedLedgerId = null;
                             selectedLedgerRow = null;
+                            setTimeout(function () {
+                                window.location.reload();
+                            }, 500);
                         })
                         .catch(function () {
-                            showAjaxAlert('Something went wrong while allocating. Please try again.', 'danger');
+                            showAjaxAlert('Something went wrong while allocating. Please try again.', 'danger', 'ajaxAlertWrapper');
                         })
                         .finally(function () {
                             self.disabled = false;

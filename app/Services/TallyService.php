@@ -243,8 +243,8 @@ class TallyService
                 'credit_period'                 => $creditPeriod ?: null,
                 'interest_rate'                 => $interestRate,
                 'interest_style'                => $interestStyle,
-                'maintain_bill_by_bill'         => $this->yesNo($this->childValue($node, 'ISBILLWISEON')),
-                'activate_interest_calculation' => $activateInterest,
+                // 'maintain_bill_by_bill'         => $this->yesNo($this->childValue($node, 'ISBILLWISEON')),
+                // 'activate_interest_calculation' => $activateInterest,
             ];
         }
 

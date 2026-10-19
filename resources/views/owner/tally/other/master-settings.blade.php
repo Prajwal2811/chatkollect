@@ -21,6 +21,12 @@
 
     <div class="content-body default-height">
         <style>
+
+            .source-badge.source-manual {
+                background: #ecfdf5;
+                color: #065f46;
+                border: 1px solid #a7f3d0;
+            }
             .mark-badge {
                 padding: 3px 10px;
                 border-radius: 12px;
@@ -147,22 +153,19 @@
                 $sourceBadge = function ($source) {
                     $source = strtolower(trim((string) $source));
 
-                    if ($source === 'tally') {
-                        return '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>';
-                    }
-
-                    if ($source === 'default') {
-                        return '<span class="source-badge source-default" title="This value is the common default you set">Default</span>';
-                    }
-
-                    return '';
+                    return match ($source) {
+                        'tally'   => '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>',
+                        'default' => '<span class="source-badge source-default" title="This value is the common default you set">Default</span>',
+                        'manual'  => '<span class="source-badge source-manual" title="This value was entered manually">Manual</span>',
+                        default   => '',
+                    };
                 };
 
-                // Normalized (lowercase, trimmed) source value used for row data-attributes / filtering.
                 $sourceKey = function ($source) {
                     $source = strtolower(trim((string) $source));
-                    return in_array($source, ['tally', 'default'], true) ? $source : '';
+                    return in_array($source, ['tally', 'default', 'manual'], true) ? $source : '';
                 };
+
             @endphp
 
             <div class="row">
@@ -215,6 +218,7 @@
                                                 <option value="">All</option>
                                                 <option value="tally">Tally</option>
                                                 <option value="default">Default</option>
+                                                <option value="manual">Manual</option>
                                             </select>
                                         </div>
                                         <div>
@@ -223,6 +227,7 @@
                                                 <option value="">All</option>
                                                 <option value="tally">Tally</option>
                                                 <option value="default">Default</option>
+                                                <option value="manual">Manual</option>
                                             </select>
                                         </div>
                                     </div>
@@ -233,6 +238,7 @@
                                                 <option value="">All</option>
                                                 <option value="tally">Tally</option>
                                                 <option value="default">Default</option>
+                                                <option value="manual">Manual</option>
                                             </select>
                                         </div>
                                         <div>
@@ -241,6 +247,7 @@
                                                 <option value="">All</option>
                                                 <option value="tally">Tally</option>
                                                 <option value="default">Default</option>
+                                                <option value="manual">Manual</option>
                                             </select>
                                         </div>
                                     </div>
@@ -495,20 +502,15 @@
         // Small "Tally" / "Default" badge builder, mirrors the Blade $sourceBadge helper.
         function sourceBadgeHtml(source) {
             const s = String(source || '').toLowerCase().trim();
-
-            if (s === 'tally') {
-                return '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>';
-            }
-            if (s === 'default') {
-                return '<span class="source-badge source-default" title="This value is the common default you set">Default</span>';
-            }
+            if (s === 'tally')   return '<span class="source-badge source-tally" title="This value is coming from Tally">Tally</span>';
+            if (s === 'default') return '<span class="source-badge source-default" title="This value is the common default you set">Default</span>';
+            if (s === 'manual')  return '<span class="source-badge source-manual" title="This value was entered manually">Manual</span>';
             return '';
         }
 
-        // Normalize a source value to 'tally' | 'default' | '' for data-attributes / filtering.
         function sourceKeyJs(source) {
             const s = String(source || '').toLowerCase().trim();
-            return (s === 'tally' || s === 'default') ? s : '';
+            return ['tally', 'default', 'manual'].includes(s) ? s : '';
         }
 
         // ---------- Multi mobile-number field helpers ----------
@@ -714,8 +716,8 @@
                         // 'default' whenever a value is saved manually from this modal. We pick
                         // that up from the response if present, otherwise fall back to 'default'
                         // since this is always a manual edit.
-                        let mobileSrc = res.mobile_source ? sourceKeyJs(res.mobile_source) : 'default';
-                        let creditSrc = res.credit_period_source ? sourceKeyJs(res.credit_period_source) : 'default';
+                        let mobileSrc = res.mobile_source ? sourceKeyJs(res.mobile_source) : 'manual';
+                        let creditSrc = res.credit_period_source ? sourceKeyJs(res.credit_period_source) : 'manual';
                         updateRowInTable(payload, mobileSrc, creditSrc);
 
                         let modalEl = document.getElementById('editLedgerModal');
