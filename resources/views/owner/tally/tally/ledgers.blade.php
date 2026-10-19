@@ -23,6 +23,7 @@
 
             <div class="content-body default-height">
                 <style>
+                      
                     .accordion-button:not(.collapsed) {
                         background-color: #f1f0f8;
                         color: #4E3F6B;
@@ -201,6 +202,9 @@
                     .int-xl .int-green  { background: #00ff00; font-weight: 700; text-align: center; }
                     .int-xl .int-head th { font-weight: 400; background: #fff; }
                     
+                    /* Base-rate columns / cells (grey) */
+                    .int-grey { background: #e9ecef !important; }
+                    .int-highlight { outline: 2px solid #4E3F6B; }
                 </style>
 
                 <div class="container-fluid">
@@ -731,6 +735,37 @@
                                             </tbody>
                                         </table>
 
+                                        <!-- Summary (Base Rate) -->
+                                        <div class="fw-bold small text-muted mb-1">Base Rate Calculation</div>
+                                        <table class="table table-bordered align-middle mb-3">
+                                            <tbody>
+                                                <tr>
+                                                    <th width="25%" class="int-grey">Base Rate Of Interest</th>
+                                                    <td id="intBaseRate" class="text-end int-grey" width="25%">-</td>
+                                                    <th width="25%" class="int-grey">Interest Due Invoices <span id="intTabLabelB">Received</span></th>
+                                                    <td id="intTabDueB" class="text-end fw-bold int-grey" width="25%">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th class="int-grey">Interest Due Invoices <span class="int-cleared-label">Received</span></th>
+                                                    <td id="intSummaryReceivedB" class="text-end fw-bold int-grey">-</td>
+                                                    <th class="int-grey">Settlement Request Amount</th>
+                                                    <td id="intSettlementRequestB" class="text-end fw-bold int-grey">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th class="int-grey">Interest Due Invoices Pending</th>
+                                                    <td id="intSummaryPendingB" class="text-end fw-bold int-grey">-</td>
+                                                    <th class="int-grey">Interest Received Amount</th>
+                                                    <td id="intSettlementReceivedB" class="text-end fw-bold text-success int-grey">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th class="int-grey">Interest Due Total</th>
+                                                    <td id="intTotalB" class="text-end fw-bold int-grey">-</td>
+                                                    <th class="int-grey">Interest Waived</th>
+                                                    <td id="intWaivedTotalB" class="text-end fw-bold text-danger int-grey">-</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+
                                         <!-- Tabs -->
                                         <ul class="nav nav-pills mb-3" id="interestTabs" role="tablist">
                                             <li class="nav-item me-2" role="presentation">
@@ -751,68 +786,31 @@
                                             </li>
                                         </ul>
 
-                                        <div class="tab-content">
-                                            <!-- Tab 1: Invoices Received / Paid -->
-                                            <div class="tab-pane fade show active" id="intTabReceived" role="tabpanel" aria-labelledby="intTabReceivedBtn">
-                                                <table class="table table-bordered table-hover align-middle mb-0 text-end">
-                                                    <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
-                                                        <tr>
-                                                            <th class="text-start">INV No</th>
-                                                            <th>Inv <span class="int-cleared-label">Recd</span> Date</th>
-                                                            {{-- <th>Amount</th> --}}
-                                                            <th>Int Pending</th>
-                                                            <th class="text-center">Days</th>
-                                                            <th>Int on Int</th>
-                                                            <th>Interest Due</th>
-                                                            <th class="text-center">Settlement Status</th>   <!-- NEW -->
-                                                            <th>Settlement Amount</th>                        <!-- NEW -->
-                                                            <th>Interest Waived</th>                          <!-- NEW -->
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody id="intReceivedBody">
-                                                        <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
-                                                    </tbody>
-                                                    <tfoot>
-                                                        <tr>
-                                                            <th colspan="5" class="text-end">Interest Due Invoices <span class="int-cleared-label">Received</span></th>
-                                                            <th id="intReceivedTotal">-</th>
-                                                            <th colspan="4"></th>
-                                                        </tr>
-                                                    </tfoot>
-                                                </table>
-                                            </div>
+                                            <div class="tab-content">
+                                                <!-- Tab 1: Invoices Received / Paid -->
+                                                <div class="tab-pane fade show active" id="intTabReceived" role="tabpanel" aria-labelledby="intTabReceivedBtn">
+                                                    <table class="table table-bordered table-hover align-middle mb-0 text-end">
+                                                        <thead id="intReceivedHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
+                                                        <tbody id="intReceivedBody">
+                                                            <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
+                                                        </tbody>
+                                                        <tfoot id="intReceivedFoot"></tfoot>
+                                                    </table>
+                                                </div>
 
-                                            <!-- Tab 2: Invoices Pending -->
-                                            <div class="tab-pane fade" id="intTabPending" role="tabpanel" aria-labelledby="intTabPendingBtn">
-                                                <table class="table table-bordered table-hover align-middle mb-0 text-end">
-                                                    <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
-                                                        <tr>
-                                                            <th class="text-start">Date</th>
-                                                            <th>Due Date</th>
-                                                            <th>INV No</th>
-                                                            <th class="text-center">Days</th>
-                                                            <th>Amount</th>
-                                                            <th>Interest Due</th>
-                                                            <th class="text-center">Settlement Status</th>
-                                                            <th>Settlement Amount</th>
-                                                            <th>Interest Waived</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody id="intPendingBody">
-                                                        <tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>
-                                                    </tbody>
-                                                    <tfoot>
-                                                        <tr>
-                                                            <th colspan="5" class="text-end">Interest Due Invoices Pending</th>
-                                                            <th id="intPendingTotal">-</th>
-                                                            <th colspan="3"></th>
-                                                        </tr>
-                                                    </tfoot>
-                                                </table>
+                                                <!-- Tab 2: Invoices Pending -->
+                                                <div class="tab-pane fade" id="intTabPending" role="tabpanel" aria-labelledby="intTabPendingBtn">
+                                                    <table class="table table-bordered table-hover align-middle mb-0 text-end">
+                                                        <thead id="intPendingHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
+                                                        <tbody id="intPendingBody">
+                                                            <tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>
+                                                        </tbody>
+                                                        <tfoot id="intPendingFoot"></tfoot>
+                                                    </table>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
-                                </div>
                                 <div class="modal-footer justify-content-between">
                                     <a href="javascript:void(0);" id="ledgerVoucherViewAllLink" target="_blank" class="btn btn-outline-primary btn-sm">
                                         <i class="fa fa-external-link-alt me-1"></i> View Full Ledger Vouchers
@@ -1154,7 +1152,16 @@
                                                                                         <th width="40%">{{ $label }}</th>
                                                                                         <td>
                                                                                             <span class="ledger-field-value">
-                                                                                                <strong @if($label === 'Interest Cost') class="js-interest-cost-val" @endif>₹ {{ $fmt($value) }}</strong>
+                                                                                                @php
+                                                                                                    $intClass = [
+                                                                                                        'Interest Cost'     => 'js-int-cost',
+                                                                                                        'Interest Received' => 'js-int-received',
+                                                                                                        'Interest Paid'     => 'js-int-received',
+                                                                                                        'Interest Due'      => 'js-int-due',
+                                                                                                        'Interest Waived'   => 'js-int-waived',
+                                                                                                    ][$label] ?? null;
+                                                                                                @endphp
+                                                                                                <strong @if($intClass) class="{{ $intClass }}" @endif>₹ {{ $fmt($value) }}</strong>
                                                                                                 <i class="fa fa-file-invoice"></i>
                                                                                             </span>
                                                                                         </td>
@@ -1291,7 +1298,16 @@
                                                                                         <th width="40%">{{ $label }}</th>
                                                                                         <td>
                                                                                             <span class="ledger-field-value">
-                                                                                                <strong @if($label === 'Interest Cost') class="js-interest-cost-val" @endif>₹ {{ $fmt($value) }}</strong>
+                                                                                                @php
+                                                                                                    $intClass = [
+                                                                                                        'Interest Cost'     => 'js-int-cost',
+                                                                                                        'Interest Received' => 'js-int-received',
+                                                                                                        'Interest Paid'     => 'js-int-received',
+                                                                                                        'Interest Due'      => 'js-int-due',
+                                                                                                        'Interest Waived'   => 'js-int-waived',
+                                                                                                    ][$label] ?? null;
+                                                                                                @endphp
+                                                                                                <strong @if($intClass) class="{{ $intClass }}" @endif>₹ {{ $fmt($value) }}</strong>
                                                                                                 <i class="fa fa-file-invoice"></i>
                                                                                             </span>
                                                                                         </td>
@@ -1440,30 +1456,186 @@
                 }
 
 
-                // ===== INTEREST COST modal: DB se data =====
-                function renderInterestData(ledger, under) {
+                // ===== INTEREST modal: field ke hisaab se columns =====
+                // ===== INTEREST modal: field ke hisaab se columns (Party + Base[grey]) =====
+                function renderInterestData(ledger, under, field = 'Interest Cost') {
                     const amt = n => (n === null || n === undefined || n === '') ? '-' : fmtExact(n);
-
                     const rs  = n => '₹ ' + amt(n);
+                    const num = v => parseFloat(String(v ?? 0).replace(/,/g, '')) || 0;
                     const fmtD = d => {
                         if (!d) return '-';
                         const o = new Date(d);
                         return isNaN(o.getTime()) ? d : fmtDateShared(o);
                     };
                     const isCreditor = (under === 'Sundry Creditors');
-                    const emptyR = '<tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>';
-                    const emptyP = '<tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>';
+                    const clr        = isCreditor ? 'Paid' : 'Recd';
+                    const settleWord = isCreditor ? 'Interest Paid' : 'Interest Received';
 
-                    $('.int-cleared-label').text(isCreditor ? 'Paid' : 'Recd');
-                    $('#intReceivedLabel').text(isCreditor ? 'Paid' : 'Received');
-                    $('#intPartyRate, #intTotal, #intReceivedTotal, #intPendingTotal, #intSummaryReceived, #intSummaryPending, #intTabDue, #intSettlementRequest, #intSettlementReceived, #intWaivedTotal').text('-');
-                    $('#intReceivedBody').html(emptyR);
-                    $('#intPendingBody').html(emptyP);
+                    const rowFilters = {
+                        'Interest Cost':     r => true,
+                        'Interest Received': r => num(r.settlement_amount) > 0 || num(r.settlement_amount_b) > 0,
+                        'Interest Paid':     r => num(r.settlement_amount) > 0 || num(r.settlement_amount_b) > 0,
+                        'Interest Due':      r => (num(r.interest_due) - num(r.settlement_amount) - num(r.interest_waived)) > 0.009
+                                            || (num(r.interest_due_b) - num(r.settlement_amount_b) - num(r.interest_waived_b)) > 0.009,
+                        'Interest Waived':   r => num(r.interest_waived) > 0 || num(r.interest_waived_b) > 0,
+                    };
+                    const keep = rowFilters[field] || (() => true);
 
+                    // [party, base] totals — received tab & pending tab
+                    const footerTotals = (res) => {
+                        switch (field) {
+                            case 'Interest Received':
+                            case 'Interest Paid':
+                                return {
+                                    rec:  [res.settlement_received_total,   res.settlement_received_total_b],
+                                    pend: [res.pending_settlement_received_total, res.pending_settlement_received_total_b]
+                                };
+                            case 'Interest Waived':
+                                return {
+                                    rec:  [res.interest_waived_total,   res.interest_waived_total_b],
+                                    pend: [res.pending_interest_waived_total, res.pending_interest_waived_total_b]
+                                };
+                            default: // Cost, Due
+                                return {
+                                    rec:  [res.received_total, res.received_total_b],
+                                    pend: [res.pending_total,  res.pending_total_b]
+                                };
+                        }
+                    };
+
+                    const badge = r => r.settlement_status
+                        ? `<span class="badge ${r.settlement_status === 'settled' ? 'bg-success' : 'bg-warning text-dark'}">
+                                ${r.settlement_status.charAt(0).toUpperCase() + r.settlement_status.slice(1)}
+                        </span>`
+                        : '-';
+                    const remaining  = r => num(r.interest_due)   - num(r.settlement_amount)   - num(r.interest_waived);
+                    const remainingB = r => num(r.interest_due_b) - num(r.settlement_amount_b) - num(r.interest_waived_b);
+
+                    // grey:true => base rate column
+                    const colDefs = {
+                        inv:        { h: 'INV No',              cls: 'text-start', v: r => r.inv_no ?? '-' },
+                        recdDate:   { h: `Inv ${clr} Date`,     v: r => fmtD(r.recd_date) },
+                        date:       { h: 'Date',                cls: 'text-start', v: r => fmtD(r.date) },
+                        dueDate:    { h: 'Due Date',            v: r => fmtD(r.due_date) },
+                        intPending: { h: 'Int Pending',         v: r => rs(r.int_pending) },
+                        amount:     { h: 'Amount',              v: r => rs(r.amount) },
+                        days:       { h: 'Days',                cls: 'text-center', v: r => `<span class="badge bg-danger">${r.days ?? '-'} days</span>` },
+                        intOnInt:   { h: 'Int on Int',          v: r => rs(r.int_on_int) },
+                        due:        { h: 'Interest Due',        cls: 'fw-bold', v: r => rs(r.interest_due) },
+                        status:     { h: 'Settlement Status',   cls: 'text-center', v: r => badge(r) },
+                        settle:     { h: `${settleWord} Amount`, v: r => rs(r.settlement_amount) },
+                        settleShort:{ h: `Interest ${clr}`,      v: r => rs(r.settlement_amount) },
+                        waived:     { h: 'Interest Waived',     cls: 'fw-bold', v: r => rs(r.interest_waived) },
+                        remaining:  { h: 'Remaining Due',       cls: 'fw-bold text-danger', v: r => rs(Math.max(remaining(r), 0).toFixed(2)) },
+
+                        // ---- BASE RATE (grey) ----
+                        intPendingB:  { grey: true, h: 'Int Pending (Base)',  v: r => rs(r.int_pending_b) },
+                        intOnIntB:    { grey: true, h: 'Int on Int (Base)',   v: r => rs(r.int_on_int_b) },
+                        dueB:         { grey: true, h: 'Interest Due (Base)', cls: 'fw-bold', v: r => rs(r.interest_due_b) },
+                        settleB:      { grey: true, h: `${settleWord} Amt (Base)`, v: r => rs(r.settlement_amount_b) },
+                        settleShortB: { grey: true, h: `Interest ${clr} (Base)`,   v: r => rs(r.settlement_amount_b) },
+                        waivedB:      { grey: true, h: 'Interest Waived (Base)', cls: 'fw-bold', v: r => rs(r.interest_waived_b) },
+                        remainingB:   { grey: true, h: 'Remaining Due (Base)', cls: 'fw-bold text-danger', v: r => rs(Math.max(remainingB(r), 0).toFixed(2)) },
+                    };
+
+                    const layouts = {
+                        'Interest Cost': {
+                            received: ['inv','recdDate','intPending','days','intOnInt','due','status','settle','waived',
+                                    'intPendingB','intOnIntB','dueB','settleB','waivedB'],
+                            pending:  ['date','dueDate','inv','days','amount','due','status','settle','waived',
+                                    'dueB','settleB','waivedB'],
+                            label: 'Interest Due',
+                            rTotal: 'due', rTotalB: 'dueB', pTotal: 'due', pTotalB: 'dueB'
+                        },
+                        'Interest Received': {
+                            received: ['inv','recdDate','intPending','days','intOnInt','due','settleShort','waived',
+                                    'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
+                            pending:  ['date','inv','days','due','status','settle','dueB','settleB'],
+                            label: settleWord,
+                            rTotal: 'settleShort', rTotalB: 'settleShortB', pTotal: 'settle', pTotalB: 'settleB'
+                        },
+                        'Interest Due': {
+                            received: ['inv','recdDate','intPending','days','intOnInt','due','remaining',
+                                    'intPendingB','intOnIntB','dueB','remainingB'],
+                            pending:  ['date','dueDate','inv','days','amount','due','remaining','dueB','remainingB'],
+                            label: 'Interest Due',
+                            rTotal: 'due', rTotalB: 'dueB', pTotal: 'due', pTotalB: 'dueB'
+                        },
+                        'Interest Waived': {
+                            received: ['inv','recdDate','intPending','days','intOnInt','due','settleShort','waived',
+                                    'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
+                            pending:  ['date','inv','days','due','status','waived','dueB','waivedB'],
+                            label: 'Interest Waived',
+                            rTotal: 'waived', rTotalB: 'waivedB', pTotal: 'waived', pTotalB: 'waivedB'
+                        },
+                    };
+                    layouts['Interest Paid'] = layouts['Interest Received'];
+                    const layout = layouts[field] || layouts['Interest Cost'];
+
+                    const alignCls = c => (c.cls && c.cls.includes('text-start')) ? 'text-start'
+                                        : (c.cls && c.cls.includes('text-center')) ? 'text-center' : '';
+
+                    const buildHead = keys => '<tr>' + keys.map(k => {
+                        const c = colDefs[k];
+                        return `<th class="${alignCls(c)} ${c.grey ? 'int-grey' : ''}">${c.h}</th>`;
+                    }).join('') + '</tr>';
+
+                    const buildRows = (keys, list) => list.map(r =>
+                        '<tr>' + keys.map(k => {
+                            const c = colDefs[k];
+                            return `<td class="${c.cls ?? ''} ${c.grey ? 'int-grey' : ''}">${c.v(r)}</td>`;
+                        }).join('') + '</tr>'
+                    ).join('');
+
+                    // Footer: label ek total column tak, phir party total + base total apni-apni column ke neeche
+                    const buildFoot = (keys, label, partyKey, partyId, baseKey, baseId) => {
+                        const first = Math.min(keys.indexOf(partyKey), keys.indexOf(baseKey));
+                        let html = `<tr><th colspan="${first}" class="text-end">${label}</th>`;
+                        for (let i = first; i < keys.length; i++) {
+                            const k = keys[i];
+                            if (k === partyKey)      html += `<th id="${partyId}">-</th>`;
+                            else if (k === baseKey)  html += `<th id="${baseId}" class="int-grey">-</th>`;
+                            else                     html += `<th class="${colDefs[k].grey ? 'int-grey' : ''}"></th>`;
+                        }
+                        return html + '</tr>';
+                    };
+
+                    const rKeys = layout.received;
+                    const pKeys = layout.pending;
+                    const cleared = isCreditor ? 'Paid' : 'Received';
+                    const isCostOrDue = (field === 'Interest Cost' || field === 'Interest Due');
+
+                    $('#intReceivedHead').html(buildHead(rKeys));
+                    $('#intPendingHead').html(buildHead(pKeys));
+                    $('#intReceivedFoot').html(buildFoot(rKeys,
+                        isCostOrDue ? `Interest Due Invoices ${cleared}` : `${layout.label} (Invoices ${cleared})`,
+                        layout.rTotal, 'intReceivedTotal', layout.rTotalB, 'intReceivedTotalB'));
+                    $('#intPendingFoot').html(buildFoot(pKeys,
+                        isCostOrDue ? 'Interest Due Invoices Pending' : `${layout.label} (Invoices Pending)`,
+                        layout.pTotal, 'intPendingTotal', layout.pTotalB, 'intPendingTotalB'));
+
+                    const highlightId = {
+                        'Interest Cost':     ['#intTotal', '#intTotalB'],
+                        'Interest Due':      ['#intTotal', '#intTotalB'],
+                        'Interest Received': ['#intSettlementReceived', '#intSettlementReceivedB'],
+                        'Interest Paid':     ['#intSettlementReceived', '#intSettlementReceivedB'],
+                        'Interest Waived':   ['#intWaivedTotal', '#intWaivedTotalB'],
+                    }[field];
+                    $('#ledgerVoucherInterestWrap .int-highlight').removeClass('int-highlight');
+                    if (highlightId) $(highlightId.join(',')).addClass('int-highlight');
+
+                    $('.int-cleared-label').text(clr);
+                    $('#intReceivedLabel').text(cleared);
+                    $('#intPartyRate, #intBaseRate, #intTotal, #intTotalB, #intReceivedTotal, #intReceivedTotalB, #intPendingTotal, #intPendingTotalB, '
+                    + '#intSummaryReceived, #intSummaryReceivedB, #intSummaryPending, #intSummaryPendingB, #intTabDue, #intTabDueB, '
+                    + '#intSettlementRequest, #intSettlementRequestB, #intSettlementReceived, #intSettlementReceivedB, #intWaivedTotal, #intWaivedTotalB').text('-');
+
+                    const emptyRow = n => `<tr><td colspan="${n}" class="text-center text-muted">No data loaded</td></tr>`;
+                    $('#intReceivedBody').html(emptyRow(rKeys.length));
+                    $('#intPendingBody').html(emptyRow(pKeys.length));
                     $('#intReceivedCount, #intPendingCount').text('0');
                     bootstrap.Tab.getOrCreateInstance(document.getElementById('intTabReceivedBtn')).show();
 
- 
                     $('#ledgerVoucherLoading').removeClass('d-none');
 
                     $.ajax({
@@ -1474,63 +1646,42 @@
                         success: function (res) {
                             $('#ledgerVoucherLoading').addClass('d-none');
 
+                            const ft = footerTotals(res);
+
                             $('#intPartyRate').text(res.party_rate != null ? res.party_rate + '%' : '-');
+                            $('#intBaseRate').text(res.base_rate  != null ? res.base_rate  + '%' : '-');
+
                             $('#intTotal').text(rs(res.total ?? 0));
-                            $('#intReceivedTotal').text(rs(res.received_total ?? 0));
-                            $('#intPendingTotal').text(rs(res.pending_total ?? 0));
+                            $('#intTotalB').text(rs(res.total_b ?? 0));
+
+                            $('#intReceivedTotal').text(rs(ft.rec[0] ?? 0));
+                            $('#intReceivedTotalB').text(rs(ft.rec[1] ?? 0));
+                            $('#intPendingTotal').text(rs(ft.pend[0] ?? 0));
+                            $('#intPendingTotalB').text(rs(ft.pend[1] ?? 0));
+
                             $('#intSummaryReceived').text(rs(res.received_total ?? 0));
+                            $('#intSummaryReceivedB').text(rs(res.received_total_b ?? 0));
                             $('#intSummaryPending').text(rs(res.pending_total ?? 0));
+                            $('#intSummaryPendingB').text(rs(res.pending_total_b ?? 0));
+
                             window.intData       = res;
                             window.intIsCreditor = isCreditor;
                             updateInterestSummary('received');
 
+                            const received = (res.received || []).filter(keep);
+                            const pending  = (res.pending  || []).filter(keep);
 
-                            let rHtml = '';
-                            (res.received || []).forEach(function (r) {
-                                rHtml += `<tr>
-                                    <td class="text-start">${r.inv_no ?? '-'}</td>
-                                    <td>${fmtD(r.recd_date)}</td>
-                                    <td>${rs(r.int_pending)}</td>
-                                    <td class="text-center"><span class="badge bg-danger">${r.days ?? '-'} days</span></td>
-                                    <td>${rs(r.int_on_int)}</td>
-                                    <td class="fw-bold">${rs(r.interest_due)}</td>
-                                    <td class="text-center">
-                                        ${r.settlement_status
-                                            ? `<span class="badge ${r.settlement_status === 'settled' ? 'bg-success' : 'bg-warning text-dark'}">
-                                                ${r.settlement_status.charAt(0).toUpperCase() + r.settlement_status.slice(1)}
-                                            </span>`
-                                            : '-'}
-                                    </td>
-                                    <td>${rs(r.settlement_amount)}</td>
-                                    <td class="fw-bold">${rs(r.interest_waived)}</td>
-                                </tr>`;
-                            });
-                            $('#intReceivedBody').html(rHtml || '<tr><td colspan="10" class="text-center text-muted">No data found</td></tr>');
+                            $('#intReceivedBody').html(
+                                received.length ? buildRows(rKeys, received)
+                                                : `<tr><td colspan="${rKeys.length}" class="text-center text-muted">No data found</td></tr>`
+                            );
+                            $('#intReceivedCount').text(received.length);
 
-                            $('#intReceivedCount').text((res.received || []).length);
-
-                            let pHtml = '';
-                                (res.pending || []).forEach(function (r) {
-                                    pHtml += `<tr>
-                                        <td class="text-start">${fmtD(r.date)}</td>
-                                        <td>${fmtD(r.due_date)}</td>
-                                        <td>${r.inv_no ?? '-'}</td>
-                                        <td class="text-center"><span class="badge bg-danger">${r.days ?? '-'} days</span></td>
-                                        <td>${rs(r.amount)}</td>
-                                        <td class="fw-bold">${rs(r.interest_due)}</td>
-                                        <td class="text-center">
-                                            ${r.settlement_status
-                                                ? `<span class="badge ${r.settlement_status === 'settled' ? 'bg-success' : 'bg-warning text-dark'}">
-                                                    ${r.settlement_status.charAt(0).toUpperCase() + r.settlement_status.slice(1)}
-                                                </span>`
-                                                : '-'}
-                                        </td>
-                                        <td>${rs(r.settlement_amount)}</td>
-                                        <td class="fw-bold">${rs(r.interest_waived)}</td>
-                                    </tr>`;
-                                });
-                                $('#intPendingBody').html(pHtml || '<tr><td colspan="9" class="text-center text-muted">No data found</td></tr>');
-                                $('#intPendingCount').text((res.pending || []).length);
+                            $('#intPendingBody').html(
+                                pending.length ? buildRows(pKeys, pending)
+                                            : `<tr><td colspan="${pKeys.length}" class="text-center text-muted">No data found</td></tr>`
+                            );
+                            $('#intPendingCount').text(pending.length);
                         },
                         error: function () {
                             $('#ledgerVoucherLoading').addClass('d-none');
@@ -1539,9 +1690,7 @@
                     });
                 }
 
-
-
-                // ===== Interest summary: tab ke hisaab se right column update =====
+                // ===== Interest summary: tab ke hisaab se right column update (Party + Base) =====
                 function updateInterestSummary(tab) {
                     const d = window.intData;
                     if (!d) return;
@@ -1549,14 +1698,23 @@
                     const rs = n => '₹ ' + fmtExact(n ?? 0);
                     const isPending = (tab === 'pending');
                     const clearedWord = window.intIsCreditor ? 'Paid' : 'Received';
+                    const label = isPending ? 'Pending' : clearedWord;
 
-                    $('#intTabLabel').text(isPending ? 'Pending' : clearedWord);
+                    $('#intTabLabel, #intTabLabelB').text(label);
+
                     $('#intTabDue').text(rs(isPending ? d.pending_total : d.received_total));
                     $('#intSettlementRequest').text(rs(isPending ? d.pending_settlement_request_total : d.settlement_request_total));
                     $('#intSettlementReceived').text(rs(isPending ? d.pending_settlement_received_total : d.settlement_received_total));
                     $('#intWaivedTotal').text(rs(isPending ? d.pending_interest_waived_total : d.interest_waived_total));
+
+                    $('#intTabDueB').text(rs(isPending ? d.pending_total_b : d.received_total_b));
+                    $('#intSettlementRequestB').text(rs(isPending ? d.pending_settlement_request_total_b : d.settlement_request_total_b));
+                    $('#intSettlementReceivedB').text(rs(isPending ? d.pending_settlement_received_total_b : d.settlement_received_total_b));
+                    $('#intWaivedTotalB').text(rs(isPending ? d.pending_interest_waived_total_b : d.interest_waived_total_b));
                 }
 
+
+                 
                 $(document).on('shown.bs.tab', '#intTabReceivedBtn', function () { updateInterestSummary('received'); });
                 $(document).on('shown.bs.tab', '#intTabPendingBtn',  function () { updateInterestSummary('pending'); });
                 // ===== Per-ledger, per-field (Balance / Balance Overdue / Target / Sale / ...) voucher modal =====
@@ -1572,10 +1730,11 @@
                     let isTarget   = (field === 'Balance Target');
                     let isSale     = (field === 'Sale');
                     let isCreditor = (under === 'Sundry Creditors');
-                    let isInterest = (field === 'Interest Cost');
+                    const interestFields = ['Interest Cost', 'Interest Received', 'Interest Paid', 'Interest Due', 'Interest Waived'];
+                    let isInterest = interestFields.includes(field);
 
                     $('#ledgerVoucherModalTitle').text(
-                        ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? (isNotDue ? ' (Not Due Vouchers)' : ' (Overdue Vouchers)') : (isTarget ? ' (Month-wise)' : (isInterest ? ' (Interest Breakdown)' : ' Vouchers'))))
+                        ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? (isNotDue ? ' (Not Due Vouchers)' : ' (Overdue Vouchers)') : (isTarget ? ' (Month-wise)' : (isInterest ? ' (' + field + ' Breakdown)' : ' Vouchers'))))
                     );
                     $('#ledgerVoucherError').addClass('d-none').text('');
                     $('#ledgerVoucherLoading').removeClass('d-none');
@@ -1626,7 +1785,7 @@
                     }
 
                     if (isInterest) {
-                        renderInterestData(ledger, under);
+                        renderInterestData(ledger, under, field);
                         return;
                     }
 
@@ -2201,8 +2360,14 @@
 
                 $(document).on('shown.bs.collapse', '.accordion-collapse', function () {
                     const $item = $(this).closest('.accordion-item[data-ledger]');
-                    const $val  = $item.find('.js-interest-cost-val');
-                    if (!$item.length || !$val.length || $item.data('intLoaded')) return;
+                    if (!$item.length || $item.data('intLoaded')) return;
+
+                    const $cost     = $item.find('.js-int-cost');
+                    const $received = $item.find('.js-int-received');
+                    const $due      = $item.find('.js-int-due');
+                    const $waived   = $item.find('.js-int-waived');
+
+                    if (!$cost.length && !$received.length && !$due.length && !$waived.length) return;
 
                     $item.data('intLoaded', true);
                     $.ajax({
@@ -2215,7 +2380,19 @@
                             under: $item.attr('data-under')
                         },
                         success: function (res) {
-                            $val.text('₹ ' + fmtExact(res.total ?? 0));
+                            const n = v => parseFloat(String(v ?? 0).replace(/,/g, '')) || 0;
+
+                            const total    = n(res.total);
+                            const received = n(res.settlement_received_total) + n(res.pending_settlement_received_total);
+                            const waived   = n(res.interest_waived_total)     + n(res.pending_interest_waived_total);
+                            const due      = Math.max(total - received - waived, 0);
+
+                            const show = v => '₹ ' + fmtExact(v.toFixed(2));
+
+                            $cost.text('₹ ' + fmtExact(res.total ?? 0));
+                            $received.text(show(received));
+                            $waived.text(show(waived));
+                            $due.text(show(due));
                         },
                         error: function () {
                             $item.data('intLoaded', false);

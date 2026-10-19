@@ -92,6 +92,7 @@
 			display: inline-block;
 			margin-right: 4px;
 		}
+		.col-message { white-space: pre-line; word-break: break-word; }
 	</style>
 
 	<div class="content-body default-height">
@@ -141,7 +142,8 @@
 									<div class="col-md-6 mb-3">
 										<label class="form-label">Tone</label>
 										<select id="ai_tone" class="form-control">
-											<option value="Polite" selected>Polite</option>
+											<option value="">-- Select Tone --</option>
+											<option value="Polite">Polite</option>
 											<option value="Urgent">Urgent</option>
 											<option value="Firm">Firm</option>
 											<option value="Friendly">Friendly</option>
@@ -152,7 +154,8 @@
 									<div class="col-md-6 mb-3">
 										<label class="form-label">Language</label>
 										<select id="ai_language" class="form-control">
-											<option value="English" selected>English</option>
+											<option value="">-- Select Language --</option>
+											<option value="English">English</option>
 											<option value="Hindi">Hindi</option>
 											<option value="Hinglish">Hinglish</option>
 										</select>
@@ -275,6 +278,16 @@
 			return div.innerHTML;
 		}
 
+		// Safe HTML -> plain text (DOMParser never executes scripts or loads images)
+		function htmlToText(html) {
+			const doc = new DOMParser().parseFromString(html || "", "text/html");
+			// keep paragraph / list breaks readable
+			doc.querySelectorAll("p, li, br, h1, h2, h3, h4, blockquote").forEach(el => {
+				el.insertAdjacentText("afterend", "\n");
+			});
+			return (doc.body.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
+		}
+
 		function showAlert(type, message) {
 			const wrapper = document.getElementById("ajaxAlertWrapper");
 			if (!wrapper) return;
@@ -315,23 +328,18 @@
 			{ num: 8, label: "Days Overdue" }
 		];
 
-		// Saved custom parameters come from DB
-		let customParams = @json($customParams ?? []);
+		// Saved custom parameters come from DB (always flagged as custom)
+		let customParams = (@json($customParams ?? [])).map(p => ({ ...p, custom: true }));
 
 		function getAllParams() {
 			return [...fixedParams, ...customParams];
-		}
-
-		function nextParamNumber() {
-			const nums = getAllParams().map(p => p.num);
-			return nums.length ? Math.max(...nums) + 1 : 1;
 		}
 
 		function renderParamList() {
 			paramListEl.innerHTML = getAllParams().map(p => `
 				<span class="param-chip" data-param="${ph(p.num)}">
 					${ph(p.num)} ${escapeHtml(p.label)}
-					${p.custom ? `<span class="remove-param" data-num="${p.num}" title="Remove from this list">&times;</span>` : ''}
+					${p.custom ? `<span class="remove-param" data-num="${p.num}" title="Hide from this list (this page only)">&times;</span>` : ''}
 				</span>
 			`).join("");
 		}
@@ -391,7 +399,7 @@
 				showAlert("success", "Parameter added successfully.");
 			} catch (err) {
 				console.error(err);
-				alert("Could not save the parameter. Please try again.");
+				showAlert("error", "Could not save the parameter. Please try again.");
 			} finally {
 				saveParamBtn.disabled = false;
 			}
@@ -415,7 +423,7 @@
 			.create(document.querySelector('#message'), {
 				toolbar: [
 					'heading', '|',
-					'bold', 'italic', 'underline', '|',
+					'bold', 'italic', '|',
 					'bulletedList', 'numberedList', '|',
 					'link', 'blockQuote', '|',
 					'undo', 'redo'
@@ -461,7 +469,15 @@
 				document.querySelector(".error-name").innerText = "Template name is required";
 				isValid = false;
 			}
-			if (!data.message.trim()) {
+			if (!data.tone) {
+				document.querySelector(".error-tone").innerText = "Please select a tone";
+				isValid = false;
+			}
+			if (!data.language) {
+				document.querySelector(".error-language").innerText = "Please select a language";
+				isValid = false;
+			}
+			if (!htmlToText(data.message).trim()) {
 				document.querySelector(".error-message").innerText = "Message body is required";
 				isValid = false;
 			}
@@ -478,7 +494,7 @@
 						<span class="badge-soft">${escapeHtml(template.tone || "-")}</span>
 						<span class="badge-soft">${escapeHtml(template.language || "-")}</span>
 					</td>
-					<td class="col-message">${template.message}</td>
+					<td class="col-message">${escapeHtml(htmlToText(template.message))}</td>
 					<td>
 						<button type="button" class="btn btn-sm btn-info edit-btn" data-id="${template.id}">Edit</button>
 						<button type="button" class="btn btn-sm btn-danger delete-btn" data-id="${template.id}">Delete</button>
@@ -543,9 +559,6 @@
 				renderTable();
 				resetForm();
 				showAlert("success", json.message || "Template saved successfully.");
-
-				renderTable();
-				resetForm();
 			} catch (err) {
 				console.error(err);
 				showAlert("error", "Could not save the template. Please try again.");

@@ -150,6 +150,16 @@
                 width: auto;
                 min-width: 190px;
             }
+
+            #example11 th:nth-child(2),
+            #example11 td:nth-child(2),
+            #example th:nth-child(2),
+            #example td:nth-child(2) {
+                min-width: 280px;
+                width: 280px;
+                white-space: normal;    
+                word-break: break-word;
+            }
         </style>
 
         <div class="container-fluid">
@@ -359,6 +369,7 @@
                                                     and Collector Name are <strong>not already present in Tally</strong>.
                                                     Ledgers that already have these values set in Tally will
                                                     <strong>not</strong> be overwritten or updated.
+                                                    Base Interest Rate will be applied to all ledgers.
                                                 </span>
                                             </div>
 
@@ -367,18 +378,22 @@
                                                 <input type="hidden" name="company" value="{{ $company }}">
                                                 <input type="hidden" name="under" value="Sundry Debtors">
                                                 <div class="row g-3">
-                                                    <div class="col-md-4">
+                                                    <div class="col-md-3">
                                                         <label>Default Credit Period - Receivable</label>
                                                         <input type="number" min="0" class="form-control form-control-sm" name="credit_period" placeholder="Enter credit period (days)">
                                                     </div>
-                                                    <div class="col-md-4">
-                                                        <label>Default Interest Rate - Receivable (Base Debtor Int Rate)</label>
+                                                    <div class="col-md-3">
+                                                        <label>Default Interest Rate - Receivable</label>
                                                         <input type="number" min="0" step="0.01" class="form-control form-control-sm" name="interest_rate" placeholder="Enter interest rate (%)">
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label>Base Interest Rate</label>
+                                                        <input type="number" min="0" step="0.01" class="form-control form-control-sm" name="base_interest_rate" placeholder="Enter base interest rate (%)">
                                                     </div>
                                                     @php
                                                         $collectors = App\Models\Collector::where('owner_id', Auth::guard('owner')->id())->get();
                                                     @endphp
-                                                    <div class="col-md-4">
+                                                    <div class="col-md-3">
                                                         <label>Default Collector Name - Receivable</label>
                                                         <select class="form-control form-control-sm" name="collector_id">
                                                             <option value="">Select Collector</option>
@@ -409,6 +424,7 @@
                                                     <th>Mobile</th>
                                                     <th>Credit Period - Receivable</th>
                                                     <th>Interest Rate - Receivable</th>
+                                                    <th>Base Interest Rate - Receivable</th>
                                                     <th>Collector Name - Receivable</th>
                                                 </tr>
                                             </thead>
@@ -440,8 +456,11 @@
                                                                 {!! $sourceBadge($interestSrc) !!}
                                                             @endif
                                                         </td>
+                                                        <td>
+                                                            {{ !empty($l['base_interest_rate']) ? $fmt($l['base_interest_rate']) . ' % p.a.' : '-' }}
+                                                        </td>
                                                         @php
-                                                            $collectorName = \App\Models\Collector::where('id', $l['assigned_collector'])->first();
+                                                            $collectorName = \App\Models\Collector::where('id', $l['assigned_collector'] ?? null)->first();
                                                         @endphp
                                                         <td>{{ $collectorName->name ?? '-' }}</td>
                                                     </tr>
@@ -510,6 +529,7 @@
                                                     and Collector Name are <strong>not already present in Tally</strong>.
                                                     Ledgers that already have these values set in Tally will
                                                     <strong>not</strong> be overwritten or updated.
+                                                    Base Interest Rate will be applied to all ledgers.
                                                 </span>
                                             </div>
 
@@ -519,19 +539,23 @@
                                                 <input type="hidden" name="under" value="Sundry Creditors">
 
                                                 <div class="row g-3">
-                                                    <div class="col-md-4">
+                                                    <div class="col-md-3">
                                                         <label>Default Credit Period - Payable</label>
                                                         <input type="number" min="0" class="form-control form-control-sm" name="credit_period" placeholder="Enter credit period (days)">
                                                     </div>
-                                                    <div class="col-md-4">
+                                                    <div class="col-md-3">
                                                         <label>Default Interest Rate - Payable (Base Creditor Int Rate)</label>
                                                         <input type="number" min="0" step="0.01" class="form-control form-control-sm" name="interest_rate" placeholder="Enter interest rate (%)">
+                                                    </div>
+                                                    <div class="col-md-3">
+                                                        <label>Base Interest Rate - Payable</label>
+                                                        <input type="number" min="0" step="0.01" class="form-control form-control-sm" name="base_interest_rate" placeholder="Enter base interest rate (%)">
                                                     </div>
                                                     @php
                                                         $collectors = App\Models\Collector::where('owner_id', Auth::guard('owner')->id())->get();
                                                     @endphp
 
-                                                    <div class="col-md-4">
+                                                    <div class="col-md-3">
                                                         <label>Default Collector Name - Payable</label>
 
                                                         <select class="form-control form-control-sm" name="collector_id">
@@ -564,6 +588,7 @@
                                                     <th>Mobile</th>
                                                     <th>Credit Period - Payable</th>
                                                     <th>Interest Rate - Payable</th>
+                                                    <th>Base Interest Rate - Payable</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -593,6 +618,9 @@
                                                             @if(!empty($l['interest_rate']))
                                                                 {!! $sourceBadge($interestSrc) !!}
                                                             @endif
+                                                        </td>
+                                                        <td>
+                                                            {{ !empty($l['base_interest_rate']) ? $fmt($l['base_interest_rate']) . ' % p.a.' : '-' }}
                                                         </td>
                                                     </tr>
                                                 @empty
@@ -774,6 +802,12 @@
             }, 3000);
         }
 
+        function formatBaseRate(value) {
+            return value
+                ? parseFloat(value).toFixed(2) + ' % p.a.'
+                : '-';
+        }
+
         function buildDebtorRow(l, index) {
             const creditSrc = sourceKeyJs(l.credit_period_source);
             const interestSrc = sourceKeyJs(l.interest_rate_source);
@@ -785,6 +819,7 @@
             const interestRate = l.interest_rate
                 ? parseFloat(l.interest_rate).toFixed(2) + ' % p.a.' + sourceBadgeHtml(interestSrc)
                 : '-';
+            const baseInterestRate = formatBaseRate(l.base_interest_rate);
             const mobile = l.mobile
                 ? l.mobile + sourceBadgeHtml(mobileSrc)
                 : '-';
@@ -795,6 +830,7 @@
                 <td>${mobile}</td>
                 <td>${creditPeriod}</td>
                 <td>${interestRate}</td>
+                <td>${baseInterestRate}</td>
                 <td>${l.collector_name || '-'}</td>
             </tr>`;
         }
@@ -810,6 +846,7 @@
             const interestRate = l.interest_rate
                 ? parseFloat(l.interest_rate).toFixed(2) + ' % p.a.' + sourceBadgeHtml(interestSrc)
                 : '-';
+            const baseInterestRate = formatBaseRate(l.base_interest_rate);
             const mobile = l.mobile
                 ? l.mobile + sourceBadgeHtml(mobileSrc)
                 : '-';
@@ -820,6 +857,7 @@
                 <td>${mobile}</td>
                 <td>${creditPeriod}</td>
                 <td>${interestRate}</td>
+                <td>${baseInterestRate}</td>
             </tr>`;
         }
 
@@ -827,7 +865,7 @@
             if (under === 'Sundry Debtors') {
                 let rows = ledgers.length
                     ? ledgers.map((l, i) => buildDebtorRow(l, i)).join('')
-                    : '<tr><td colspan="6" class="text-center text-muted">No Debtors Found</td></tr>';
+                    : '<tr><td colspan="7" class="text-center text-muted">No Debtors Found</td></tr>';
                 $('#example11 tbody').html(rows);
 
                 $('#ledgerTabs .nav-link:contains("Sundry Debtors")')
