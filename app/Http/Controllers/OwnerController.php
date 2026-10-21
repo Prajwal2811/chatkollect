@@ -1607,8 +1607,8 @@ class OwnerController extends Controller
 
             $request->validate([
                 'company' => 'required|string',
-                'ledger'  => 'required|string',
-                'under'   => 'nullable|string',
+                'ledger' => 'required|string',
+                'under' => 'nullable|string',
             ]);
 
             $tallyCompany = TallyCompany::where('owner_id', $ownerId)
@@ -1620,20 +1620,19 @@ class OwnerController extends Controller
                 ->where('ledger_name', $request->ledger)
                 ->firstOrFail();
 
-            $under        = $ledgerModel->parent;
-            $isCreditor   = $under === 'Sundry Creditors';
+            $under = $ledgerModel->parent;
+            $isCreditor = $under === 'Sundry Creditors';
             $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
-            $today        = Carbon::now()->startOfDay();
+            $today = Carbon::now()->startOfDay();
 
             $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per annum
-            // ✅ Ab ledger ka base_interest_rate; khali ho to config fallback
-            $baseRate  = !blank($ledgerModel->base_interest_rate)
-                ? (string) $ledgerModel->base_interest_rate
-                : (string) config('app.base_interest_rate', 12);
+            $baseRate = (string) config('app.base_interest_rate', 12);   // % per annum
 
+            // Int Pending: amount * rate% * days / 365  => /36500
             $interestYearly = fn($amt, $rate, $days) =>
                 $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '36500', 2) : '0.00';
 
+            // Int on Int: amount * (rate/100) * (days/30)  => /3000
             $interestOnInt = fn($amt, $rate, $days) =>
                 $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '3000', 2) : '0.00';
 
@@ -1648,13 +1647,13 @@ class OwnerController extends Controller
                     $days = $this->overdueDays($i['due_date'], $today);
 
                     return [
-                        'id'             => $i['id'] ?? null,
-                        'date'           => $i['date'],
-                        'due_date'       => $i['due_date'],
-                        'inv_no'         => $i['voucher_number'],
-                        'days'           => $days,
-                        'amount'         => $i['pending'],
-                        'interest_due'   => $interestYearly($i['pending'], $partyRate, $days),
+                        'id' => $i['id'] ?? null,   // ✅ NEW
+                        'date' => $i['date'],
+                        'due_date' => $i['due_date'],
+                        'inv_no' => $i['voucher_number'],
+                        'days' => $days,
+                        'amount' => $i['pending'],
+                        'interest_due' => $interestYearly($i['pending'], $partyRate, $days),
                         'interest_due_b' => $interestYearly($i['pending'], $baseRate, $days),
                     ];
                 });
@@ -1665,17 +1664,13 @@ class OwnerController extends Controller
                     ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
                     : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
                 ->sortBy(fn($r) => Carbon::parse($r['date'])->timestamp)
-                ->map(function ($r) use ($isCreditor) {
-                    $left = is_numeric($r['settlement_amount'] ?? null) ? (string) $r['settlement_amount'] : '0';
-                    return [
-                        'voucher_number'    => $r['voucher_number'],
-                        'date'              => Carbon::parse($r['date'])->startOfDay(),
-                        'remaining'         => $isCreditor ? $r['debit'] : $r['credit'],
-                        'settlement_status' => $r['settlement_status'] ?? null,
-                        'settlement_left'   => $left,    // party rate ke liye
-                        'settlement_left_b' => $left,    // ✅ base rate ke liye alag pool
-                    ];
-                })
+                ->map(fn($r) => [
+                    'voucher_number' => $r['voucher_number'],
+                    'date' => Carbon::parse($r['date'])->startOfDay(),
+                    'remaining' => $isCreditor ? $r['debit'] : $r['credit'],
+                    'settlement_status' => $r['settlement_status'] ?? null,
+                    'settlement_left' => is_numeric($r['settlement_amount'] ?? null) ? (string) $r['settlement_amount'] : '0',
+                ])
                 ->values()
                 ->all();
 
@@ -1691,9 +1686,9 @@ class OwnerController extends Controller
             $settlementLeftById = [];
 
             foreach ($invoices as $inv) {
-                $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
+                $need = $isCreditor ? $inv['credit'] : $inv['debit'];
                 $voucherDate = Carbon::parse($inv['date'])->startOfDay();
-                $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
+                $dueDate = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
 
                 while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
                     if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
@@ -1707,67 +1702,49 @@ class OwnerController extends Controller
                     $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
                     $need = bcsub($need, $take, 2);
 
-                    $recdDate  = $receipts[$ptr]['date'];
+                    $recdDate = $receipts[$ptr]['date'];
                     $delayDays = (int) $dueDate->diffInDays($recdDate, false);
 
                     if ($delayDays > 0) {
                         $daysSince = (int) $recdDate->diffInDays($today, false);
 
-                        // ---- Party rate ----
-                        $intPending  = $interestYearly($take, $partyRate, $delayDays);
-                        $intOnInt    = $interestOnInt($intPending, $partyRate, $delayDays);
+                        $intPending = $interestYearly($take, $partyRate, $delayDays);
+                        $intOnInt = $interestOnInt($intPending, $partyRate, $delayDays);
                         $interestDue = bcadd($intPending, $intOnInt, 2);
 
-                        // ---- Base rate ----
-                        $intPendingB  = $interestYearly($take, $baseRate, $delayDays);
-                        $intOnIntB    = $interestOnInt($intPendingB, $baseRate, $delayDays);
-                        $interestDueB = bcadd($intPendingB, $intOnIntB, 2);
+                        $intPendingB = $interestYearly($take, $baseRate, $delayDays);
+                        $intOnIntB = $interestOnInt($intPendingB, $baseRate, $delayDays);
 
-                        $rStatus        = strtolower((string) ($receipts[$ptr]['settlement_status'] ?? ''));
+                        $rStatus = strtolower((string) ($receipts[$ptr]['settlement_status'] ?? ''));
+                        $rLeft = $receipts[$ptr]['settlement_left'];
                         $isSettledPiece = ($rStatus === 'settled');
 
                         if ($isSettledPiece) {
-                            // party
-                            $rLeft         = $receipts[$ptr]['settlement_left'];
                             $settlementAmt = bccomp($rLeft, $interestDue, 2) < 0 ? $rLeft : $interestDue;
                             $receipts[$ptr]['settlement_left'] = bcsub($rLeft, $settlementAmt, 2);
                             $interestWaived = bcsub($interestDue, $settlementAmt, 2);
                             $settledRequest = $interestDue;
-
-                            // base
-                            $rLeftB         = $receipts[$ptr]['settlement_left_b'];
-                            $settlementAmtB = bccomp($rLeftB, $interestDueB, 2) < 0 ? $rLeftB : $interestDueB;
-                            $receipts[$ptr]['settlement_left_b'] = bcsub($rLeftB, $settlementAmtB, 2);
-                            $interestWaivedB = bcsub($interestDueB, $settlementAmtB, 2);
-                            $settledRequestB = $interestDueB;
                         } else {
                             $settlementAmt = $interestWaived = $settledRequest = '0.00';
-                            $settlementAmtB = $interestWaivedB = $settledRequestB = '0.00';
                         }
 
                         $received->push([
-                            'inv_no'            => $inv['voucher_number'],
-                            'recd_date'         => $recdDate->toDateString(),
-                            'amount'            => $take,
-                            'days'              => $delayDays,
-                            'days_since'        => $daysSince,
-
-                            'int_pending'       => $intPending,
-                            'int_on_int'        => $intOnInt,
-                            'interest_due'      => $interestDue,
+                            'inv_no' => $inv['voucher_number'],
+                            'recd_date' => $recdDate->toDateString(),
+                            'amount' => $take,
+                            'int_pending' => $intPending,
+                            'days' => $delayDays,
+                            'days_since' => $daysSince,
+                            'int_on_int' => $intOnInt,
+                            'interest_due' => $interestDue,
                             'settlement_amount' => $settlementAmt,
-                            'interest_waived'   => $interestWaived,
-                            'settled_request'   => $settledRequest,
-
-                            'int_pending_b'       => $intPendingB,
-                            'int_on_int_b'        => $intOnIntB,
-                            'interest_due_b'      => $interestDueB,
-                            'settlement_amount_b' => $settlementAmtB,
-                            'interest_waived_b'   => $interestWaivedB,
-                            'settled_request_b'   => $settledRequestB,
-
+                            'interest_waived' => $interestWaived,
+                            'int_pending_b' => $intPendingB,
+                            'int_on_int_b' => $intOnIntB,
+                            'interest_due_b' => bcadd($intPendingB, $intOnIntB, 2),
                             'settlement_status' => $rStatus ?: null,
-                            'is_settled'        => $isSettledPiece,
+                            'is_settled' => $isSettledPiece,
+                            'settled_request' => $settledRequest,
                         ]);
                     }
                 }
@@ -1780,26 +1757,21 @@ class OwnerController extends Controller
                     $sum = fn($key) => $group->reduce(fn($t, $r) => bcadd($t, (string) $r[$key], 2), '0');
 
                     return array_merge($first, [
-                        'recd_date'           => $group->last()['recd_date'],
-                        'days'                => $group->max('days'),
-                        'amount'              => $sum('amount'),
+                        'recd_date' => $group->last()['recd_date'],
+                        'days' => $group->max('days'),
+                        'amount' => $sum('amount'),
+                        'int_pending' => $sum('int_pending'),
+                        'int_on_int' => $sum('int_on_int'),
+                        'interest_due' => $sum('interest_due'),
+                        'settlement_amount' => $sum('settlement_amount'),
+                        'interest_waived' => $sum('interest_waived'),
+                        'int_pending_b' => $sum('int_pending_b'),
+                        'int_on_int_b' => $sum('int_on_int_b'),
+                        'interest_due_b' => $sum('interest_due_b'),
 
-                        'int_pending'         => $sum('int_pending'),
-                        'int_on_int'          => $sum('int_on_int'),
-                        'interest_due'        => $sum('interest_due'),
-                        'settlement_amount'   => $sum('settlement_amount'),
-                        'interest_waived'     => $sum('interest_waived'),
-                        'settled_request'     => $sum('settled_request'),
-
-                        'int_pending_b'       => $sum('int_pending_b'),
-                        'int_on_int_b'        => $sum('int_on_int_b'),
-                        'interest_due_b'      => $sum('interest_due_b'),
-                        'settlement_amount_b' => $sum('settlement_amount_b'),
-                        'interest_waived_b'   => $sum('interest_waived_b'),
-                        'settled_request_b'   => $sum('settled_request_b'),
-
-                        'is_settled'          => $group->contains('is_settled', true),
-                        'settlement_status'   => $group->contains('is_settled', true) ? 'settled' : $first['settlement_status'],
+                        'is_settled' => $group->contains('is_settled', true),
+                        'settlement_status' => $group->contains('is_settled', true) ? 'settled' : $first['settlement_status'],
+                        'settled_request' => $sum('settled_request'),
                     ]);
                 })
                 ->values();
@@ -1807,81 +1779,57 @@ class OwnerController extends Controller
             $rowsById = $rows->keyBy('id');
 
             $pending = $pending->map(function ($p) use ($rowsById, $settlementLeftById) {
-                $src    = $rowsById->get($p['id']);
+                $src = $rowsById->get($p['id']);
                 $status = $src['settlement_status'] ?? null;
 
                 $left = $settlementLeftById[$p['id']]
                     ?? (is_numeric($src['settlement_amount'] ?? null) ? (string) $src['settlement_amount'] : '0');
 
                 $isSettled = strtolower((string) $status) === 'settled';
-
-                $amt  = $isSettled ? (bccomp($left, $p['interest_due'], 2)   < 0 ? $left : $p['interest_due'])   : '0.00';
-                $amtB = $isSettled ? (bccomp($left, $p['interest_due_b'], 2) < 0 ? $left : $p['interest_due_b']) : '0.00';
+                $amt = $isSettled ? (bccomp($left, $p['interest_due'], 2) < 0 ? $left : $p['interest_due']) : '0.00';
 
                 return $p + [
-                    'settlement_status'   => $status,
-                    'settlement_amount'   => $amt,
-                    'interest_waived'     => $isSettled ? bcsub($p['interest_due'], $amt, 2) : '0.00',
-                    'settlement_amount_b' => $amtB,
-                    'interest_waived_b'   => $isSettled ? bcsub($p['interest_due_b'], $amtB, 2) : '0.00',
+                    'settlement_status' => $status,
+                    'settlement_amount' => $amt,
+                    'interest_waived' => $isSettled ? bcsub($p['interest_due'], $amt, 2) : '0.00',
                 ];
             })->values();
 
-            $isSettledRow = fn($r) => strtolower((string) ($r['settlement_status'] ?? '')) === 'settled';
-
-            // ===== Totals: Party =====
             $receivedTotal = $received->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-            $pendingTotal  = $pending->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
+            $pendingTotal = $pending->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
-            $settlementRequestTotal  = $received->reduce(fn($t, $r) => bcadd($t, $r['settled_request'], 2), '0');
+            $settledRows = $received->filter(fn($r) => $r['is_settled']);
+
+            $settlementRequestTotal = $received->reduce(fn($t, $r) => bcadd($t, $r['settled_request'], 2), '0');
             $settlementReceivedTotal = $received->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
-            $interestWaivedTotal     = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
+            $interestWaivedTotal = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
 
-            $pendingSettled = $pending->filter($isSettledRow);
-            $pendingSettlementRequestTotal  = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-            $pendingSettlementReceivedTotal = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
-            $pendingInterestWaivedTotal     = bcsub($pendingSettlementRequestTotal, $pendingSettlementReceivedTotal, 2);
+            $pendingSettled = $pending->filter(fn($r) => strtolower((string) ($r['settlement_status'] ?? '')) === 'settled');
 
-            // ===== Totals: Base =====
-            $receivedTotalB = $received->reduce(fn($t, $r) => bcadd($t, $r['interest_due_b'], 2), '0');
-            $pendingTotalB  = $pending->reduce(fn($t, $r) => bcadd($t, $r['interest_due_b'], 2), '0');
+            $pendingSettlementRequestTotal = $pendingSettled
+                ->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
-            $settlementRequestTotalB  = $received->reduce(fn($t, $r) => bcadd($t, $r['settled_request_b'], 2), '0');
-            $settlementReceivedTotalB = $received->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount_b'], 2), '0');
-            $interestWaivedTotalB     = bcsub($settlementRequestTotalB, $settlementReceivedTotalB, 2);
+            $pendingSettlementReceivedTotal = $pendingSettled
+                ->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
 
-            $pendingSettlementRequestTotalB  = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['interest_due_b'], 2), '0');
-            $pendingSettlementReceivedTotalB = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount_b'], 2), '0');
-            $pendingInterestWaivedTotalB     = bcsub($pendingSettlementRequestTotalB, $pendingSettlementReceivedTotalB, 2);
+            $pendingInterestWaivedTotal = bcsub($pendingSettlementRequestTotal, $pendingSettlementReceivedTotal, 2);
+
+
 
             return response()->json([
                 'party_rate' => $partyRate,
-                'base_rate'  => $baseRate,
-
-                // party
-                'total'                             => bcadd($receivedTotal, $pendingTotal, 2),
-                'received_total'                    => $receivedTotal,
-                'pending_total'                     => $pendingTotal,
-                'settlement_request_total'          => $settlementRequestTotal,
-                'settlement_received_total'         => $settlementReceivedTotal,
-                'interest_waived_total'             => $interestWaivedTotal,
-                'pending_settlement_request_total'  => $pendingSettlementRequestTotal,
-                'pending_settlement_received_total' => $pendingSettlementReceivedTotal,
-                'pending_interest_waived_total'     => $pendingInterestWaivedTotal,
-
-                // base
-                'total_b'                             => bcadd($receivedTotalB, $pendingTotalB, 2),
-                'received_total_b'                    => $receivedTotalB,
-                'pending_total_b'                     => $pendingTotalB,
-                'settlement_request_total_b'          => $settlementRequestTotalB,
-                'settlement_received_total_b'         => $settlementReceivedTotalB,
-                'interest_waived_total_b'             => $interestWaivedTotalB,
-                'pending_settlement_request_total_b'  => $pendingSettlementRequestTotalB,
-                'pending_settlement_received_total_b' => $pendingSettlementReceivedTotalB,
-                'pending_interest_waived_total_b'     => $pendingInterestWaivedTotalB,
-
+                'base_rate' => $baseRate,
+                'total' => bcadd($receivedTotal, $pendingTotal, 2),
+                'received_total' => $receivedTotal,
+                'pending_total' => $pendingTotal,
+                'settlement_request_total' => $settlementRequestTotal,    // ✅ NEW
+                'settlement_received_total' => $settlementReceivedTotal,   // ✅ NEW
                 'received' => $received->values(),
-                'pending'  => $pending,
+                'pending' => $pending,
+                'interest_waived_total' => $interestWaivedTotal,
+                'pending_settlement_request_total' => $pendingSettlementRequestTotal,
+                'pending_settlement_received_total' => $pendingSettlementReceivedTotal,
+                'pending_interest_waived_total' => $pendingInterestWaivedTotal,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -1889,8 +1837,8 @@ class OwnerController extends Controller
         } catch (\Throwable $e) {
             Log::error('Tally ledgerInterestData failed', [
                 'company' => $request->company,
-                'ledger'  => $request->ledger,
-                'error'   => $e->getMessage(),
+                'ledger' => $request->ledger,
+                'error' => $e->getMessage(),
             ]);
             return response()->json(['message' => 'Unable to fetch interest data.'], 500);
         }
@@ -2198,9 +2146,9 @@ class OwnerController extends Controller
                 ->where('ledger_id', $tallyLedger->id)
                 ->get();
 
-            echo "<pre>";
-            print_r($ledgerVoucher);
-            die;
+            // echo "<pre>";
+            // print_r($ledgerVoucher);
+            // die;
             $vouchers = [];
 
             $creditSideTypesForDebtor = ['receipt', 'receipt note', 'credit note'];
@@ -3438,7 +3386,6 @@ class OwnerController extends Controller
                     'interest_style' => $ledger->interest_style,
                     'assigned_collector' => $ledger->assigned_collector,
                     'rows' => $this->buildLedgerRows($ledger, $vouchers),
-                    'base_interest_rate' => $ledger->base_interest_rate, // NEW
                 ];
             })->values()->all();
 
@@ -3462,17 +3409,15 @@ class OwnerController extends Controller
             'under' => 'required|in:Sundry Debtors,Sundry Creditors',
             'credit_period' => 'nullable|numeric|min:0',
             'interest_rate' => 'nullable|numeric|min:0',
-            'base_interest_rate' => 'nullable|numeric|min:0', // NEW
             'collector_id' => 'nullable|integer',
         ]);
 
         $company = $validated['company'];
         $creditPeriod = $validated['credit_period'] ?? null;
         $interestRate = $validated['interest_rate'] ?? null;
-        $baseInterestRate = $validated['base_interest_rate'] ?? null; // NEW
         $collectorId = $validated['collector_id'] ?? null;
 
-        if (blank($creditPeriod) && blank($interestRate) && blank($baseInterestRate) && blank($collectorId)) {
+        if (blank($creditPeriod) && blank($interestRate) && blank($collectorId)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Please fill at least one default value before saving.',
@@ -3509,10 +3454,6 @@ class OwnerController extends Controller
 
         foreach ($ledgers as $ledger) {
             $dataToUpdate = [];
-
-            if (!blank($baseInterestRate)) {
-                $dataToUpdate['base_interest_rate'] = $baseInterestRate;
-            }
 
             if (!blank($creditPeriod) && $ledger->credit_period_source !== 'tally') {
                 $dataToUpdate['credit_period'] = $creditPeriod . ' Days';
@@ -3560,7 +3501,6 @@ class OwnerController extends Controller
                     'interest_rate' => $l->interest_rate,
                     'interest_rate_source' => $l->interest_rate_source,
                     'collector_name' => $collector->name ?? null,
-                    'base_interest_rate' => $l->base_interest_rate,
                 ];
             });
 
