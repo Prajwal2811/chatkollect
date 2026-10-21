@@ -1,4 +1,5 @@
-        @include('accountant.components.header')
+@include('accountant.components.header')
+
         <div id="main-wrapper">
             <div class="nav-header">
                 <a href="#" class="brand-logo">
@@ -156,7 +157,7 @@
                         padding: 4px 8px;
                     }
 
-                    /* Credit Period editable input inside Balance Due table */
+                    /* Credit Period editable input inside Balance Overdue table */
                     .credit-period-input {
                         width: 90px;
                         margin: 0 auto;
@@ -174,12 +175,67 @@
                         text-decoration: underline;
                         color: #4E3F6B;
                     }
+
+                    /* ===== Debtor Ranking table (image wali UI) ===== */
+                    .ranking-table thead th {
+                        position: sticky;
+                        top: 0;
+                        z-index: 1;
+                        background: #fff;
+                        font-weight: 700;
+                        white-space: nowrap;
+                    }
+
+                    .ranking-table thead th.th-orange {
+                        background: #ff9800;
+                    }
+
+                    .ranking-table thead th.th-green {
+                        background: #00e000;
+                    }
+
+                    /* ===== Interest Cost modal (Excel-style) ===== */
+                    .int-xl td, .int-xl th { padding: 4px 8px; font-size: 14px; vertical-align: middle; }
+                    .int-xl .int-name   { background: #e9e9ef; border-radius: 12px; }
+                    .int-xl .int-pink   { background: #e99a9a; font-weight: 700; text-align: center; }
+                    .int-xl .int-yellow { background: #ffff00; font-weight: 700; text-align: center; }
+                    .int-xl .int-green  { background: #00ff00; font-weight: 700; text-align: center; }
+                    .int-xl .int-head th { font-weight: 400; background: #fff; }
+                    
                 </style>
 
                 <div class="container-fluid">
                     @php
-                    
-                        $fmt = fn ($n) => number_format((float) $n, 2);
+                        // ✅ Bina round kiye, DB ke decimals jaise ke taise (sirf Indian comma grouping)
+                        $fmt = function ($n) {
+                            $s   = (string) $n;
+                            $neg = str_starts_with($s, '-');
+                            $s   = ltrim($s, '+-');
+                            [$i, $d] = array_pad(explode('.', $s, 2), 2, '');
+                            if (strlen($i) > 3) {
+                                $i = preg_replace('/\B(?=(\d{2})+(?!\d))/', ',', substr($i, 0, -3)) . ',' . substr($i, -3);
+                            }
+                            return ($neg ? '-' : '') . $i . ($d !== '' ? '.' . $d : '');
+                        };
+
+                        // ✅ String hi rakho, float cast mat karo (value DB jaisi rahegi)
+                        $num = function ($v) {
+                            $s = str_replace([',', '₹', ' '], '', (string) ($v ?? 0));
+                            return is_numeric($s) ? $s : '0';
+                        };
+
+                        // trailing zeros hatane ke liye (totals ke liye)
+                        $trimZeros = fn ($s) => str_contains($s, '.') ? rtrim(rtrim($s, '0'), '.') : $s;
+
+                        // target ki value alag-alag key naam se aa sakti hai, jo mile wahi le lo
+                        $getTarget = function ($l) use ($num) {
+                            foreach (['target', 'target_balance', 'targetBal', 'balance_target'] as $k) {
+                                if (isset($l[$k]) && $l[$k] !== '') {
+                                    return $num($l[$k]);
+                                }
+                            }
+                            return '0';
+                        };
 
                         $statusColorMap = [
                             'success'   => '#28a745',
@@ -202,31 +258,31 @@
                             'D' => '#dc3545',
                         ];
                         $rankLabelMap = [
-                            'A' => 'Rank A - Excellent',
-                            'B' => 'Rank B - Good',
-                            'C' => 'Rank C - Average',
-                            'D' => 'Rank D - Poor',
+                            'A' => 'Rank A',
+                            'B' => 'Rank B',
+                            'C' => 'Rank C',
+                            'D' => 'Rank D',
                         ];
 
                         $debtorLedgers = collect($ledgers)
                             ->filter(fn ($l) => ($l['under'] ?? '') == 'Sundry Debtors')
                             ->values()
-                            ->map(function ($l) {
+                            ->map(function ($l) use ($num, $getTarget) {
                                 $rows = [
-                                    'Balance'                => $l['balance']           ?? 0,
-                                    'Balance Due'            => $l['due']                ?? 0,
-                                    'Target'                 => $l['target']             ?? 0,
-                                    'Sale'                   => $l['sale']                ?? 0,
-                                    'Other Debits'           => $l['other_debits']       ?? 0,
-                                    'Receipts'               => $l['receipts']           ?? 0,
-                                    'Not Due'                => $l['not_due']            ?? 0,
-                                    'Interest Cost'          => $l['interest_cost']      ?? 0,
-                                    'Interest Received'      => $l['interest_received']  ?? 0,
-                                    'Interest Due'           => $l['interest_due']       ?? 0,
-                                    'Interest Waived'        => $l['interest_waived']    ?? 0,
-                                    'Bad Debts / Family A/c' => $l['bad_debts']          ?? 0,
-                                    'Total Debtors'          => $l['total_debtors']      ?? 0,
-                                    'March Closing Pending'  => $l['march_closing_pending'] ?? 0,
+                                    'Balance'                => $num($l['balance']               ?? 0),
+                                    'Balance Overdue'        => $num($l['due']                   ?? 0),
+                                    'Balance Target'         => $getTarget($l),
+                                    'Sale'                   => $num($l['sale']                  ?? 0),
+                                    'Other Debits'           => $num($l['other_debits']          ?? 0),
+                                    'Receipts'               => $num($l['receipts']              ?? 0),
+                                    'Not Due'                => $num($l['not_due']               ?? 0),
+                                    'Interest Cost'          => $num($l['interest_cost']         ?? 0),
+                                    'Interest Received'      => $num($l['interest_received']     ?? 0),
+                                    'Interest Due'           => $num($l['interest_due']          ?? 0),
+                                    'Interest Waived'        => $num($l['interest_waived']       ?? 0),
+                                    'Bad Debts / Family A/c' => $num($l['bad_debts']             ?? 0),
+                                    'Total Debtors'          => $num($l['total_debtors']         ?? 0),
+                                    'March Closing Pending'  => $num($l['march_closing_pending'] ?? 0),
                                 ];
 
                                 return $l + [
@@ -241,22 +297,22 @@
                         $creditorLedgers = collect($ledgers)
                             ->filter(fn ($l) => ($l['under'] ?? '') == 'Sundry Creditors')
                             ->values()
-                            ->map(function ($l) {
+                            ->map(function ($l) use ($num, $getTarget) {
                                 $rows = [
-                                    'Balance'                => $l['balance']           ?? 0,
-                                    'Balance Due'            => $l['due']                ?? 0,
-                                    'Target'                 => $l['target']             ?? 0,
-                                    'Purchase'               => $l['purchase']           ?? 0,
-                                    'Other Credits'          => $l['other_credits']      ?? 0,
-                                    'Payments'               => $l['payments']           ?? 0,
-                                    'Not Due'                => $l['not_due']            ?? 0,
-                                    'Interest Cost'          => $l['interest_cost']      ?? 0,
-                                    'Interest Paid'          => $l['interest_paid']      ?? 0,
-                                    'Interest Due'           => $l['interest_due']       ?? 0,
-                                    'Interest Waived'        => $l['interest_waived']    ?? 0,
-                                    'Bad Debts / Family A/c' => $l['bad_debts']          ?? 0,
-                                    'Total Creditors'        => $l['total_creditors']    ?? 0,
-                                    'March Closing Pending'  => $l['march_closing_pending'] ?? 0,
+                                    'Balance'                => $num($l['balance']               ?? 0),
+                                    'Balance Overdue'        => $num($l['due']                   ?? 0),
+                                    'Balance Target'         => $getTarget($l),
+                                    'Purchase'               => $num($l['purchase']              ?? 0),
+                                    'Other Credits'          => $num($l['other_credits']         ?? 0),
+                                    'Payments'               => $num($l['payments']              ?? 0),
+                                    'Not Due'                => $num($l['not_due']               ?? 0),
+                                    'Interest Cost'          => $num($l['interest_cost']         ?? 0),
+                                    'Interest Paid'          => $num($l['interest_paid']         ?? 0),
+                                    'Interest Due'           => $num($l['interest_due']          ?? 0),
+                                    'Interest Waived'        => $num($l['interest_waived']       ?? 0),
+                                    'Bad Debts / Family A/c' => $num($l['bad_debts']             ?? 0),
+                                    'Total Creditors'        => $num($l['total_creditors']       ?? 0),
+                                    'March Closing Pending'  => $num($l['march_closing_pending'] ?? 0),
                                 ];
 
                                 return $l + [
@@ -267,6 +323,49 @@
                                     'rank'      => $l['rank']      ?? null,
                                 ];
                             });
+
+                        // ===== Excel wale formulas ke hisaab se Rank / Class (Debtors & Creditors dono ke liye alag) =====
+                        // H            = % Target  (Target / (Overdue + Not Due) * 100)
+                        // Priority Rank = RANK(H, H-range, 0)  -> descending
+                        // Debtor Rank   = RANK(H, H-range, 1)  -> ascending   (column J)
+                        // Class         = Debtor Rank / COUNTA(J) * 100  ->  <=15 A, <=50 B, <=85 C, baaki D
+                        $applyRanks = function ($list) use ($num) {
+                            $list = $list->map(function ($l) use ($num) {
+                                $overdue    = $l['rows']['Balance Overdue'];
+                                $notDue     = $l['rows']['Not Due'];
+                                $collection = $num($l['target_collection'] ?? 0);
+                                $total      = bcadd($overdue, $notDue, 2);
+
+                                $l['has_due']    = bccomp($total, '0', 2) > 0;
+                                $l['pct_target'] = $l['has_due'] ? round($collection / $total * 100) : null;
+                                return $l;
+                            });
+
+                            // sirf active debtors ka pool
+                            $pcts  = $list->filter(fn ($l) => $l['has_due'])->pluck('pct_target');
+                            $count = $pcts->count();
+
+                            return $list->map(function ($l) use ($pcts, $count) {
+                                if (!$l['has_due']) {
+                                    $l['priority_rank'] = null;
+                                    $l['debtor_rank']   = null;
+                                    $l['rank']          = null;
+                                    return $l;
+                                }
+
+                                $p = $l['pct_target'];
+                                $l['priority_rank'] = $pcts->filter(fn ($x) => $x > $p)->count() + 1;
+                                $l['debtor_rank']   = $pcts->filter(fn ($x) => $x < $p)->count() + 1;
+
+                                $share = $count > 0 ? ($l['debtor_rank'] / $count) * 100 : 0;
+                                $l['rank'] = $share <= 15 ? 'A' : ($share <= 50 ? 'B' : ($share <= 85 ? 'C' : 'D'));
+
+                                return $l;
+                            })->values();
+                        };
+
+                        $debtorLedgers   = $applyRanks($debtorLedgers);
+                        $creditorLedgers = $applyRanks($creditorLedgers);
 
                         $mergeMap = [
                             'Sale'               => 'Sale / Purchase',
@@ -281,19 +380,19 @@
                             'Total Creditors'    => 'Total Debtors / Creditors',
                         ];
 
-
-                        $computeTotals = function ($ledgerList) use ($mergeMap) {
+                        // ✅ float + ki jagah bcadd (exact sum)
+                        $computeTotals = function ($ledgerList) use ($mergeMap, $num, $trimZeros) {
                             $t = [];
                             foreach ($ledgerList as $l) {
                                 foreach ($l['rows'] as $label => $value) {
                                     $key = $mergeMap[$label] ?? $label;
-                                    $t[$key] = ($t[$key] ?? 0) + $value;
+                                    $t[$key] = bcadd($t[$key] ?? '0', $num($value), 10);
                                 }
                             }
-                            return $t;
+                            return array_map($trimZeros, $t);
                         };
 
-                        $computeBreakdown = function ($ledgerList) use ($mergeMap) {
+                        $computeBreakdown = function ($ledgerList) use ($mergeMap, $num) {
                             $b = [];
                             foreach ($ledgerList as $l) {
                                 foreach ($l['rows'] as $label => $value) {
@@ -302,7 +401,7 @@
                                         'ledger' => $l['name'],
                                         'under'  => $l['under'] ?? '',
                                         'label'  => $label,
-                                        'value'  => $value,
+                                        'value'  => $num($value),
                                     ];
                                 }
                             }
@@ -314,10 +413,35 @@
                         $breakdownDebtor   = $computeBreakdown($debtorLedgers);
                         $breakdownCreditor = $computeBreakdown($creditorLedgers);
 
+                        // ===== Debtor Ranking table (image wali UI) =====
+                        $rankingRows = $debtorLedgers->map(function ($l) use ($num) {
+                            $overdue = $l['rows']['Balance Overdue'];
+                            $notDue  = $l['rows']['Not Due'];
+                            $target  = $l['rows']['Balance Target'];
+                            $targetCollection = $num($l['target_collection'] ?? 0);
+                            $total    = bcadd($overdue, $notDue, 2);
+                            $hasTotal = bccomp($total, '0', 2) !== 0;
+
+                            return [
+                                'name'        => $l['name'],
+                                'overdue'     => $overdue,
+                                'not_due'     => $notDue,
+                                'total_due'   => $total,
+                                'target'      => $target,
+                                'target_collection' => $targetCollection, 
+                                'pct_overdue' => $hasTotal ? round($overdue / $total * 100, 2) : 0,
+                                'pct_not_due' => $hasTotal ? round($notDue  / $total * 100, 2) : 0,
+                                'pct_target'    => $l['pct_target'],        // pehle recalculate ho raha tha
+                                'class'         => $l['rank'],              // pehle: $l['rank'] ?? 'D'
+                                'debtor_rank'   => $l['debtor_rank'],
+                                'priority_rank' => $l['priority_rank'],
+                            ];
+                        })->values();
+
                         $rowClassMap = [
                             'Balance'               => 'table-warning',
-                            'Balance Due'           => 'table-warning',
-                            'Target'                => 'table-success',
+                            'Balance Overdue'       => 'table-warning',
+                            'Balance Target'        => 'table-success',
                             'Sale'                  => 'table-success',
                             'Purchase'              => 'table-success',
                             'Interest Due'          => 'table-danger',
@@ -329,8 +453,8 @@
 
                         $cardStyles = [
                             'Balance'                   => ['bg' => 'primary',   'icon' => '₹'],
-                            'Balance Due'               => ['bg' => 'danger',    'icon' => '₹'],
-                            'Target'                    => ['bg' => 'success',   'icon' => '₹'],
+                            'Balance Overdue'           => ['bg' => 'danger',    'icon' => '₹'],
+                            'Balance Target'            => ['bg' => 'success',   'icon' => '₹'],
                             'Sale / Purchase'           => ['bg' => 'warning',   'icon' => '₹'],
                             'Other Debits / Credits'    => ['bg' => 'info',      'icon' => '₹'],
                             'Receipts / Payments'       => ['bg' => 'secondary', 'icon' => '₹'],
@@ -344,7 +468,6 @@
                             'March Closing Pending'     => ['bg' => 'dark',      'icon' => '₹'],
                         ];
                     @endphp
-
                     <!-- Summary Cards Toggle Button -->
                     <div class="d-flex justify-content-end mb-2">
                         <button class="btn btn-outline-primary btn-sm" type="button" id="summaryToggleBtn">
@@ -486,26 +609,26 @@
                                         </div>
                                     </div>
 
-                                    <!-- ===== NORMAL table (every field EXCEPT Balance / Balance Due) ===== -->
+                                    <!-- ===== NORMAL table (every field EXCEPT Balance / Balance Overdue / Target) ===== -->
                                     <div class="table-responsive" id="ledgerVoucherNormalWrap" style="max-height: 55vh; overflow-y: auto;">
                                         <table class="table table-bordered table-hover align-middle mb-0" id="ledgerVoucherTable">
-        <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
-            <tr>
-                <th class="col-date">Date</th>
-                <th class="col-voucherno">Voucher No.</th>
-                <th class="col-vouchertype">Voucher Type</th>
-                <th class="col-particulars">Particulars</th>
-                <th class="col-duedate d-none">Due Date</th>
-                <th class="col-creditperiod d-none text-center">Credit Period</th>
-                <th class="col-days d-none text-center">Days</th>
-                <th class="col-debit text-end">Debit</th>
-                <th class="col-credit text-end">Credit</th>
-            </tr>
-        </thead>
-        <tbody id="ledgerVoucherBody">
-            <tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>
-        </tbody>
-    </table>
+                                            <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                <tr>
+                                                    <th class="col-date">Date</th>
+                                                    <th class="col-voucherno">Voucher No.</th>
+                                                    <th class="col-vouchertype">Voucher Type</th>
+                                                    <th class="col-particulars">Particulars</th>
+                                                    <th class="col-duedate d-none">Due Date</th>
+                                                    <th class="col-creditperiod d-none text-center">Credit Period</th>
+                                                    <th class="col-days d-none text-center">Days</th>
+                                                    <th class="col-debit text-end">Debit</th>
+                                                    <th class="col-credit text-end">Credit</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="ledgerVoucherBody">
+                                                <tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>
+                                            </tbody>
+                                        </table>
                                     </div>
 
                                     <!-- ===== BALANCE breakdown table (Original / Received-Paid / Pending) ===== -->
@@ -535,7 +658,7 @@
                                         </div>
                                         <table class="table table-bordered table-hover align-middle mb-0" id="ledgerDueTable">
                                             <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
-                                                <tr>
+                                                <tr id="ledgerDueHeadRow">
                                                     <th>Date</th>
                                                     <th>Voucher No.</th>
                                                     <th class="text-center">Days</th>
@@ -547,17 +670,339 @@
                                             </tbody>
                                             <tfoot>
                                                 <tr>
-                                                    <th colspan="3" class="text-end">Total Due</th>
+                                                    <th colspan="3" class="text-end" id="ledgerDueTotalLabel">Total Due</th>
                                                     <th class="text-end" id="ledgerDueTotal">-</th>
                                                 </tr>
                                             </tfoot>
                                         </table>
+                                    </div>
+
+                                    <!-- ===== TARGET table (Month-wise Overdue / Not Due / Balance / Targets) ===== -->
+                                    <div class="table-responsive d-none" id="ledgerVoucherTargetWrap" style="max-height: 55vh; overflow: auto;">
+                                        <table class="table table-bordered table-hover align-middle mb-0 text-end" id="ledgerTargetTable">
+                                            <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                <tr>
+                                                    <th class="text-start">Month</th>
+                                                    <th>Overdue <br> Balance Till</th>
+                                                    <th>Not Due  <br> Balance Till</th>
+                                                    <th>Balance Today</th>
+                                                    <th>% Overdue</th>
+                                                    <th>Overdue target</th>
+                                                    <th>Target Collection</th>
+                                                    <th>% Not Due</th>
+                                                    <th>Target Balance</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="ledgerTargetBody">
+                                                <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+
+                                    <!-- ===== INTEREST COST table ===== -->
+                                    <div class="table-responsive d-none" id="ledgerVoucherInterestWrap" style="max-height: 55vh; overflow: auto;">
+
+                                        <!-- Summary -->
+                                        <table class="table table-bordered align-middle mb-3">
+                                            <tbody>
+                                                <tr>
+                                                    <th width="30%">Rate Of Interest</th>
+                                                    <td id="intPartyRate" class="text-end">-</td>
+                                                    <th width="30%">Interest Due Total</th>
+                                                    <td id="intTotal" class="text-end fw-bold">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Interest Due Invoices Pending</th>
+                                                    <td id="intSummaryPending" class="text-end fw-bold">-</td>
+                                                    <th>Settlement Request Amount</th>
+                                                    <td id="intSettlementRequest" class="text-end fw-bold">-</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Interest Received Amount</th>
+                                                    <td id="intSettlementReceived" class="text-end fw-bold text-success">-</td>
+                                                    <th>Interest Waived</th>
+                                                    <td id="intWaivedTotal" class="text-end fw-bold text-danger">-</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+
+                                        <!-- Tabs -->
+                                        <ul class="nav nav-pills mb-3" id="interestTabs" role="tablist">
+                                            <li class="nav-item me-2" role="presentation">
+                                                <button class="nav-link active" id="intTabReceivedBtn" type="button" role="tab"
+                                                        data-bs-toggle="pill" data-bs-target="#intTabReceived"
+                                                        aria-controls="intTabReceived" aria-selected="true">
+                                                    Interest Due Invoices <span id="intReceivedLabel">Received</span>
+                                                    <span class="badge bg-primary ms-1" id="intReceivedCount">0</span>
+                                                </button>
+                                            </li>
+                                            <li class="nav-item me-2" role="presentation">
+                                                <button class="nav-link" id="intTabPendingBtn" type="button" role="tab"
+                                                        data-bs-toggle="pill" data-bs-target="#intTabPending"
+                                                        aria-controls="intTabPending" aria-selected="false">
+                                                    Interest Due Invoices Pending
+                                                    <span class="badge bg-primary ms-1" id="intPendingCount">0</span>
+                                                </button>
+                                            </li>    
+                                            {{-- <li class="nav-item me-2"><div class="d-flex justify-content-end mb-3">
+                                                <button type="button" class="btn btn-primary"
+                                                        onclick="showBulkSettlementForm('received')">
+                                                    <i class="ri-money-dollar-circle-line me-1"></i>
+                                                    Received Settlement Amount
+                                                </button>
+                                            
+                                            </li>          
+                                            <li class="nav-item me-2"><div class="d-flex justify-content-end mb-3">
+                                                <button type="button" class="btn btn-warning"
+                                                        onclick="showBulkSettlementForm('pending')">
+                                                    <i class="ri-money-dollar-circle-line me-1"></i>
+                                                    Pending Settlement Amount
+                                                </button>                                            
+                                        </li>      --}}
+
+
+<!-- Received Invoice Settlement Modal -->
+<div class="modal fade" id="receivedSettlementModal" tabindex="-1"
+     aria-labelledby="receivedSettlementModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title" id="receivedSettlementModalLabel">
+                    Received Invoices - Bulk Settlement
+                </h5>
+                <button type="button" class="btn-close btn-close-white"
+                        data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+
+            <form id="receivedSettlementForm">
+                <div class="modal-body">
+                    <label for="receivedSettlementAmount" class="form-label">
+                        Settlement Amount
+                    </label>
+                    <input type="number" class="form-control"
+                           id="receivedSettlementAmount"
+                           name="settlement_amount"
+                           min="0.01" step="0.01" required
+                           placeholder="Enter settlement amount">
+
+                    <div class="form-text">
+                        Enter the bulk settlement amount for received invoices.
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light"
+                            data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        Save Settlement
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+
+<!-- Pending Invoice Settlement Modal -->
+<div class="modal fade" id="pendingSettlementModal" tabindex="-1"
+     aria-labelledby="pendingSettlementModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-warning">
+                <h5 class="modal-title" id="pendingSettlementModalLabel">
+                    Pending Invoices - Bulk Settlement
+                </h5>
+                <button type="button" class="btn-close"
+                        data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+
+            <form id="pendingSettlementForm">
+                <div class="modal-body">
+                    <label for="pendingSettlementAmount" class="form-label">
+                        Settlement Amount
+                    </label>
+                    <input type="number" class="form-control"
+                           id="pendingSettlementAmount"
+                           name="settlement_amount"
+                           min="0.01" step="0.01" required
+                           placeholder="Enter settlement amount">
+
+                    <div class="form-text">
+                        Enter the bulk settlement amount for pending invoices.
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light"
+                            data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning">
+                        Save Settlement
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+                                        </ul>
+
+                                        <div class="tab-content">
+                                            <!-- Tab 1: Invoices Received / Paid -->
+                                            <div class="tab-pane fade show active" id="intTabReceived" role="tabpanel" aria-labelledby="intTabReceivedBtn">
+                                                <div class="d-flex justify-content-end mb-3">
+                                                    <button type="button"
+                                                            class="btn btn-primary"
+                                                            onclick="showBulkSettlementForm('received')">
+                                                        <i class="ri-money-dollar-circle-line me-1"></i>
+                                                        Received Settlement Amount
+                                                    </button>
+                                                </div>
+                                                <table class="table table-bordered table-hover align-middle mb-0 text-end" id="intReceivedPendingBody">
+                                                    <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                        <tr>
+                                                            <th class="text-center">
+                                                                <input type="checkbox" id="selectAllReceivedInvoices">
+                                                            </th>
+                                                            <th class="text-start">INV No</th>
+                                                            <th>Inv <span class="int-cleared-label">Recd</span> Date</th>
+                                                            {{-- <th>Amount</th> --}}
+                                                            <th>Int Pending</th>
+                                                            <th class="text-center">Days</th>
+                                                            <th>Int on Int</th>
+                                                            <th>Interest Due</th>
+                                                            <th class="text-center">Settlement Status</th>   <!-- NEW -->
+                                                            <th>Settlement Amount</th>                        <!-- NEW -->
+                                                            <th>Interest Waived</th>                          <!-- NEW -->
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody id="intReceivedBody">
+                                                        <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
+                                                    </tbody>
+                                                    <tfoot>
+                                                        <tr>
+                                                            <th colspan="6" class="text-end">Interest Due Invoices <span class="int-cleared-label">Received</span></th>
+                                                            <th id="intReceivedTotal">-</th>
+                                                            <th colspan="3"></th>
+                                                        </tr>
+                                                    </tfoot>
+                                                </table>
+                                            </div>
+
+                                            <!-- Tab 2: Invoices Pending -->
+                                            <div class="tab-pane fade" id="intTabPending" role="tabpanel" aria-labelledby="intTabPendingBtn">
+                                                <div class="d-flex justify-content-end mb-3">
+                                                    <button type="button" class="btn btn-warning"
+                                                        onclick="showBulkSettlementForm('pending')">
+                                                    <i class="ri-money-dollar-circle-line me-1"></i>
+                                                    Pending Settlement Amount
+                                                </button> 
+                                                </div> 
+                                                <table class="table table-bordered table-hover align-middle mb-0 text-end"  id="intReceivedPendingBody2">
+                                                    <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                        <tr>
+                                                            <th class="text-center">
+                                                                <input type="checkbox" id="selectAllPendingInvoices">
+                                                            </th>
+                                                            <th class="text-start">Date</th>
+                                                            <th>Due Date</th>
+                                                            <th>INV No</th>
+                                                            <th class="text-center">Days</th>
+                                                            <th>Amount</th>
+                                                            <th>Interest On It</th>
+                                                            <th>Interest Due</th>
+                                                            <th>Settlement Status</th>
+                                                            <th>Settlement Amount</th>
+                                                            <th>Interest Waived</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody id="intPendingBody">
+                                                        <tr><td colspan="6" class="text-center text-muted">No data loaded</td></tr>
+                                                    </tbody>
+                                                    <tfoot>
+                                                        <tr>
+                                                            <th colspan="5" class="text-end">Interest Due Invoices Pending</th>
+                                                            <th id="intPendingTotal">-</th>
+                                                        </tr>
+                                                    </tfoot>
+                                                </table>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="modal-footer justify-content-between">
                                     <a href="javascript:void(0);" id="ledgerVoucherViewAllLink" target="_blank" class="btn btn-outline-primary btn-sm">
                                         <i class="fa fa-external-link-alt me-1"></i> View Full Ledger Vouchers
                                     </a>
+                                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Debtor Ranking Modal -->
+                    <div class="modal fade" id="debtorRankingModal" tabindex="-1" aria-hidden="true">
+                        <div class="modal-dialog modal-dialog-centered modal-fullscreen-lg-down" style="max-width: 1300px;">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Debtor Ranking</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-2">
+                                        <div class="input-group input-group-sm" style="max-width:100%;">
+                                            <span class="input-group-text"><i class="fa fa-search"></i></span>
+                                            <input type="text" id="debtorRankingSearch" class="form-control" placeholder="Search debtor...">
+                                        </div>
+                                    </div>
+
+                                    <div class="table-responsive" style="max-height: 65vh; overflow: auto;">
+                                        <table class="table table-bordered table-hover align-middle mb-0 ranking-table" id="debtorRankingTable">
+                                            <thead>
+                                                <tr>
+                                                    <th>Debtor</th>
+                                                    <th class="text-end">Monthwise Balance Overdue  & target  report</th>
+                                                    <th class="text-end">Not Due</th>
+                                                    <th class="text-end">Total Due</th>
+                                                    <th class="text-end">Target Balance</th>
+                                                    <th class="text-end">Target Collection</th>
+                                                    <th class="text-end">%Overdue</th>
+                                                    <th class="text-end">% Not Due</th>
+                                                    <th class="text-end">% Target</th>
+                                                    <th class="text-end">Collection<br>Priority Rank</th>
+                                                    <th class="text-end">Debtor Rank</th>
+                                                    <th class="text-end">Class</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                @forelse($rankingRows as $r)
+                                                    <tr>
+                                                        <td class="fw-bold">{{ $r['name'] }}</td>
+                                                        <td class="text-end">{{ $fmt($r['overdue']) }}</td>
+                                                        <td class="text-end">{{ $fmt($r['not_due']) }}</td>
+                                                        <td class="text-end">{{ $fmt($r['total_due']) }}</td>
+                                                        <td class="text-end">{{ $fmt($r['target']) }}</td>
+                                                        <td class="text-end">{{ $fmt($r['target_collection']) }}</td> 
+                                                        <td class="text-end">{{ $r['pct_overdue'] }}%</td>
+                                                        <td class="text-end">{{ $r['pct_not_due'] }}%</td>
+                                                        <td class="text-end">{{ $r['pct_target'] ?? '-' }}</td>
+                                                        <td>{{ $r['priority_rank'] ?? '-' }}</td>
+                                                        <td>{{ $r['debtor_rank'] ?? '-' }}</td>
+                                                        <td>
+                                                            @if($r['class'])
+                                                                <span class="badge" style="background-color: {{ $rankColorMap[$r['class']] }};">{{ $r['class'] }}</span>
+                                                            @else
+                                                                -
+                                                            @endif
+                                                        </td>
+                                                    </tr>
+                                                @empty
+                                                    <tr><td colspan="12" class="text-center text-muted">No Debtors Found</td></tr>
+                                                @endforelse
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
                                     <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>
                                 </div>
                             </div>
@@ -673,7 +1118,7 @@
                                         {{-- <span class="badge bg-primary">
                                             {{ count($ledgers) }}
                                         </span> --}}
-                                        <!-- <button type="button"
+                                        <button type="button"
                                             class="btn btn-outline-danger btn-sm bad-debt-toggle-btn"
                                             data-type="debtor">
                                             <i class="fa fa-user-times me-1"></i>
@@ -686,12 +1131,18 @@
                                             <span class="toggle-text">Mark Bad Debts (Creditors)</span>
                                         </button>
                                         <button type="button"
+                                            class="btn btn-outline-success btn-sm"
+                                            data-bs-toggle="modal"
+                                            data-bs-target="#debtorRankingModal">
+                                            <i class="fa fa-list-ol me-1"></i> Debtor Ranking
+                                        </button>
+                                        <button type="button"
                                             class="btn btn-dark btn-sm openFollowupModal"
                                             data-bs-toggle="modal"
                                             data-bs-target="#followupTypeModal"
                                             data-company="{{ $company }}">
                                             Follow Up
-                                        </button> -->
+                                        </button>
                                     </div>
                                 </div>
                                 <div class="card-body">
@@ -719,7 +1170,7 @@
 
                                                 <div class="input-group input-group-sm filter-search-wrap">
                                                     <span class="input-group-text"><i class="fa fa-search"></i></span>
-                                                    <input type="text" class="form-control filter-search" placeholder="Search name / mobile...">
+                                                    <input type="text" class="form-control filter-search" placeholder="Search name / mobile / #id...">
                                                 </div>
 
                                                 <select class="form-select form-select-sm filter-status">
@@ -731,10 +1182,11 @@
 
                                                 <select class="form-select form-select-sm filter-rank">
                                                     <option value="">All Ranks</option>
-                                                    <option value="A">Rank A - Excellent</option>
-                                                    <option value="B">Rank B - Good</option>
-                                                    <option value="C">Rank C - Average</option>
-                                                    <option value="D">Rank D - Poor</option>
+                                                    <option value="A">Rank A</option>
+                                                    <option value="B">Rank B</option>
+                                                    <option value="C">Rank C</option>
+                                                    <option value="D">Rank D</option>
+                                                    <option value="none">Unranked</option>
                                                 </select>
 
                                                 <select class="form-select form-select-sm filter-overlimit">
@@ -756,16 +1208,20 @@
                                                         $rows = $l['rows'];
                                                         $dotColor = $statusColorMap[$l['status'] ?? 'secondary'] ?? '#adb5bd';
                                                         $dotLabel = $statusLabelMap[$l['status'] ?? 'secondary'] ?? 'Unmarked';
-                                                        $rankColor = $rankColorMap[$l['rank'] ?? 'D'] ?? '#adb5bd';
-                                                        $rankLabel = $rankLabelMap[$l['rank'] ?? 'D'] ?? 'Unranked';
+                                                        $rk = preg_match('/^\s*(?:rank\s*)?([A-D])\s*$/i', (string) ($l['rank'] ?? ''), $rm) ? strtoupper($rm[1]) : '';
+                                                        $rankColor = $rankColorMap[$rk] ?? '#adb5bd';
+                                                        $rankLabel = $rankLabelMap[$rk] ?? 'Unranked';
                                                     @endphp
 
                                                     <div class="accordion-item mb-3 border rounded shadow-sm"
+                                                        data-ledger="{{ $l['name'] }}"
+                                                        data-under="{{ $l['under'] ?? '' }}"
                                                         data-status="{{ $l['status'] ?? 'secondary' }}"
-                                                        data-rank="{{ $l['rank'] ?? 'D' }}"
+                                                        data-rank="{{ $rk }}"
                                                         data-overlimit="{{ !empty($l['overlimit']) ? 1 : 0 }}"
-                                                        data-name="{{ strtolower($l['name']) }}"
-                                                        data-mobile="{{ $l['mobile'] ?? '' }}">
+                                                        data-name="{{ mb_strtolower($l['name']) }}"
+                                                        data-uid="{{ strtolower((string) ($l['unique_id'] ?? '')) }}"
+                                                        data-mobile="{{ preg_replace('/\D/', '', $l['mobile'] ?? '') }}">
                                                         <h2 class="accordion-header" id="heading-{{ $uid }}">
                                                             <div class="d-flex align-items-center w-100">
                                                                 <span class="ledger-check-wrap bad-debt-check-wrap d-none" data-type="debtor">
@@ -791,7 +1247,7 @@
                                                                                 <span class="status-dot" style="background-color: {{ $overlimitColor }};" title="{{ $overlimitLabel }}"></span>
                                                                             @endif
                                                                             <span class="rank-badge" style="background-color: {{ $rankColor }};" title="{{ $rankLabel }}">
-                                                                                {{ $l['rank'] ?? '-' }}
+                                                                                {{ $rk ?: '-' }}
                                                                             </span>
                                                                         </div>
                                                                         <span class="badge bg-success">Sundry Debtors</span>
@@ -814,7 +1270,7 @@
                                                                                         <th width="40%">{{ $label }}</th>
                                                                                         <td>
                                                                                             <span class="ledger-field-value">
-                                                                                                <strong>₹ {{ $fmt($value) }}</strong>
+                                                                                                <strong @if($label === 'Interest Cost') class="js-interest-cost-val" @endif>₹ {{ $fmt($value) }}</strong>
                                                                                                 <i class="fa fa-file-invoice"></i>
                                                                                             </span>
                                                                                         </td>
@@ -852,7 +1308,7 @@
 
                                                 <div class="input-group input-group-sm filter-search-wrap">
                                                     <span class="input-group-text"><i class="fa fa-search"></i></span>
-                                                    <input type="text" class="form-control filter-search" placeholder="Search name / mobile...">
+                                                    <input type="text" class="form-control filter-search" placeholder="Search name / mobile / #id...">
                                                 </div>
 
                                                 <select class="form-select form-select-sm filter-status">
@@ -864,10 +1320,11 @@
 
                                                 <select class="form-select form-select-sm filter-rank">
                                                     <option value="">All Ranks</option>
-                                                    <option value="A">Rank A - Excellent</option>
-                                                    <option value="B">Rank B - Good</option>
-                                                    <option value="C">Rank C - Average</option>
-                                                    <option value="D">Rank D - Poor</option>
+                                                    <option value="A">Rank A</option>
+                                                    <option value="B">Rank B</option>
+                                                    <option value="C">Rank C</option>
+                                                    <option value="D">Rank D</option>
+                                                    <option value="none">Unranked</option>
                                                 </select>
 
                                                 <select class="form-select form-select-sm filter-overlimit">
@@ -889,15 +1346,19 @@
                                                         $rows = $l['rows'];
                                                         $dotColor = $statusColorMap[$l['status'] ?? 'secondary'] ?? '#adb5bd';
                                                         $dotLabel = $statusLabelMap[$l['status'] ?? 'secondary'] ?? 'Unmarked';
-                                                        $rankColor = $rankColorMap[$l['rank'] ?? 'D'] ?? '#adb5bd';
-                                                        $rankLabel = $rankLabelMap[$l['rank'] ?? 'D'] ?? 'Unranked';
+                                                        $rk = preg_match('/^\s*(?:rank\s*)?([A-D])\s*$/i', (string) ($l['rank'] ?? ''), $rm) ? strtoupper($rm[1]) : '';
+                                                        $rankColor = $rankColorMap[$rk] ?? '#adb5bd';
+                                                        $rankLabel = $rankLabelMap[$rk] ?? 'Unranked';
                                                     @endphp
                                                     <div class="accordion-item mb-3 border rounded shadow-sm"
+                                                        data-ledger="{{ $l['name'] }}"
+                                                        data-under="{{ $l['under'] ?? '' }}"
                                                         data-status="{{ $l['status'] ?? 'secondary' }}"
-                                                        data-rank="{{ $l['rank'] ?? 'D' }}"
+                                                        data-rank="{{ $rk }}"
                                                         data-overlimit="{{ !empty($l['overlimit']) ? 1 : 0 }}"
-                                                        data-name="{{ strtolower($l['name']) }}"
-                                                        data-mobile="{{ $l['mobile'] ?? '' }}">
+                                                        data-name="{{ mb_strtolower($l['name']) }}"
+                                                        data-uid="{{ strtolower((string) ($l['unique_id'] ?? '')) }}"
+                                                        data-mobile="{{ preg_replace('/\D/', '', $l['mobile'] ?? '') }}">
                                                         <h2 class="accordion-header" id="heading-{{ $uid }}">
                                                             <div class="d-flex align-items-center w-100">
                                                                 <span class="ledger-check-wrap bad-debt-check-wrap d-none" data-type="creditor">
@@ -923,7 +1384,7 @@
                                                                                 <span class="status-dot" style="background-color: {{ $overlimitColor }};" title="{{ $overlimitLabel }}"></span>
                                                                             @endif
                                                                             <span class="rank-badge" style="background-color: {{ $rankColor }};" title="{{ $rankLabel }}">
-                                                                                {{ $l['rank'] ?? '-' }}
+                                                                                {{ $rk ?: '-' }}
                                                                             </span>
                                                                         </div>
                                                                         <span class="badge bg-danger">Sundry Creditors</span>
@@ -946,7 +1407,7 @@
                                                                                         <th width="40%">{{ $label }}</th>
                                                                                         <td>
                                                                                             <span class="ledger-field-value">
-                                                                                                <strong>₹ {{ $fmt($value) }}</strong>
+                                                                                                <strong @if($label === 'Interest Cost') class="js-interest-cost-val" @endif>₹ {{ $fmt($value) }}</strong>
                                                                                                 <i class="fa fa-file-invoice"></i>
                                                                                             </span>
                                                                                         </td>
@@ -1001,6 +1462,20 @@
             @include('accountant.components.footer')
 
             <script>
+                // ✅ Bina round kiye amount dikhata hai (Indian grouping). DB ki value jaisi hai waisi hi.
+                function fmtExact(n) {
+                    if (n === null || n === undefined || n === '') return '0';
+                    let s = String(n).replace(/,/g, '');
+                    let neg = s[0] === '-';
+                    s = s.replace(/^[-+]/, '');
+                    let parts = s.split('.');
+                    let i = parts[0], d = parts[1];
+                    if (i.length > 3) {
+                        i = i.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + i.slice(-3);
+                    }
+                    return (neg ? '-' : '') + i + (d ? '.' + d : '');
+                }
+
                 function calcDueDateFromDays(days) {
                     let d = new Date();
                     d.setDate(d.getDate() - (parseInt(days, 10) || 0));
@@ -1014,25 +1489,21 @@
 
                 const breakdownDataDebtor   = @json($breakdownDebtor);
                 const breakdownDataCreditor = @json($breakdownCreditor);
+                const totalsDataDebtor      = @json($totalsDebtor);
+                const totalsDataCreditor    = @json($totalsCreditor);
                 const currentCompanyName    = @json($company);
 
                 function showLedgerBreakdown(label, type) {
                     let dataset = (type === 'creditor') ? breakdownDataCreditor : breakdownDataDebtor;
+                    let totals  = (type === 'creditor') ? totalsDataCreditor : totalsDataDebtor;
                     let items = dataset[label] || [];
                     let html = '';
-                    let total = 0;
 
-                    items.forEach(function(item) {
-                        total += parseFloat(item.value);
-                        let formattedValue = new Intl.NumberFormat('en-IN', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2
-                        }).format(item.value);
-
+                    items.forEach(function (item) {
                         html += `<tr>
                             <td>${item.ledger} <span class="badge bg-light text-dark ms-1">${item.under}</span></td>
                             <td>${item.label}</td>
-                            <td><strong>₹ ${formattedValue}</strong></td>
+                            <td><strong>₹ ${fmtExact(item.value)}</strong></td>
                         </tr>`;
                     });
 
@@ -1040,51 +1511,538 @@
                         html = '<tr><td colspan="3" class="text-center text-muted">No data available</td></tr>';
                     }
 
-                    let formattedTotal = new Intl.NumberFormat('en-IN', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2
-                    }).format(total);
-
                     let typeLabel = (type === 'creditor') ? 'Sundry Creditors' : 'Sundry Debtors';
                     $('#ledgerBreakdownTitle').text(label + ' Breakdown (' + typeLabel + ')');
                     $('#ledgerBreakdownBody').html(html);
-                    $('#ledgerBreakdownTotal').text('₹ ' + formattedTotal);
+                    // Total PHP se aaya hua exact value (JS me float sum nahi)
+                    $('#ledgerBreakdownTotal').text('₹ ' + fmtExact(totals[label] ?? 0));
                 }
 
-                // ===== Per-ledger, per-field (Balance / Balance Due / Sale / ...) voucher modal =====
+                // ===== TARGET modal: DB se data =====
+                function renderTargetData(ledger, under) {
+                    const amt = n => (n === null || n === undefined) ? '' : fmtExact(n);
+                    const pct = n => (n === null || n === undefined) ? '' : fmtExact(n) + '%';
+
+                    $('#ledgerVoucherLoading').removeClass('d-none');
+
+                    $.ajax({
+                        url: "{{ route('accountant.tally.ledger.target-data') }}",
+                        method: "GET",
+                        dataType: "json",
+                        data: { company: currentCompanyName, ledger: ledger, under: under },
+                        success: function (res) {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+                            let html = '';
+                            (res.rows || []).forEach(function (r) {
+                                html += `<tr>
+                                    <td class="month-cell text-start">${r.month}</td>
+                                    <td>${amt(r.overdue)}</td>
+                                    <td>${amt(r.notDue)}</td>
+                                    <td>${amt(r.balance)}</td>
+                                    <td>${pct(r.pctOverdue)}</td>
+                                    <td>${pct(r.target)}</td>
+                                    <td>${amt(r.targetCollection)}</td>
+                                    <td>${pct(r.pctNotDue)}</td>
+                                    <td>${amt(r.targetBal)}</td>
+                                </tr>`;
+                            });
+                            $('#ledgerTargetBody').html(html || '<tr><td colspan="10" class="text-center text-muted">No data found</td></tr>');
+                        },
+                        error: function () {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+                            $('#ledgerVoucherError').removeClass('d-none').text('Could not load target data.');
+                        }
+                    });
+                }
+
+
+               
+                $(document).on('change', '.settlement-status', function () {
+                    const $select = $(this);
+                    const status = $select.val();
+                    const $row = $select.closest('tr');
+                    const $amountCell = $row.find('.settlement-amount-cell');
+
+                    if (status === 'settled') {
+                        $amountCell.html(`
+                            <div class="d-flex align-items-center gap-2">
+                                <input type="number"
+                                    class="form-control form-control-sm settlement-amount-input"
+                                    placeholder="Enter amount"
+                                    min="0"
+                                    step="0.01"
+                                    style="min-width:80px;">
+
+                                    
+<button type="button" class="btn btn-sm btn-outline-primary save-settlement" title="Save">
+                                                <i class="fa fa-save"></i>
+                                            </button>
+                                
+                            </div>
+                        `);
+                    } else {
+                        $amountCell.html(`
+                            <span class="fw-bold settlement-amount-label">-</span>
+                        `);
+                    }
+                });
+
+                
+
+function showBulkSettlementForm(type) {
+    const modalId = type === 'received'
+        ? 'receivedSettlementModal'
+        : 'pendingSettlementModal';
+
+    const inputId = type === 'received'
+        ? 'receivedSettlementAmount'
+        : 'pendingSettlementAmount';
+
+    document.getElementById(inputId).value = '';
+
+    bootstrap.Modal.getOrCreateInstance(
+        document.getElementById(modalId)
+    ).show();
+}
+
+
+// Received settlement form
+$('#receivedSettlementForm').on('submit', function (e) {
+    e.preventDefault();
+
+    const amount = $('#receivedSettlementAmount').val();
+    const invoiceIds = $('#intReceivedPendingBody .received-invoice-checkbox:checked')
+        .map(function () {
+            return $(this).val();
+        })
+        .get();
+    if (amount <= 0) {
+        alert('Please enter a valid settlement amount.');
+        return;
+    }
+
+    if (invoiceIds.length === 0) {
+        alert('Please select at least one invoice.');
+        return;
+    }
+
+    saveBulkSettlemtAmount(amount,invoiceIds, 'received', $(this));
+});
+
+
+// Pending settlement form
+$('#pendingSettlementForm').on('submit', function (e) {
+    e.preventDefault();
+
+    const amount = $('#pendingSettlementAmount').val();
+
+    const invoiceIds = $('#intReceivedPendingBody2 .pending-invoice-checkbox:checked')
+        .map(function () {
+            return $(this).val();
+        })
+        .get();
+    if (amount <= 0) {
+        alert('Please enter a valid settlement amount.');
+        return;
+    }
+
+    if (invoiceIds.length === 0) {
+        alert('Please select at least one invoice.');
+        return;
+    }
+    
+    saveBulkSettlemtAmount(amount, invoiceIds,'pending', $(this));
+});
+
+
+// Save bulk settlement using AJAX
+function saveBulkSettlemtAmount(amount,invoiceIds, type, form) {
+
+    if (!amount || !Number.isFinite(Number(amount)) ||
+        Number(amount) <= 0) {
+        alert('Please enter a valid settlement amount.');
+        return;
+    }
+
+    const submitBtn = form.find('button[type="submit"]');
+    const originalText = submitBtn.text();
+
+    $.ajax({
+        url: "{{ route('accountant.tally.ledger.save-bulk-settlement') }}",
+        type: "POST",
+        data: {
+            settlement_amount: amount,
+            type: type,
+            invoice_ids: invoiceIds,
+            settlement_status: 'settled',
+             _token: "{{ csrf_token() }}",
+        },
+
+        beforeSend: function () {
+            submitBtn.prop('disabled', true)
+                .text('Saving...');
+        },
+
+        success: function (response) {
+
+            if (response.success) {
+
+                // Close the relevant modal
+                const modalId = type === 'received'
+                    ? 'receivedSettlementModal'
+                    : 'pendingSettlementModal';
+
+                const modalElement  = document.getElementById(modalId);
+                const modalInstance = bootstrap.Modal.getOrCreateInstance(modalElement);
+
+                modalInstance.hide();
+
+                // Refresh both invoice lists
+                refreshReceivedInvoiceList();
+                refreshPendingInvoiceList();
+
+                // Show success message
+                if (typeof toastr !== 'undefined') {
+                    toastr.success(
+                        response.message || 'Settlement saved successfully.'
+                    );
+                } else {
+                    alert(
+                        response.message || 'Settlement saved successfully.'
+                    );
+                }
+
+            } else {
+                alert(response.message || 'Unable to save settlement.');
+            }
+        },
+
+        error: function (xhr) {
+            const message = xhr.responseJSON?.message
+                || 'An error occurred while saving the settlement.';
+
+            alert(message);
+        },
+
+        complete: function () {
+            submitBtn.prop('disabled', false).text(originalText);
+        }
+    });
+}
+
+
+// Refresh Received invoice list
+function refreshReceivedInvoiceList() {
+    // Replace with your existing function that loads Received invoices.
+    if (typeof renderInterestData === 'function') {
+        renderInterestData("GURULAXMI CREATION","under=Sundry Debtors");
+    }
+}
+
+
+// Refresh Pending invoice list
+function refreshPendingInvoiceList() {
+    // Replace with your existing function that loads Pending invoices.
+    if (typeof renderInterestData === 'function') {
+        renderInterestData("GURULAXMI CREATION","under=Sundry Creditors");
+    }
+}
+
+$(document).on('change', '#selectAllReceivedInvoices', function () {
+    const checked = this.checked;
+
+    $('#intReceivedBody .received-invoice-checkbox')
+        .prop('checked', checked);
+});
+
+$(document).on('change', '.received-invoice-checkbox', function () {
+    const total = $('#intReceivedBody .received-invoice-checkbox').length;
+    const selected = $('#intReceivedBody .received-invoice-checkbox:checked').length;
+
+    $('#selectAllReceivedInvoices').prop(
+        'checked',
+        total > 0 && total === selected
+    );
+});
+
+$(document).on('change', '#selectAllPendingInvoices', function () {
+    const checked = this.checked;
+
+    $('#intPendingBody .pending-invoice-checkbox')
+        .prop('checked', checked);
+});
+
+
+$(document).on('change', '.pending-invoice-checkbox', function () {
+    const total = $('#intPendingBody .pending-invoice-checkbox').length;
+    const selected = $('#intPendingBody .pending-invoice-checkbox:checked').length;
+
+    $('#selectAllPendingInvoices').prop(
+        'checked',
+        total > 0 && total === selected
+    );
+});
+
+
+                
+                $(document).on('click', '.save-settlement', function () {
+                    const $btn = $(this);
+                    const $row = $btn.closest('tr');
+                    const $select = $row.find('.settlement-status');
+                    const amount = $row.find('.settlement-amount-input').val();
+                    const rs  = n => '₹ ' + amt(n);
+
+                    if (amount === '' || !Number.isFinite(Number(amount)) || Number(amount) < 0) {
+                        alert('Please enter a valid settlement amount.');
+                        return;
+                    }
+
+                    $.ajax({
+                        url: "{{ route('accountant.tally.ledger.save-settlement') }}",
+                        method: "POST",
+                        dataType: "json",
+                        data: {
+                            _token: "{{ csrf_token() }}",
+                            voucher_id: $select.data('voucher-id'),
+                            inv_no: $select.data('inv-no'),
+                            settlement_status: 'settled',
+                            settlement_amount: amount
+                        },
+                        success: function (res) {
+                            console.log('AJAX response:', res);
+
+                            if (res.success) {
+                                // Update the amount displayed in the row
+                                $row.find('.settlement-amount-cell').html(
+                                    $('<span>', {
+                                        class: 'fw-bold',
+                                        text: amount
+                                    })
+                                );
+
+                                // Replace the status dropdown
+                                $select.replaceWith(
+                                    '<span class="badge bg-success">Settled</span>'
+                                );
+
+                                // Hide the Save button if required
+                                $btn.hide();
+                            } else {
+                                alert(res.message || 'Could not save settlement.');
+                            }
+                        },
+                        error: function (xhr) {
+                            console.error('AJAX error:', xhr.responseText);
+                            alert('Could not save settlement. Please try again.');
+                        }
+                    });
+                });
+                // ===== INTEREST COST modal: DB se data =====
+                function renderInterestData(ledger, under) {
+                    const amt = n => (n === null || n === undefined || n === '') ? '-' : fmtExact(n);
+
+                    const rs  = n => '₹ ' + amt(n);
+                    const fmtD = d => {
+                        if (!d) return '-';
+                        const o = new Date(d);
+                        return isNaN(o.getTime()) ? d : fmtDateShared(o);
+                    };
+                    const isCreditor = (under === 'Sundry Creditors');
+                    const emptyR = '<tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>';
+                    const emptyP = '<tr><td colspan="6" class="text-center text-muted">No data loaded</td></tr>';
+
+                    $('.int-cleared-label').text(isCreditor ? 'Paid' : 'Recd');
+                    $('#intReceivedLabel').text(isCreditor ? 'Paid' : 'Received');
+                    $('#intPartyRate, #intTotal, #intReceivedTotal, #intPendingTotal, #intSummaryReceived, #intSummaryPending, #intSettlementRequest, #intSettlementReceived, #intWaivedTotal').text('-');
+                    $('#intReceivedBody').html(emptyR);
+                    $('#intPendingBody').html(emptyP);
+
+                    $('#intReceivedCount, #intPendingCount').text('0');
+                    bootstrap.Tab.getOrCreateInstance(document.getElementById('intTabReceivedBtn')).show();
+
+ 
+                    $('#ledgerVoucherLoading').removeClass('d-none');
+
+                    $.ajax({
+                        url: "{{ route('accountant.tally.ledger.interest-data') }}",
+                        method: "GET",
+                        dataType: "json",
+                        data: { company: currentCompanyName, ledger: ledger, under: under },
+                        success: function (res) {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+
+                            $('#intPartyRate').text(res.party_rate != null ? res.party_rate + '%' : '-');
+                            $('#intTotal').text(rs(res.total ?? 0));
+                            $('#intReceivedTotal').text(rs(res.received_total ?? 0));
+                            $('#intPendingTotal').text(rs(res.pending_total ?? 0));
+                            $('#intSummaryReceived').text(rs(res.received_total ?? 0));
+                            $('#intSummaryPending').text(rs(res.pending_total ?? 0));
+                            $('#intSettlementRequest').text(rs(res.settlement_request_total ?? 0));
+                            $('#intSettlementReceived').text(rs(res.settlement_received_total ?? 0));
+                            $('#intWaivedTotal').text(rs(res.interest_waived_total ?? 0));
+
+                            let rHtml = '';
+                            (res.received || []).forEach(function (r, index) {
+                                const isSettled = r.settlement_status === 'settled';
+                                const rowId = `settlement_${index}`;
+                                rHtml += `<tr>
+                                    <td class="text-center">
+                                        ${
+                                            isSettled
+                                                ? ''
+                                                : `<input type="checkbox"
+                                                        class="received-invoice-checkbox"
+                                                        value="${r.id}"
+                                                        data-inv-no="${r.inv_no ?? ''}">`
+                                        }
+                                    </td>
+                                    <td class="text-start">${r.inv_no ?? '-'}</td>
+                                    <td>${fmtD(r.recd_date)}</td>
+                                    <td>${rs(r.int_pending)}</td>
+                                    <td class="text-center"><span class="badge bg-danger">${r.days ?? '-'} days</span></td>
+                                    <td>${rs(r.int_on_int)}</td>
+                                    <td class="fw-bold">${rs(r.interest_due)}</td>
+                                    <td class="text-center">
+                                        ${
+                                            isSettled
+                                                ? `<span class="badge bg-success">Settled</span>`
+                                                : `
+                                                    <select class="form-select form-select-sm settlement-status"
+                                                            data-voucher-id="${r.id}"
+                                                            data-index="${index}"
+                                                            data-inv-no="${r.inv_no ?? ''}"
+                                                            style="min-width:50px">
+                                                        <option value="pending"
+                                                            ${r.settlement_status === 'pending' ? 'selected' : ''}>
+                                                            Pending
+                                                        </option>
+                                                        <option value="settled">Settled</option>
+                                                    </select>
+                                                `
+                                        }
+                                    </td>
+                                    <td class="settlement-amount-cell">
+                                        ${
+                                            isSettled
+                                                ? `<span class="fw-bold">${rs(r.settlement_amount)}</span>`
+                                                : `<span class="fw-bold settlement-amount-label">
+                                                        ${rs(r.settlement_amount)}
+                                                </span>`
+                                        }
+                                    </td>
+                                    <td class="fw-bold">${rs(r.interest_waived)}</td>
+                                </tr>`;
+                            });
+                            $('#intReceivedBody').html(rHtml || '<tr><td colspan="10" class="text-center text-muted">No data found</td></tr>');
+
+                            $('#intReceivedCount').text((res.received || []).length);
+                            let pHtml = '';
+                            console.log('Pending data:', res.pending);
+                            (res.pending || []).forEach(function (r, index) {
+                                const isSettled = r.settlement_status === 'settled';
+                                const rowId = `settlement_${index}`;
+                                pHtml += `<tr>
+ <td class="text-center">
+                                        ${
+                                            isSettled
+                                                ? ''
+                                                : `<input type="checkbox"
+                                                        class="pending-invoice-checkbox"
+                                                        value="${r.id}"
+                                                        data-inv-no="${r.inv_no ?? ''}">`
+                                        }
+                                    </td>
+                                    <td class="text-start">${fmtD(r.date)}</td>
+                                    <td>${fmtD(r.due_date)}</td>
+                                    <td>${r.inv_no ?? '-'}</td>
+                                    <td class="text-center"><span class="badge bg-danger">${r.days ?? '-'} days</span></td>
+                                    <td>${rs(r.amount)}</td>
+                                    <td>${rs(r.int_on_int)}</td>
+                                    <td class="fw-bold">${rs(r.interest_due)}</td>
+                                    <td class="text-center">
+                                        ${
+                                            isSettled
+                                                ? `<span class="badge bg-success">Settled</span>`
+                                                : `
+                                                    <select class="form-select form-select-sm settlement-status"
+                                                            data-voucher-id="${r.id}"
+                                                            data-index="${index}"
+                                                            data-inv-no="${r.inv_no ?? ''}"
+                                                            style="min-width:50px">
+                                                        <option value="pending"
+                                                            ${r.settlement_status === 'pending' ? 'selected' : ''}>
+                                                            Pending
+                                                        </option>
+                                                        <option value="settled">Settled</option>
+                                                    </select>
+                                                `
+                                        }
+                                    </td>
+                                    <td class="settlement-amount-cell">
+                                        ${
+                                            isSettled
+                                                ? `<span class="fw-bold">${rs(r.settlement_amount)}</span>`
+                                                : `<span class="fw-bold settlement-amount-label">
+                                                        ${rs(r.settlement_amount)}
+                                                </span>`
+                                        }
+                                    </td>
+                                    <td class="fw-bold">${rs(r.interest_waived)}</td>
+                                </tr>`;
+                            });
+                            $('#intPendingBody').html(pHtml || '<tr><td colspan="6" class="text-center text-muted">No data found</td></tr>');
+
+                            $('#intPendingCount').text((res.pending || []).length);
+                        },
+                        error: function () {
+                            $('#ledgerVoucherLoading').addClass('d-none');
+                            $('#ledgerVoucherError').removeClass('d-none').text('Could not load interest data.');
+                        }
+                    });
+                }
+                // ===== Per-ledger, per-field (Balance / Balance Overdue / Target / Sale / ...) voucher modal =====
                 //
-                // "Balance"     -> #ledgerBalanceTable (Original / Received-Paid / Pending)
-                // "Balance Due" -> #ledgerDueTable     (Date / Due Date / Voucher No. / Credit Period / Days / Pending Amount)
-                // baaki fields  -> #ledgerVoucherTable (normal debit/credit voucher list)
+                // "Balance"         -> #ledgerBalanceTable (Original / Received-Paid / Pending)
+                // "Balance Overdue" -> #ledgerDueTable     (Date / Voucher No. / Days / Pending Amount)
+                // "Target"          -> #ledgerTargetTable  (Month-wise)
+                // baaki fields      -> #ledgerVoucherTable (normal debit/credit voucher list)
                 function showLedgerVoucherDetail(ledger, under, field) {
-                    let isBalance = (field === 'Balance');
-                    let isDue     = (field === 'Balance Due');
-                    let isSale    = (field === 'Sale');
+                    let isBalance  = (field === 'Balance');
+                    let isNotDue   = (field === 'Not Due');
+                    let isDue      = (field === 'Balance Overdue') || isNotDue;   // Not Due bhi Due wali table use karta hai
+                    let isTarget   = (field === 'Balance Target');
+                    let isSale     = (field === 'Sale');
                     let isCreditor = (under === 'Sundry Creditors');
+                    let isInterest = (field === 'Interest Cost');
 
                     $('#ledgerVoucherModalTitle').text(
-                        ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? ' (Overdue Vouchers)' : ' Vouchers'))
+                        ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? (isNotDue ? ' (Not Due Vouchers)' : ' (Overdue Vouchers)') : (isTarget ? ' (Month-wise)' : (isInterest ? ' (Interest Breakdown)' : ' Vouchers'))))
                     );
                     $('#ledgerVoucherError').addClass('d-none').text('');
                     $('#ledgerVoucherLoading').removeClass('d-none');
-
-                    $('#ledgerVoucherNormalWrap').toggleClass('d-none', isBalance || isDue);
+                    $('#ledgerVoucherNormalWrap').toggleClass('d-none', isBalance || isDue || isTarget || isInterest);
                     $('#ledgerVoucherBalanceWrap').toggleClass('d-none', !isBalance);
                     $('#ledgerVoucherDueWrap').toggleClass('d-none', !isDue);
+                    $('#ledgerVoucherTargetWrap').toggleClass('d-none', !isTarget);
+                    $('#ledgerVoucherInterestWrap').toggleClass('d-none', !isInterest);
 
                     $('#ledgerVoucherBody').html('<tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>');
                     $('#ledgerBalanceBody').html('<tr><td colspan="5" class="text-center text-muted">No vouchers loaded</td></tr>');
                     $('#ledgerDueBody').html('<tr><td colspan="4" class="text-center text-muted">No vouchers loaded</td></tr>');
+                    $('#ledgerTargetBody').html('<tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>');
                     $('#ledgerDueTotal').text('-');
 
                     $('#ledgerVoucherSearch').val('');
 
                     $('#ledgerBalanceClearedHeader').text(isCreditor ? 'Paid' : 'Received');
-                    $('#ledgerDueAmountHeader').text('Pending Amount');
+                    $('#ledgerDueHeadRow').html(isNotDue
+                        ? '<th>Date</th><th>Due Date</th><th>Voucher No.</th><th class="text-end" id="ledgerDueAmountHeader">Amount</th>'
+                        : '<th>Date</th><th>Voucher No.</th><th class="text-center">Days</th><th class="text-end" id="ledgerDueAmountHeader">Pending Amount</th>');
+                    $('#ledgerDueTotalLabel').text(isNotDue ? 'Total Not Due' : 'Total Due');
 
                     let hideVoucherNo = (field === 'Receipts');
                     let hideDebit     = (field === 'Receipts');
-                    let hideCredit    = (field === 'Sale');
+                    let hideCredit    = (field === 'Sale' || field === 'Other Debits');
 
                     $('#ledgerVoucherTable .col-voucherno').toggle(!hideVoucherNo);
                     $('#ledgerVoucherTable .col-debit').toggle(!hideDebit);
@@ -1102,6 +2060,17 @@
                         .replace(':under', encodeURIComponent(under));
                     $('#ledgerVoucherViewAllLink').attr('href', fullPageUrl);
 
+                    // ===== TARGET: DB se data =====
+                    if (isTarget) {
+                        renderTargetData(ledger, under);
+                        return;
+                    }
+
+                    if (isInterest) {
+                        renderInterestData(ledger, under);
+                        return;
+                    }
+
                     let fieldAjaxBaseUrl = "{{ route('accountant.tally.ledger.field-vouchers', ['company' => ':company', 'ledger' => ':ledger', 'under' => ':under']) }}";
                     let fieldAjaxUrl = fieldAjaxBaseUrl
                         .replace(':company', encodeURIComponent(currentCompanyName))
@@ -1110,11 +2079,9 @@
 
                     let dueAjaxUrl = "{{ route('accountant.tally.ledger.due-vouchers') }}";
 
+                    // ✅ Round nahi, DB jaisa exact amount
                     let fmtAmt = function (n) {
-                        return new Intl.NumberFormat('en-IN', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2
-                        }).format(n || 0);
+                        return fmtExact(n);
                     };
 
                     let fmtDate = function (d) {
@@ -1128,7 +2095,7 @@
                         url: isDue ? dueAjaxUrl : fieldAjaxUrl,
                         method: "GET",
                         data: isDue
-                            ? { company: currentCompanyName, ledger: ledger, under: under }
+                            ? { company: currentCompanyName, ledger: ledger, under: under, type: isNotDue ? 'not_due' : 'due' }
                             : { field: field },
                         dataType: "json",
                         success: function (res) {
@@ -1138,8 +2105,8 @@
 
                             if (!vouchers.length) {
                                 if (isDue) {
-                                    $('#ledgerDueBody').html('<tr><td colspan="4" class="text-center text-muted">No overdue vouchers found 🎉</td></tr>');
-                                    $('#ledgerDueTotal').text('₹ 0.00');
+                                    $('#ledgerDueBody').html('<tr><td colspan="4" class="text-center text-muted">' + (isNotDue ? 'No not due vouchers found' : 'No overdue vouchers found 🎉') + '</td></tr>');
+                                    $('#ledgerDueTotal').text('₹ 0');
                                 } else if (isBalance) {
                                     $('#ledgerBalanceBody').html('<tr><td colspan="5" class="text-center text-muted">No pending invoices found — all clear! 🎉</td></tr>');
                                 } else {
@@ -1149,15 +2116,23 @@
                                 return;
                             }
 
-                            // ===== BALANCE DUE (ab Credit Period edit nahi, sirf Days + Amount) =====
+                            // ===== BALANCE DUE (sirf Days + Amount) =====
                             if (isDue) {
                                 let rows = '';
-                                let total = 0;
                                 vouchers.forEach(function (v) {
-                                    total += parseFloat(v.amount) || 0;
                                     let partial = (parseFloat(v.original) || 0) > (parseFloat(v.amount) || 0) + 0.009
                                         ? `<div class="text-muted small">of ₹ ${fmtAmt(v.original)}</div>`
                                         : '';
+
+                                    if (isNotDue) {
+                                        rows += `<tr>
+                                            <td>${fmtDate(v.date)}</td>
+                                            <td>${fmtDate(v.due_date)}</td>
+                                            <td>${v.voucher_number ?? '-'}</td>
+                                            <td class="text-end fw-bold">₹ ${fmtAmt(v.amount)}</td>
+                                        </tr>`;
+                                        return;
+                                    }
 
                                     rows += `<tr data-voucher-id="${v.id ?? v.voucher_number ?? ''}">
                                         <td>${fmtDate(v.date)}</td>
@@ -1167,7 +2142,8 @@
                                     </tr>`;
                                 });
                                 $('#ledgerDueBody').html(rows);
-                                $('#ledgerDueTotal').text('₹ ' + fmtAmt(res.total ?? total));
+                                // Total controller se aata hai (exact). JS me float sum nahi karte.
+                                $('#ledgerDueTotal').text('₹ ' + fmtAmt(res.total ?? 0));
                                 return;
                             }
 
@@ -1181,7 +2157,7 @@
                                         <td>${v.voucher_number ?? '-'}</td>
                                         <td class="text-end">₹ ${fmtAmt(v.original)}</td>
                                         <td class="text-end">₹ ${fmtAmt(v[clearedKey])}</td>
-                                        <td class="text-end fw-bold ${v.pending > 0 ? 'text-danger' : 'text-success'}">₹ ${fmtAmt(v.pending)}</td>
+                                        <td class="text-end fw-bold ${parseFloat(v.pending) > 0 ? 'text-danger' : 'text-success'}">₹ ${fmtAmt(v.pending)}</td>
                                     </tr>`;
                                 });
                                 $('#ledgerBalanceBody').html(rows);
@@ -1207,7 +2183,9 @@
                                                 data-voucher-number="${v.voucher_no ?? ''}"
                                                 data-ledger="${ledger}"
                                                 data-under="${under}">
-                                           
+                                            <button type="button" class="btn btn-sm btn-outline-primary credit-period-save-btn" title="Save">
+                                                <i class="fa fa-save"></i>
+                                            </button>
                                         </div>
                                     </td>`;
 
@@ -1222,8 +2200,8 @@
                                     ${dueDateCell}
                                     ${creditPeriodCell}
                                     ${daysCell}
-                                    <td class="col-debit text-end" style="${hideDebit ? 'display:none;' : ''}">${v.debit ? '₹ ' + fmtAmt(v.debit) : ''}</td>
-                                    <td class="col-credit text-end" style="${hideCredit ? 'display:none;' : ''}">${v.credit ? '₹ ' + fmtAmt(v.credit) : ''}</td>
+                                    <td class="col-debit text-end" style="${hideDebit ? 'display:none;' : ''}">${parseFloat(v.debit) > 0 ? '₹ ' + fmtAmt(v.debit) : ''}</td>
+                                    <td class="col-credit text-end" style="${hideCredit ? 'display:none;' : ''}">${parseFloat(v.credit) > 0 ? '₹ ' + fmtAmt(v.credit) : ''}</td>
                                 </tr>`;
                             });
                             $('#ledgerVoucherBody').html(rows);
@@ -1237,7 +2215,7 @@
                     });
                 }
 
-                // ===== Balance Due modal: per-voucher editable Credit Period -> Save button se update =====
+                // ===== Balance Overdue modal: per-voucher editable Credit Period -> Save button se update =====
                 $(document).on('click', '.credit-period-save-btn', function () {
                     let $btn   = $(this);
                     let $input = $btn.closest('td').find('.credit-period-input');
@@ -1274,8 +2252,6 @@
 
                             if (res && res.days !== undefined) {
                                 $row.find('.days-badge').text(res.days + ' days');
-                            }
-                            if (res && res.days !== undefined) {
                                 $row.find('.due-date-cell').text(fmtDateShared(calcDueDateFromDays(res.days)));
                             }
 
@@ -1472,50 +2448,60 @@
                     });
                 });
 
-                // ===== Search + Status / Rank / Overlimit Filters (per tab, scoped independently) =====
-
+                // ===== Search + Status / Rank / Overlimit Filters (per tab) =====
                 function applyLedgerFilters(scope) {
-                    let $bar = $('.ledger-filter-bar[data-scope="' + scope + '"]');
-                    let searchVal    = ($bar.find('.filter-search').val() || '').toLowerCase().trim();
-                    let statusVal    = $bar.find('.filter-status').val();
-                    let rankVal      = $bar.find('.filter-rank').val();
-                    let overlimitVal = $bar.find('.filter-overlimit').val();
+                    const $bar       = $('.ledger-filter-bar[data-scope="' + scope + '"]');
+                    const q          = ($bar.find('.filter-search').val() || '').toLowerCase().trim();
+                    const qDigits    = q.replace(/\D/g, '');
+                    const qId        = q.replace(/^#/, '');
+                    const statusVal  = $bar.find('.filter-status').val();
+                    const rankVal    = $bar.find('.filter-rank').val();
+                    const overlimitV = $bar.find('.filter-overlimit').val();
 
-                    let $accordion = scope === 'debtor' ? $('#debtorAccordion') : $('#creditorAccordion');
-                    let $items = $accordion.find('.accordion-item');
-                    let total = $items.length;
+                    const $accordion = scope === 'debtor' ? $('#debtorAccordion') : $('#creditorAccordion');
+                    const $items     = $accordion.find('.accordion-item');
+                    const total      = $items.length;
                     let visibleCount = 0;
 
                     $items.each(function () {
-                        let $item = $(this);
+                        const $item  = $(this);
+                        const name   = ($item.attr('data-name')   || '').toLowerCase();
+                        const uid    = ($item.attr('data-uid')    || '').toLowerCase();
+                        const mobile = ($item.attr('data-mobile') || '').replace(/\D/g, '');
+                        const status = $item.attr('data-status')    || '';
+                        const rank   = $item.attr('data-rank')      || '';
+                        const over   = $item.attr('data-overlimit') || '0';
+
                         let matches = true;
 
-                        if (searchVal) {
-                            let name = String($item.data('name') || '').toLowerCase();
-                            let mobile = String($item.data('mobile') || '').toLowerCase();
-                            if (name.indexOf(searchVal) === -1 && mobile.indexOf(searchVal) === -1) {
-                                matches = false;
-                            }
+                        if (q) {
+                            matches = name.indexOf(q) !== -1
+                                   || (qId && uid.indexOf(qId) !== -1)
+                                   || (qDigits && mobile.indexOf(qDigits) !== -1);
                         }
-                        if (matches && statusVal && String($item.data('status')) !== statusVal) {
-                            matches = false;
+                        if (matches && statusVal) {
+                            matches = (status === statusVal);
                         }
-                        if (matches && rankVal && String($item.data('rank')) !== rankVal) {
-                            matches = false;
+                        if (matches && rankVal) {
+                            matches = (rankVal === 'none') ? (rank === '') : (rank === rankVal);
                         }
-                        if (matches && overlimitVal && String($item.data('overlimit')) !== overlimitVal) {
-                            matches = false;
+                        if (matches && overlimitV) {
+                            matches = (over === overlimitV);
                         }
 
-                        $item.toggle(matches);
-                        if (matches) visibleCount++;
+                        $item.toggleClass('d-none', !matches);
+
+                        if (matches) {
+                            visibleCount++;
+                        } else {
+                            // hidden ledger ka bad-debt checkbox uncheck, taaki galti se assign na ho
+                            $item.find('.bad-debt-checkbox:checked').prop('checked', false).trigger('change');
+                        }
                     });
 
-                    $bar.find('.filter-count-text').text(
-                        total > 0 ? ('Showing ' + visibleCount + ' of ' + total) : ''
-                    );
+                    $bar.find('.filter-count-text').text(total > 0 ? ('Showing ' + visibleCount + ' of ' + total) : '');
 
-                    let $emptyMsg = $accordion.find('.filter-empty-msg');
+                    const $emptyMsg = $accordion.find('.filter-empty-msg');
                     if (total > 0 && visibleCount === 0) {
                         if ($emptyMsg.length === 0) {
                             $accordion.append('<p class="text-center text-muted filter-empty-msg">No ledgers match the selected filters.</p>');
@@ -1526,20 +2512,24 @@
                 }
 
                 $(document).on('change', '.ledger-filter-bar select', function () {
-                    let scope = $(this).closest('.ledger-filter-bar').data('scope');
-                    applyLedgerFilters(scope);
+                    applyLedgerFilters($(this).closest('.ledger-filter-bar').data('scope'));
                 });
 
                 $(document).on('input', '.ledger-filter-bar .filter-search', function () {
-                    let scope = $(this).closest('.ledger-filter-bar').data('scope');
-                    applyLedgerFilters(scope);
+                    applyLedgerFilters($(this).closest('.ledger-filter-bar').data('scope'));
                 });
 
                 $(document).on('click', '.filter-reset-btn', function () {
-                    let $bar = $(this).closest('.ledger-filter-bar');
+                    const $bar = $(this).closest('.ledger-filter-bar');
                     $bar.find('select').val('');
                     $bar.find('.filter-search').val('');
                     applyLedgerFilters($bar.data('scope'));
+                });
+
+                // Page load pe count dikhao
+                $(function () {
+                    applyLedgerFilters('debtor');
+                    applyLedgerFilters('creditor');
                 });
 
                 // ===== Manual, single-source accordion open/close =====
@@ -1577,8 +2567,8 @@
                     }
                 });
 
+                
                 // ===== Search inside modals (Breakdown + Voucher) =====
-
                 function filterModalTableRows(inputId, tbodyId) {
                     let val = ($('#' + inputId).val() || '').toLowerCase().trim();
                     let $rows = $('#' + tbodyId + ' tr');
@@ -1599,7 +2589,7 @@
                     let $noMatch = $tbody.find('.no-match-row');
                     if (visibleCount === 0 && val !== '') {
                         if ($noMatch.length === 0) {
-                            let colspan = $tbody.closest('table').find('thead th').length || 3;
+                            let colspan = $tbody.closest('table').find('thead tr:last th').length || 3;
                             $tbody.append('<tr class="no-match-row"><td colspan="' + colspan + '" class="text-center text-muted">No matching results.</td></tr>');
                         }
                     } else {
@@ -1612,13 +2602,20 @@
                     filterModalTableRows('ledgerBreakdownSearch', 'ledgerBreakdownBody');
                 });
 
-                // Live search - Voucher Modal (Normal / Balance / Balance Due, jo table visible ho usi me)
+                // Live search - Voucher Modal (Normal / Balance / Balance Overdue / Target, jo table visible ho usi me)
                 $(document).on('input', '#ledgerVoucherSearch', function () {
+                    if (!$('#ledgerVoucherInterestWrap').hasClass('d-none')) {
+                        filterModalTableRows('ledgerVoucherSearch', 'intReceivedBody');
+                        filterModalTableRows('ledgerVoucherSearch', 'intPendingBody');
+                        return;
+                    }
                     let tbodyId = 'ledgerVoucherBody';
                     if (!$('#ledgerVoucherBalanceWrap').hasClass('d-none')) {
                         tbodyId = 'ledgerBalanceBody';
                     } else if (!$('#ledgerVoucherDueWrap').hasClass('d-none')) {
                         tbodyId = 'ledgerDueBody';
+                    } else if (!$('#ledgerVoucherTargetWrap').hasClass('d-none')) {
+                        tbodyId = 'ledgerTargetBody';
                     }
                     filterModalTableRows('ledgerVoucherSearch', tbodyId);
                 });
@@ -1631,6 +2628,40 @@
                     $('#ledgerVoucherSearch').val('');
                     $('#creditPeriodSaveAlert').addClass('d-none').removeClass('show alert-success alert-danger');
                 });
+
+                // ===== Debtor Ranking modal: live search =====
+                $(document).on('input', '#debtorRankingSearch', function () {
+                    let val = $(this).val().toLowerCase().trim();
+                    $('#debtorRankingTable tbody tr').each(function () {
+                        $(this).toggle($(this).text().toLowerCase().indexOf(val) !== -1);
+                    });
+                });
+                $('#debtorRankingModal').on('hidden.bs.modal', function () {
+                    $('#debtorRankingSearch').val('').trigger('input');
+                });
+
+                $(document).on('shown.bs.collapse', '.accordion-collapse', function () {
+                    const $item = $(this).closest('.accordion-item[data-ledger]');
+                    const $val  = $item.find('.js-interest-cost-val');
+                    if (!$item.length || !$val.length || $item.data('intLoaded')) return;
+
+                    $item.data('intLoaded', true);
+                    $.ajax({
+                        url: "{{ route('accountant.tally.ledger.interest-data') }}",
+                        method: "GET",
+                        dataType: "json",
+                        data: {
+                            company: currentCompanyName,
+                            ledger: $item.attr('data-ledger'),
+                            under: $item.attr('data-under')
+                        },
+                        success: function (res) {
+                            $val.text('₹ ' + fmtExact(res.total ?? 0));
+                        },
+                        error: function () {
+                            $item.data('intLoaded', false);
+                        }
+                    });
+                });
             </script>
         </div>
-        

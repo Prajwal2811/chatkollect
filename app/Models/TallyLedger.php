@@ -34,7 +34,6 @@ class TallyLedger extends Model
         'mark',
         'red_reason',
         'base_interest_rate'
-        
     ];
 
     protected $casts = [

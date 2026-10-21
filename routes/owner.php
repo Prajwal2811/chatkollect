@@ -96,6 +96,10 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
 
         Route::get('/tally/company/{company}/followup/hub/', [OwnerController::class, 'followUpsHub'])->name('owner.tally.followup.hub');
 
+        Route::post('/tally/followup/update-action', [OwnerController::class, 'assignFollowUpAction'])->name('owner.tally.followup.update-action');
+
+        Route::post('/tally/followup/saveBulkFollows', [OwnerController::class, 'saveBulkFollowUps'])->name('owner.tally.followup.saveBulkFollows');
+        
         Route::get('/tally/company/{company}/ledgers-assign',[OwnerController::class, 'asignLedgers'])->name('owner.tally.company.ledgers-assign');
 
         Route::post('/owner/assign-collectors', [OwnerController::class, 'assignLedgers'])->name('owner.assign.collectors');
@@ -114,6 +118,8 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
 
         Route::get('/tally/company/{company}/followup-history', [OwnerController::class, 'followupHistory'])->name('owner.tally.company.followup_history');
 
+        Route::post('/tally/followup/clear-status',[OwnerController::class, 'clearStatus'])->name('owner.tally.followup.clear-status');
+        Route::post('/tally/followup/clear-responded-status',[OwnerController::class, 'clearRespondedStatus'])->name('owner.tally.followup.clear-responded-status');
 
         // WhatsApp Templates
         Route::get('/company/{company}/templates', [OwnerController::class, 'templates'])->name('owner.other.templates');

@@ -127,7 +127,10 @@ Route::prefix('accountant')->middleware(['auth:accountant', 'accountant.subscrip
 
 
 
-
+        Route::get('/tally/ledger/target-data', [AccountantController::class, 'ledgerTargetData'])->name('accountant.tally.ledger.target-data');
+        Route::get('/tally/ledger/interest-data', [AccountantController::class, 'ledgerInterestData'])->name('accountant.tally.ledger.interest-data');
+        Route::post('/tally/ledger/save-settlement', [AccountantController::class, 'saveLedgerSettlement'])->name('accountant.tally.ledger.save-settlement');
+        Route::post('/tally/ledger/save-bulk-settlement', [AccountantController::class, 'saveBulkLedgerSettlement'])->name('accountant.tally.ledger.save-bulk-settlement');
 
         Route::get('/manual/dashboard', [AccountantController::class, 'manualDashboard'])->name('accountant.manual.dashboard');
 
