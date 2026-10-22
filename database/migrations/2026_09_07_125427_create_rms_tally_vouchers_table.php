@@ -6,13 +6,9 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up()
     {
         Schema::create('rms_tally_vouchers', function (Blueprint $table) {
-
             $table->id();
             $table->string('master_id')->nullable();
             $table->string('unique_voucher_id')->nullable();             // UNIQUE COMPANY ID attribute      

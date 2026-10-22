@@ -34,7 +34,7 @@ return new class extends Migration
             $table->unsignedBigInteger('assigned_by')->nullable();   // owner user id
             $table->timestamp('allocation_date')->nullable();
             $table->timestamp('response_date')->nullable();
-
+            $table->boolean('clearStatus')->default(0);
             $table->timestamps();
 
             $table->unique(['company_id', 'ledger_id']);     // updateOrCreate ke liye
