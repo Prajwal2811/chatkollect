@@ -2788,111 +2788,254 @@ class OwnerController extends Controller
 
     public function clearStatus(Request $request)
     {
-        $user = auth('owner')->user();
-
-        if (!$user) {
-            return response()->json([
-                'message' => 'Unauthenticated.'
-            ], 401);
-        }
-
-        // IMPORTANT:
-        // Replace this example query with your actual allocation table,
-        // company ownership conditions and status column.
-        $deleted = DB::table('rms_followups')
-        ->where('status', 'Pending')
-        ->delete();
-
-        return response()->json([
-            'message' => 'Follow-up statuses cleared successfully.',
-            'deleted' => $deleted,
-        ]);
+        return $this->clearFollowUpsByStatus($request, 'Pending', 'Follow-up Pending statuses cleared successfully.');
     }
 
     public function clearRespondedStatus(Request $request)
     {
-        $user = auth('owner')->user();
+        return $this->clearFollowUpsByStatus($request, 'Responded', 'Follow-up Responded statuses cleared successfully.');
+    }
 
-        if (!$user) {
-            return response()->json([
-                'message' => 'Unauthenticated.'
-            ], 401);
+    /**
+     * Status (Pending / Responded) wale followups ko clear karo.
+     * - rms_followups se DELETE nahi hota, sirf clearStatus = 1
+     * - har record ka FollowupLog me clearStatus = 1 ke saath snapshot save hota hai
+     */
+    private function clearFollowUpsByStatus(Request $request, string $status, string $message)
+    {
+        $owner = auth('owner')->user();
+
+        if (!$owner) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
         }
 
-        // IMPORTANT:
-        // Replace this example query with your actual allocation table,
-        
-        $updated = DB::table('rms_followups')
-            ->where('status', 'Responded')
-            ->update([
-            'clearStatus' => 1,
-            'updated_at' => now(),
+        $ledgerQuery = TallyLedger::where('owner_id', $owner->id);
+
+        if ($request->filled('company')) {
+            $tallyCompany = $this->resolveCompany($request->company);
+            $ledgerQuery->where('tally_company_id', $tallyCompany->id);
+        }
+
+        $ownerLedgerIds = $ledgerQuery->pluck('id');
+
+        $followUps = Followup::whereIn('ledger_id', $ownerLedgerIds)
+            ->where('status', $status)
+            ->where(function ($q) {
+                $q->whereNull('clearStatus')->orWhere('clearStatus', 0);
+            })
+            ->get();
+
+        if ($followUps->isEmpty()) {
+            return response()->json([
+                'message' => "No {$status} follow-ups to clear.",
+                'cleared' => 0,
             ]);
+        }
+
+        $now = now();
+
+        DB::transaction(function () use ($followUps, $now) {
+            foreach ($followUps as $f) {
+
+                // Log pehle: clear hone se pehle ka status (Pending/Responded) + clearStatus = 1
+                FollowupLog::create([
+                    'followup_id'     => $f->id,
+                    'company_id'      => $f->company_id,
+                    'ledger_id'       => $f->ledger_id,
+                    'type'            => $f->type,
+                    'sub_option'      => $f->sub_option,
+                    'action'          => $f->action,
+                    'frequency'       => $f->frequency,
+                    'template'        => $f->template,
+                    'status'          => $f->status,        // Pending / Responded (jo clear hua)
+                    'clearStatus'     => 1,                 // clear hua hai
+                    'assigned_to'     => $f->assigned_to,
+                    'assigned_by'     => $f->assigned_by,
+                    'allocation_date' => $f->allocation_date,
+                    'response_date'   => $f->response_date,
+                ]);
+
+                // Followup delete nahi, sirf clear mark
+                $f->update([
+                    'clearStatus' => 1,
+                    'updated_at'  => $now,
+                ]);
+            }
+        });
 
         return response()->json([
-            'message' => 'Follow-up Respondedstatuses cleared successfully.',
-            'updated' => $updated,
+            'message' => $message,
+            'cleared' => $followUps->count(),
         ]);
     }
 
+    /* ===================================================================
+    | HELPERS (private)
+    | resolveCompany($company) aapka existing helper hai, wo waisa hi rahega.
+    | Mera purana resolveCompany($owner, $companyName) DELETE kar do.
+    =================================================================== */
+
+    /**
+     * Sub option ki value -> readable text (DB me ye text save hoga).
+     * returns [text|null, errorMessage|null]
+     */
+    private function resolveSubOption(string $type, ?string $value, bool $optional = false): array
+    {
+        $monthsType = 'Follow Up-Balances/Targets(months)';
+
+        $subOptionMap = [
+            'Follow Up-Balances/Days(agewise)' => [
+                '15' => 'More than 15 days',
+                '45' => 'More than 45 days',
+                '90' => 'More than 90 days',
+            ],
+            'Follow Up-Balances/Overdue(10-20-30)' => [
+                '10'       => 'Overdue in 10 days',
+                '20'       => 'Overdue in 20 days',
+                '30'       => 'Overdue in 30 days',
+                'above_30' => 'Above 30 days',
+            ],
+            'Follow Up-Balances/Not Due(10-20-30)' => [
+                '10'       => 'Due in 10 days',
+                '20'       => 'Due in 20 days',
+                '30'       => 'Due in 30 days',
+                'above_30' => 'Due after 30 days',
+            ],
+        ];
+
+        if ($type === $monthsType) {
+            // Sirf pichhle 6 months allowed (current month nahi)
+            $allowed = [];
+            for ($i = 1; $i <= 6; $i++) {
+                $allowed[] = now()->startOfMonth()->subMonthsNoOverflow($i)->format('Y-m');
+            }
+
+            if (!$value || !in_array($value, $allowed, true)) {
+                return [null, 'Please select a valid month.'];
+            }
+
+            return [Carbon::createFromFormat('Y-m', $value)->format('M Y'), null];
+        }
+
+        if (isset($subOptionMap[$type])) {
+            if (!$value) {
+                // bulk me "Total / All" = koi sub option nahi
+                return $optional
+                    ? [null, null]
+                    : [null, 'Please select a valid option for this follow up type.'];
+            }
+
+            if (!array_key_exists($value, $subOptionMap[$type])) {
+                return [null, 'Please select a valid option for this follow up type.'];
+            }
+
+            return [$subOptionMap[$type][$value], null];
+        }
+
+        // baaki types me sub option hota hi nahi
+        return [null, null];
+    }
+
+    /**
+     * Ledger ids ko allocate karo (Followup updateOrCreate + FollowupLog create).
+     * Return: last followup id
+     */
+    private function allocateFollowUps(
+        array $ledgerIds,
+        Request $request,
+        $owner,
+        TallyCompany $tallyCompany,
+        ?string $subOptionText
+    ): ?int {
+        $lastFollowUpId = null;
+
+        DB::transaction(function () use ($ledgerIds, $request, $owner, $tallyCompany, $subOptionText, &$lastFollowUpId) {
+
+            foreach ($ledgerIds as $ledgerId) {
+
+                $payload = [
+                    'type'            => $request->type,
+                    'sub_option'      => $subOptionText,
+                    'action'          => $request->action,
+                    'frequency'       => $request->frequency,
+                    'template'        => $request->template,
+                    'status'          => 'Pending',
+                    'clearStatus'     => 0,      // clear ke baad dobara assign ho to wapas active
+                    'assigned_to'     => null,
+                    'assigned_by'     => $owner->id,
+                    'allocation_date' => now(),
+                    'response_date'   => null,
+                ];
+
+                $followUp = Followup::updateOrCreate(
+                    [
+                        'company_id' => $tallyCompany->id,
+                        'ledger_id'  => $ledgerId,
+                    ],
+                    $payload
+                );
+
+                FollowupLog::create($payload + [
+                    'followup_id' => $followUp->id,
+                    'company_id'  => $tallyCompany->id,
+                    'ledger_id'   => $ledgerId,
+                ]);
+
+                $lastFollowUpId = $followUp->id;
+            }
+        });
+
+        return $lastFollowUpId;
+    }
+
+
+    /* ===================================================================
+    | followUpsHub
+    =================================================================== */
+
     public function followUpsHub(Request $request, $company)
     {
-        $company = urldecode($company);
-
         $owner = Auth::guard('owner')->user();
 
-        $type   = $request->query('type', '');
-        $ledger = urldecode($request->query('ledger', ''));
-        $under  = urldecode($request->query('under', ''));
+        // aapka helper khud urldecode + 404 karta hai, isliye raw $company do
+        $tallyCompany = $this->resolveCompany($company);
 
-        $tallyCompany = TallyCompany::where('owner_id', $owner->id)
-            ->where('company_name', $company)
-            ->first();
+        // view ko decoded naam chahiye (id aaye to bhi sahi naam milega)
+        $company = $tallyCompany->company_name;
+
+        $type           = $request->query('type', '');
+        $selectedLedger = urldecode($request->query('ledger', ''));
+        $selectedUnder  = urldecode($request->query('under', ''));
 
         $ledgerModels = TallyLedger::select(
-            'rms_tally_ledgers.id as ledger_id',
-            'rms_tally_ledgers.ledger_name as name',
-            'rms_tally_ledgers.ledger_mobile_number as mobile',
-            'rms_tally_ledgers.parent as under',
-            'rms_tally_ledgers.credit_period',
-            'rms_tally_ledgers.closing_balance',
+                'rms_tally_ledgers.id as ledger_id',
+                'rms_tally_ledgers.ledger_name as name',
+                'rms_tally_ledgers.ledger_mobile_number as mobile',
+                'rms_tally_ledgers.parent as under',
+                'rms_tally_ledgers.credit_period',
+                'rms_tally_ledgers.closing_balance',
 
-            'rms_followups.id as followup_id',
-            'rms_followups.type',
-            'rms_followups.status',
-            'rms_followups.clearStatus',
-            'rms_followups.action',
-            'rms_followups.frequency',
-            'rms_followups.template',
-            'rms_followups.assigned_to',
-            'rms_followups.assigned_by',
-            'rms_followups.allocation_date',
-            'rms_followups.response_date'
-        )
-        ->leftJoin('rms_followups', function ($join) use ($tallyCompany) {
-
-            $join->on(
-                'rms_followups.ledger_id',
-                '=',
-                'rms_tally_ledgers.id'
-            );
-
-            $join->where(
-                'rms_followups.company_id',
-                $tallyCompany->id
-            );
-        })
-        ->where(
-            'rms_tally_ledgers.owner_id',
-            $owner->id
-        )
-        
-        ->where(
-            'rms_tally_ledgers.tally_company_id',
-            $tallyCompany->id
-        )
-        ->orderBy('rms_tally_ledgers.ledger_name')
-        ->get();
+                'rms_followups.id as followup_id',
+                'rms_followups.type',
+                'rms_followups.status',
+                'rms_followups.clearStatus',
+                'rms_followups.action',
+                'rms_followups.frequency',
+                'rms_followups.template',
+                'rms_followups.assigned_to',
+                'rms_followups.assigned_by',
+                'rms_followups.allocation_date',
+                'rms_followups.response_date',
+                'rms_followups.sub_option'
+            )
+            ->leftJoin('rms_followups', function ($join) use ($tallyCompany) {
+                $join->on('rms_followups.ledger_id', '=', 'rms_tally_ledgers.id');
+                $join->where('rms_followups.company_id', $tallyCompany->id);
+            })
+            ->where('rms_tally_ledgers.owner_id', $owner->id)
+            ->where('rms_tally_ledgers.tally_company_id', $tallyCompany->id)
+            ->orderBy('rms_tally_ledgers.ledger_name')
+            ->get();
 
         $vouchersByLedger = TallyVoucher::where('owner_id', $owner->id)
             ->where('tally_company_id', $tallyCompany->id)
@@ -2904,8 +3047,6 @@ class OwnerController extends Controller
             ->pluck('mapped_to', 'voucher_type')
             ->toArray();
 
-        // echo "<pre>"; print_r($company); echo "</pre>"; die;
-
         $today = Carbon::now()->startOfDay();
 
         $ownerTargets = OverdueTargetSetting::where('owner_id', $owner->id)
@@ -2915,46 +3056,25 @@ class OwnerController extends Controller
         $nowForTarget = now();
 
         $followUps = $ledgerModels->map(function ($ledger) use ($vouchersByLedger, $today, $voucherMappings, $ownerTargets, $nowForTarget) {
-            $under = $ledger->under; 
 
-        
+            $under = $ledger->under;
+
             $vouchers = $vouchersByLedger->get($ledger->ledger_id, collect())
                 ->map(fn ($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
                     'due_date'       => $v->due_date ?? null,
                     'voucher_number' => $v->voucher_number,
                 ]);
 
-            $isReceipt = fn ($v) => str_contains($v['voucher_type_low'], 'receipt');
-            $isPayment = fn ($v) => str_contains($v['voucher_type_low'], 'payment');
-
-            $sale = $purchase = $otherDebits = $otherCredits = $receipts = $payments = '0';
-
-            if ($under === 'Sundry Creditors') {
-                $purchase     = $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'purchase' && bccomp($v['credit'], '0', 2) > 0)
-                                    ->reduce(fn ($t, $v) => bcadd($t, $v['credit'], 2), '0');
-                $otherCredits = $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'purchase' && bccomp($v['credit'], '0', 2) > 0)
-                                    ->reduce(fn ($t, $v) => bcadd($t, $v['credit'], 2), '0');
-                $payments     = $vouchers->filter(fn ($v) => $isPayment($v) && bccomp($v['debit'], '0', 2) > 0)
-                                    ->reduce(fn ($t, $v) => bcadd($t, $v['debit'], 2), '0');
-            } else {
-                $sale        = $vouchers->filter(fn ($v) => $v['mapped_type_low'] === 'sales' && bccomp($v['debit'], '0', 2) > 0)
-                                    ->reduce(fn ($t, $v) => bcadd($t, $v['debit'], 2), '0');
-                $otherDebits = $vouchers->filter(fn ($v) => $v['mapped_type_low'] !== 'sales' && bccomp($v['debit'], '0', 2) > 0)
-                                    ->reduce(fn ($t, $v) => bcadd($t, $v['debit'], 2), '0');
-                $receipts    = $vouchers->filter(fn ($v) => $isReceipt($v) && bccomp($v['credit'], '0', 2) > 0)
-                                    ->reduce(fn ($t, $v) => bcadd($t, $v['credit'], 2), '0');
-            }
-
             $creditPeriod = (int) ($ledger->credit_period ?? 0);
-    
+
             $openInvoices = $this->buildOpenInvoices($vouchers, $under, $creditPeriod, $today);
 
             $balance = (string) ($ledger->closing_balance ?? '0');
 
+            // ---------- Due / Not Due totals ----------
             $due = $openInvoices->filter(fn ($i) => $i['days'] > 0)
-                        ->reduce(fn ($t, $i) => bcadd($t, $i['pending'], 2), '0');
+                ->reduce(fn ($t, $i) => bcadd($t, $i['pending'], 2), '0');
 
-            
             $notDue = bcsub(ltrim($balance, '-+'), $due, 2);
             if (bccomp($notDue, '0', 2) < 0) {
                 $notDue = '0';
@@ -2967,497 +3087,258 @@ class OwnerController extends Controller
                 $extraNotDue = '0';
             }
 
+            // ---------- Target ----------
             $targetRows = $this->computeTargetRows($vouchers, $under, $creditPeriod, $ownerTargets, $nowForTarget, $extraNotDue);
 
             $firstRow      = collect($targetRows)->reverse()->first(fn ($r) => $r['targetBal'] !== null);
             $targetBalance = $firstRow['targetBal'] ?? '0';
 
-        
+            // ---------- Clear status ----------
+            // clear kiya hua ledger = "Not Assign Yet"
+            $cleared = (int) ($ledger->clearStatus ?? 0) !== 0;
+            $rowType = $cleared ? null : $ledger->type;   // sirf switch ke liye
 
+            // ---------- Har ledger ke liye filter data (type chahe koi bhi ho) ----------
+            $overdueInv = $openInvoices->filter(fn ($i) => $i['days'] > 0)
+                ->sortByDesc('days')
+                ->first();
 
-        /*
-        |--------------------------------------------------------------------------
-        | Ledger Filter
-        |--------------------------------------------------------------------------
-        */
+            // sabse nazdeek due hone wala invoice (days <= 0)
+            $notDueInv = $openInvoices->filter(fn ($i) => $i['days'] <= 0)
+                ->sortByDesc('days')
+                ->first();
 
-        // if (!empty($ledger)) {
+            $maxOverdueDays = (int) ($overdueInv['days'] ?? 0);
+            $daysLeft       = $notDueInv ? abs((int) $notDueInv['days']) : null;
 
-        //     $ledger = $ledger
-        //         ->filter(function ($item) use ($ledger) {
-        //             return $item->name === $ledger;
-        //         })
-        //         ->values();
-
-        // } elseif (!empty($under)) {
-
-        //     $ledger = $ledger
-        //         ->filter(function ($item) use ($under) {
-        //             return $item->under === $under;
-        //         })
-        //         ->values();
-        // }
-
-
-        /*
-        |--------------------------------------------------------------------------
-        | Prepare Follow Up Data
-        |--------------------------------------------------------------------------
-        */
-        
-
-            /*
-            |--------------------------------------------------------------------------
-            | Common Data
-            |--------------------------------------------------------------------------
-            */
-
+            // ---------- Common data ----------
             $data = [
-                'id' => $ledger->ledger_id,
+                'id'              => $ledger->ledger_id,
+                'ledger_id'       => $ledger->ledger_id,
+                'followup_id'     => $ledger->followup_id,
+                'name'            => $ledger->name,
+                'mobile'          => $ledger->mobile,
+                'under'           => $ledger->under,
+                'credit_period'   => $ledger->credit_period,
 
-                'ledger_id' => $ledger->ledger_id,
-
-                'followup_id' => $ledger->followup_id,
-
-                'name' => $ledger->name,
-
-                'mobile' => $ledger->mobile,
-
-                'under' => $ledger->under,
-
-                'credit_period' => $ledger->credit_period,
-
-                'type' => $ledger->type,
-
-                'status' => $ledger->status ?? 'Not Assign Yet',
-                'clearStatus' => $ledger->clearStatus ?? 0 ,
-
-                'action' => $ledger->action,
-
-                'frequency' => $ledger->frequency,
-
-                'template' => $ledger->template,
-
-                'assigned_to' => $ledger->assigned_to,
-
-                'assigned_by' => $ledger->assigned_by,
-
+                'type'            => $ledger->type,     // $rowType nahi, taaki type filter me row gayab na ho
+                'status'          => $cleared ? 'Not Assign Yet' : ($ledger->status ?: 'Not Assign Yet'),
+                'clearStatus'     => $ledger->clearStatus ?? 0,
+                'action'          => $ledger->action,
+                'frequency'       => $ledger->frequency,
+                'template'        => $ledger->template,
+                'assigned_to'     => $ledger->assigned_to,
+                'assigned_by'     => $ledger->assigned_by,
                 'allocation_date' => $ledger->allocation_date,
+                'response_date'   => $ledger->response_date,
+                'sub_option'      => $cleared ? null : $ledger->sub_option,
 
-                'response_date' => $ledger->response_date,
                 'closing_balance' => $ledger->closing_balance,
-                'targetBalance' => $targetBalance,
+                'targetBalance'   => $targetBalance,
+                'balance'         => $balance,          // common, cleared rows ka chip 0.00 na dikhe
+
+                // filter data
+                'days'            => $maxOverdueDays,   // overdue / agewise filters
+                'days_pending'    => $daysLeft,         // not-due filter (null = koi not-due invoice nahi)
+                'due_date'        => $overdueInv['due_date'] ?? $notDueInv['due_date'] ?? null,
             ];
 
-
-            /*
-            |--------------------------------------------------------------------------
-            | Type Based Logic
-            |--------------------------------------------------------------------------
-            */
-
-            switch ($ledger->type) {
-
-                /*
-                |--------------------------------------------------------------------------
-                | Balance / Target %
-                |--------------------------------------------------------------------------
-                */
-
-                case 'Follow Up-Balances/%Targets':
-
-                    /*
-                    * Calculate actual balance from Tally here.
-                    */
-
-                    $balance = abs($ledger->closing_balance); // replace with actual Tally calculation
-
-                    $target = $targetBalance; // replace with actual target
-
-                    $targetPct = $target > 0
-                        ? round((abs($balance) / $target) * 100, 2)
-                        : 0;
-
-                    $data['balance'] = $balance;
-
-                    $data['target'] = $target;
-
-                    $data['target_pct'] = $targetPct;
-
-                    break;
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Balance / Target Month
-                |--------------------------------------------------------------------------
-                */
-
-                case 'Follow Up-Balances/Targets(months)':
-
-                    /*
-                    * Calculate actual balance and target
-                    * for the required month.
-                    */
-
-                    $balance = $balance;
-
-                    $target = $targetBalance;
-
-                    $targetMonth = now()->subMonths(1)->format('Y-m');
-
-                    $targetPct = $target > 0
-                        ? round((abs($balance) / $target) * 100, 2)
-                        : 0;
-
-                    $data['balance'] = $balance;
-
-                    $data['target'] = $target;
-
-                    $data['target_month'] = $targetMonth;
-
-                    $data['target_pct'] = $targetPct;
-
-                    break;
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Balance / Age Wise
-                |--------------------------------------------------------------------------
-                */
-
-                case 'Follow Up-Balances/Days(agewise)':
-
-                    /*
-                    * Calculate actual outstanding
-                    * and age from Tally transactions.
-                    */
-
-                    $balance =$balance;
-
-                    $days = (int) ($openInvoices->filter(fn ($i) => $i['days'] > 0)->max('days') ?? 0);
-
-                    $ageBucket = match (true) {
-                        $days > 90 => '90+ Days',
-                        $days > 45 => '46-90 Days',
-                        $days > 15 => '16-45 Days',
-                        default    => '0-15 Days',
-                    };
-
-                    $data['balance'] = $balance;
-
-                    $data['days'] = $days;
-
-                    $data['age_bucket'] = $ageBucket;
-
-                    break;
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Balance / Days 10-20-30
-                |--------------------------------------------------------------------------
-                */
-
-                case 'Follow Up-Balances/Days(10-20-30)':
-
-                    /*
-                    * Calculate from actual Tally invoice/bill data.
-                    */
-
-                    $balance = $balance;
-
-                    $days = 20;
-
-                    $date = now()->subDays(20)->format('Y-m-d');
-
-                    $dueDate = now()->addDays(10)->format('Y-m-d');
-
-                    $invoiceNo = 'INV-2204';
-
-                    $interestDue = 150;
-
-                    $data['balance'] = $balance;
-
-                    $data['days'] = $days;
-
-                    $data['date'] = $date;
-
-                    $data['due_date'] = $dueDate;
-
-                    $data['inv_no'] = $invoiceNo;
-
-                    $data['interest_due'] = $interestDue;
-
-                    break;
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Due
-                |--------------------------------------------------------------------------
-                */
-
-                case 'Follow Up-Due':
-
-                    /*
-                    * Actual overdue invoice calculation.
-                    */
-
-                    $date = now()->subDays(21)->format('Y-m-d');
-
-                    $dueDate = now()->addDays(21)->format('Y-m-d');
-
-                    $invoiceNo = 'INV-2201';
-
-                    $days = 12;
-
-                    $due = 32000.00;
-
-                    $interestDue = 480.00;
-
-                    $data['date'] = $date;
-
-                    $data['due_date'] = $dueDate;
-
-                    $data['inv_no'] = $invoiceNo;
-
-                    $data['days'] = $days;
-
-                    $data['due'] = $due;
-
-                    $data['interest_due'] = $interestDue;
-
-                    break;
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Not Due
-                |--------------------------------------------------------------------------
-                */
-
-                case 'Follow Up-Not Due':
-
-                    /*
-                    * Actual outstanding invoices which
-                    * are not yet due.
-                    */
-
-
-                    $date = now()->subDays(5)->format('Y-m-d');
-
-                    $dueDate = now()->addDays(35)->format('Y-m-d');
-
-                    $invoiceNo = 'INV-2202';
-
-                    $daysPending = 5;
-
-                    $notDue = 27500.00;
-
-                    $data['date'] = $date;
-
-                    $data['due_date'] = $dueDate;
-
-                    $data['inv_no'] = $invoiceNo;
-
-                    $data['days_pending'] = $daysPending;
-
-                    $data['not_due'] = $notDue;
-
-                    break;
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Over Limits
-                |--------------------------------------------------------------------------
-                */
-
-                case 'Follow Up Overlimits':
-
-                    /*
-                    * Actual ledger balance vs credit limit.
-                    */
-
-                    $balance = $balance;
-
-                    $creditLimit = 0;
-
-                    $overLimit = 0;
-
-                    $data['balance'] = $balance;
-
-                    $data['credit_limit'] = $creditLimit;
-
-                    $data['over_limit'] = $overLimit;
-
-                    break;
-
-
-                /*
-                |--------------------------------------------------------------------------
-                | Normal Balance
-                |--------------------------------------------------------------------------
-                */
+            // ---------- Type based logic ----------
+            switch ($rowType) {
 
                 case 'Follow Up-Balances':
+                    break;
 
-                    /*
-                    * Actual ledger balance from Tally.
-                    */
+                case 'Follow Up-Balances/%Targets':
+                    $bal    = abs($ledger->closing_balance);
+                    $target = $targetBalance;
 
-                    $balance = $balance;
+                    $data['balance']    = $bal;
+                    $data['target']     = $target;
+                    $data['target_pct'] = $target > 0 ? round(($bal / $target) * 100, 2) : 0;
+                    break;
 
-                    $data['balance'] = $balance;
+                case 'Follow Up-Balances/Targets(months)':
+                    $target = $targetBalance;
 
+                    // Target month DB ke sub_option se (e.g. "Sep 2026" -> 2026-09)
+                    $targetMonth = now()->subMonth()->format('Y-m'); // fallback
+                    if (!empty($ledger->sub_option)) {
+                        try {
+                            $targetMonth = Carbon::parse('1 ' . $ledger->sub_option)->format('Y-m');
+                        } catch (\Exception $e) {
+                            // parse na hua to fallback rahega
+                        }
+                    }
+
+                    $data['target']       = $target;
+                    $data['target_month'] = $targetMonth;
+                    $data['target_pct']   = $target > 0 ? round((abs($balance) / $target) * 100, 2) : 0;
+                    break;
+
+                case 'Follow Up-Balances/Days(agewise)':
+                    $data['age_bucket'] = match (true) {
+                        $maxOverdueDays > 90 => '90+ Days',
+                        $maxOverdueDays > 45 => '46-90 Days',
+                        $maxOverdueDays > 15 => '16-45 Days',
+                        default              => '0-15 Days',
+                    };
+                    break;
+
+                case 'Follow Up-Balances/Overdue(10-20-30)':
+                    $data['date']         = $overdueInv['date'] ?? null;
+                    $data['due_date']     = $overdueInv['due_date'] ?? null;
+                    $data['inv_no']       = $overdueInv['voucher_number'] ?? null;
+                    $data['interest_due'] = 0; // TODO: interest calculation
+                    break;
+
+                case 'Follow Up-Balances/Not Due(10-20-30)':
+                    $data['date']     = $notDueInv['date'] ?? null;
+                    $data['due_date'] = $notDueInv['due_date'] ?? null;
+                    $data['inv_no']   = $notDueInv['voucher_number'] ?? null;
+                    break;
+
+                case 'Follow Up-Due':
+                    $data['date']         = $overdueInv['date'] ?? null;
+                    $data['due_date']     = $overdueInv['due_date'] ?? null;
+                    $data['inv_no']       = $overdueInv['voucher_number'] ?? null;
+                    $data['due']          = $due;
+                    $data['interest_due'] = 0; // TODO
+                    break;
+
+                case 'Follow Up-Not Due':
+                    $data['date']     = $notDueInv['date'] ?? null;
+                    $data['due_date'] = $notDueInv['due_date'] ?? null;
+                    $data['inv_no']   = $notDueInv['voucher_number'] ?? null;
+                    $data['not_due']  = $notDue;
+                    break;
+
+                case 'Follow Up Overlimits':
+                    $data['credit_limit'] = 0; // TODO: actual credit limit
+                    $data['over_limit']   = 0; // TODO
                     break;
             }
 
             return $data;
         });
 
-
-        /*
-        |--------------------------------------------------------------------------
-        | Type Filter
-        |--------------------------------------------------------------------------
-        */
-
-        if (
-            !empty($type) &&
-            $type !== 'Follow Up-Quick /Smart - Follow -up'
-        ) {
-
+        // ---------- Type filter ----------
+        if (!empty($type) && $type !== 'Follow Up-Quick /Smart - Follow -up') {
             $followUps = $followUps
-                ->filter(function ($row) use ($type) {
-                    return $row['type'] === $type;
-                })
+                ->filter(fn ($row) => $row['type'] === $type)
                 ->values();
         }
 
-
-        /*
-        |--------------------------------------------------------------------------
-        | Return View
-        |--------------------------------------------------------------------------
-        */
-//echo "<pre>"; print_r($followUps); die;
-        return view(
-            'owner.tally.tally.followup-hub',
-            [
-                'company' => $company,
-                'type' => $type,
-                'selectedLedger' => $ledger,
-                'selectedUnder' => $under,
-                'followUps' => $followUps,
-            ]
-        );
+        return view('owner.tally.tally.followup-hub', [
+            'company'        => $company,
+            'type'           => $type,
+            'selectedLedger' => $selectedLedger,
+            'selectedUnder'  => $selectedUnder,
+            'followUps'      => $followUps,
+        ]);
     }
+
+
+    /* ===================================================================
+    | assignFollowUpAction  (single ledger - modal se)
+    =================================================================== */
 
     public function assignFollowUpAction(Request $request)
     {
         $request->validate([
-            'ids' => 'required|array',
-            'ids.*' => 'required|integer',
-            'type' => 'required|string',
-            'action' => 'required|string',
-            'frequency' => 'required|string',
-            'template' => 'nullable|string',
+            'company'    => 'required|string',   // blade ab hamesha bhejta hai
+            'ids'        => 'required|array',
+            'ids.*'      => 'required|integer',
+            'type'       => 'required|string',
+            'action'     => 'required|string',
+            'frequency'  => 'required|string',
+            'template'   => 'nullable|string|required_if:action,whatsapp',
+            'sub_option' => 'nullable|string|max:50',
         ]);
 
-        $owner = Auth::guard('owner')->user();
+        [$subOptionText, $error] = $this->resolveSubOption($request->type, $request->sub_option);
 
-        $tallyCompany = TallyCompany::where(
-            'owner_id',
-            $owner->id
-        )->first();
-
-        if (!$tallyCompany) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Company not found.'
-            ], 404);
+        if ($error) {
+            return response()->json(['success' => false, 'message' => $error], 422);
         }
 
-        foreach ($request->ids as $ledgerId) {
+        $owner        = Auth::guard('owner')->user();
+        $tallyCompany = $this->resolveCompany($request->company);   // nahi mili to 404
 
-            $followUp = Followup::updateOrCreate(
-                [
-                    'company_id' => $tallyCompany->id,
-                    'ledger_id' => $ledgerId,
-                ],
-                [
-                    'type' => $request->type,
-                    'action' => $request->action,
-                    'frequency' => $request->frequency,
-                    'template' => $request->template,
-                    'status' => 'Pending',
-                    'assigned_to' => null,
-                    'assigned_by' => $owner->id,
-                    'allocation_date' => now(),
-                    'response_date' => null,
-                ]
-            );
-
-            $followUpLog = FollowupLog::create([
-                'followup_id'     => $followUp->id,
-                'company_id'      => $tallyCompany->id,
-                'ledger_id'       => $ledgerId,
-                'type'             => $request->type,
-                'action'           => $request->action,
-                'frequency'       => $request->frequency,
-                'template'         => $request->template,
-                'status'           => 'Pending',
-                'assigned_to'      => null,
-                'assigned_by'      => $owner->id,
-                'allocation_date'  => now(),
-                'response_date'    => null,
-            ]);
-        }
+        $lastFollowUpId = $this->allocateFollowUps($request->ids, $request, $owner, $tallyCompany, $subOptionText);
 
         return response()->json([
-            'success' => true,
-            'message' => 'Follow Up allocated successfully.',
-            'followup_id' => $followUp->id,
+            'success'     => true,
+            'message'     => 'Follow Up allocated successfully.',
+            'followup_id' => $lastFollowUpId,
         ]);
     }
+
+
+    /* ===================================================================
+    | saveBulkFollowUps  (Quick/Smart tabs - bulk)
+    =================================================================== */
 
     public function saveBulkFollowUps(Request $request)
     {
-        $validated = $request->validate([
-            'company_id' => 'required|integer',
-            'ledger_id'  => 'required|integer',
+        $request->validate([
+            'company'    => 'required|string',   // blade hidden input name="company"
+            'ids'        => 'required|array|min:1',
+            'ids.*'      => 'required|integer',
             'type'       => 'required|string|max:255',
             'action'     => 'required|string|max:255',
             'frequency'  => 'required|string|max:255',
-            'template'   => 'nullable|string',
+            'template'   => 'nullable|string|required_if:action,whatsapp',
+            'sub_option' => 'nullable|string|max:50',
         ]);
 
-        $owner = auth('owner')->user();
+        // Bulk me agewise / overdue ka "Total / All" = sub option optional
+        [$subOptionText, $error] = $this->resolveSubOption($request->type, $request->sub_option, true);
 
-        $followUp = Followup::create([
-            'company_id'      => $validated['company_id'],
-            'ledger_id'       => $validated['ledger_id'],
-            'type'             => $validated['type'],
-            'action'           => $validated['action'],
-            'frequency'       => $validated['frequency'],
-            'template'        => $validated['template'] ?? null,
-            'status'           => 'Pending',
-            'assigned_to'      => null,
-            'assigned_by'      => $owner->id,
-            'allocation_date'  => now(),
-            'response_date'    => null,
-        ]);
+        if ($error) {
+            return response()->json(['success' => false, 'message' => $error], 422);
+        }
+
+        $owner        = Auth::guard('owner')->user();
+        $tallyCompany = $this->resolveCompany($request->company);   // nahi mili to 404
+
+        // sirf isi owner / company ke valid ledgers
+        $validIds = TallyLedger::where('owner_id', $owner->id)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->whereIn('id', $request->ids)
+            ->pluck('id')
+            ->all();
+
+        // sirf unhe skip karo jo isi type me already assigned hain (Pending / Responded)
+        $alreadyAssigned = Followup::where('company_id', $tallyCompany->id)
+            ->whereIn('ledger_id', $validIds)
+            ->where('clearStatus', 0)
+            ->where('type', $request->type)
+            ->whereNotNull('status')
+            ->pluck('ledger_id')
+            ->all();
+
+        $assignable = array_values(array_diff($validIds, $alreadyAssigned));
+
+        if (empty($assignable)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No assignable ledgers (all are already assigned).',
+            ], 422);
+        }
+
+        $this->allocateFollowUps($assignable, $request, $owner, $tallyCompany, $subOptionText);
+
+        $skipped = count($request->ids) - count($assignable);
 
         return response()->json([
-            'status'  => true,
-            'message' => 'Follow-up created successfully.',
-            'data'    => $followUp,
+            'success'  => true,
+            'message'  => count($assignable) . ' follow up(s) allocated successfully.'
+                        . ($skipped ? " {$skipped} skipped (already assigned)." : ''),
+            'assigned' => count($assignable),
+            'skipped'  => $skipped,
         ]);
     }
-    
     public function followUpsHubOLDS(Request $request, $company)
     {
 
@@ -4013,221 +3894,258 @@ public function telecaller(Request $request, $company = null)
     }
 
 
-    public function followupHistory()
+    public function followupHistory($company = null)
     {
-        $typeLabels = [
-            'balances' => 'Follow Up-Balances',
-            'pct_targets' => 'Follow Up-Balances/%Targets',
-            'targets_months' => 'Follow Up-Balances/Targets(months)',
-            'days_agewise' => 'Follow Up-Balances/Days(agewise)',
-            'days_10_20_30' => 'Follow Up-Balances/Days(10-20-30)',
-            'due' => 'Follow Up-Due',
-            'not_due' => 'Follow Up-Not Due',
-            'overlimits' => 'Follow Up Overlimits',
-        ];
+        $owner = Auth::guard('owner')->user();
+
+        $companies = TallyCompany::where('owner_id', $owner->id)
+            ->when($company, fn($q) => $q->where('company_name', urldecode($company)))
+            ->get()
+            ->keyBy('id');
+
+        $logTable = (new FollowupLog)->getTable();
+
+        $logs = FollowupLog::query()
+            ->join('rms_tally_ledgers as l', 'l.id', '=', "{$logTable}.ledger_id")
+            ->whereIn("{$logTable}.company_id", $companies->keys())
+            ->where('l.owner_id', $owner->id)
+            ->select(
+                "{$logTable}.*",
+                'l.ledger_name',
+                'l.ledger_mobile_number as mobile',
+                'l.parent as under',
+                'l.credit_period',
+                'l.closing_balance',
+                'l.interest_rate',
+                'l.balance_limit'
+            )
+            ->orderByDesc("{$logTable}.allocation_date")
+            ->orderByDesc("{$logTable}.id")
+            ->get();
 
         $actionLabels = [
             'allocate_tele_call' => 'Allocate to tele call',
-            'call' => 'Call',
-            'whatsapp' => 'WhatsApp',
-            'physical_visit' => 'Physical visit',
-            'escalation' => 'Escalation',
-            'no_action' => 'No action',
+            'call'               => 'Call',
+            'whatsapp'           => 'WhatsApp',
+            'physical_visit'     => 'Physical visit',
+            'escalation'         => 'Escalation',
+            'no_action'          => 'No action',
         ];
 
-        $history = [
-            [
-                'id' => 1,
-                'ledger_id' => 101,
-                'ledger_name' => 'ABC Traders',
-                'mobile' => '9000000001',
-                'type' => 'pct_targets',
-                'type_label' => $typeLabels['pct_targets'],
-                'balance' => 54321.10,
-                'target' => 50000,
-                'target_pct' => 108.64,
-                'assigned_to' => 'Rahul',
-                'assigned_by' => 'Owner',
-                'allocation_date' => '2026-08-01',
-                'action' => 'call',
-                'action_label' => $actionLabels['call'],
-                'frequency' => 'weekly',
-                'response_date' => '2026-08-03',
-                'response' => 'Customer will pay by 10th',
-                'solution' => 'Payment plan agreed',
-                'admin_solution' => null,
-            ],
-            [
-                'id' => 2,
-                'ledger_id' => 101,
-                'ledger_name' => 'ABC Traders',
-                'mobile' => '9000000001',
-                'type' => 'due',
-                'type_label' => $typeLabels['due'],
-                'balance' => 32000,
-                'target' => null,
-                'target_pct' => null,
-                'date' => '2026-07-20',
-                'due_date' => '2026-08-10',
-                'inv_no' => 'INV-2201',
-                'days' => 12,
-                'interest_due' => 480,
-                'assigned_to' => 'Rahul',
-                'assigned_by' => 'Owner',
-                'allocation_date' => '2026-08-02',
-                'action' => 'whatsapp',
-                'action_label' => $actionLabels['whatsapp'],
-                'frequency' => 'daily',
-                'response_date' => null,
-                'response' => null,
-                'solution' => null,
-                'admin_solution' => null,
-            ],
-            [
-                'id' => 3,
-                'ledger_id' => 101,
-                'ledger_name' => 'ABC Traders',
-                'mobile' => '9000000001',
-                'type' => 'overlimits',
-                'type_label' => $typeLabels['overlimits'],
-                'balance' => 12500,
-                'target' => null,
-                'target_pct' => null,
-                'assigned_to' => 'Priya',
-                'assigned_by' => 'Owner',
-                'allocation_date' => '2026-07-28',
-                'action' => 'escalation',
-                'action_label' => $actionLabels['escalation'],
-                'frequency' => 'weekly',
-                'response_date' => '2026-07-30',
-                'response' => 'Escalated to regional manager',
-                'solution' => 'Limit revised',
-                'admin_solution' => null,
-            ],
-            [
-                'id' => 4,
-                'ledger_id' => 102,
-                'ledger_name' => 'XYZ Enterprises',
-                'mobile' => '9000000002',
-                'type' => 'targets_months',
-                'type_label' => $typeLabels['targets_months'],
-                'balance' => 78900,
-                'target' => 80000,
-                'target_pct' => 98.63,
-                'due_date' => '2026-07-31',
-                'assigned_to' => 'Aman',
-                'assigned_by' => 'Owner',
-                'allocation_date' => '2026-07-15',
-                'action' => 'physical_visit',
-                'action_label' => $actionLabels['physical_visit'],
-                'frequency' => 'monthly',
-                'response_date' => '2026-07-20',
-                'response' => 'Visited site, cheque collected',
-                'solution' => 'Cleared 50% balance',
-                'admin_solution' => null,
-            ],
-            [
-                'id' => 5,
-                'ledger_id' => 102,
-                'ledger_name' => 'XYZ Enterprises',
-                'mobile' => '9000000002',
-                'type' => 'days_10_20_30',
-                'type_label' => $typeLabels['days_10_20_30'],
-                'balance' => 15600,
-                'target' => null,
-                'target_pct' => null,
-                'days' => 20,
-                'assigned_to' => 'Aman',
-                'assigned_by' => 'Owner',
-                'allocation_date' => '2026-08-05',
-                'action' => 'no_action',
-                'action_label' => $actionLabels['no_action'],
-                'frequency' => 'daily',
-                'response_date' => null,
-                'response' => null,
-                'solution' => null,
-                'admin_solution' => null,
-            ],
-            [
-                'id' => 6,
-                'ledger_id' => 103,
-                'ledger_name' => 'Global Textiles',
-                'mobile' => '9000000003',
-                'type' => 'not_due',
-                'type_label' => $typeLabels['not_due'],
-                'balance' => 43200,
-                'target' => null,
-                'target_pct' => null,
-                'date' => '2026-07-25',
-                'due_date' => '2026-08-25',
-                'inv_no' => 'INV-3105',
-                'days_pending' => 30,
-                'assigned_to' => 'Priya',
-                'assigned_by' => 'Owner',
-                'allocation_date' => '2026-08-06',
-                'action' => 'allocate_tele_call',
-                'action_label' => $actionLabels['allocate_tele_call'],
-                'frequency' => 'weekly',
-                'response_date' => '2026-08-07',
-                'response' => 'Confirmed, will pay on due date',
-                'solution' => null,
-                'admin_solution' => null,
-            ],
-            [
-                'id' => 7,
-                'ledger_id' => 104,
-                'ledger_name' => 'Sunrise Distributors',
-                'mobile' => '9000000004',
-                'type' => 'days_agewise',
-                'type_label' => $typeLabels['days_agewise'],
-                'balance' => 99500,
-                'target' => null,
-                'target_pct' => null,
-                'days' => 46,
-                'assigned_to' => 'Rahul',
-                'assigned_by' => 'Owner',
-                'allocation_date' => '2026-07-10',
-                'action' => 'escalation',
-                'action_label' => $actionLabels['escalation'],
-                'frequency' => 'monthly',
-                'response_date' => null,
-                'response' => null,
-                'solution' => null,
-                'admin_solution' => null,
-            ],
-            [
-                'id' => 8,
-                'ledger_id' => 105,
-                'ledger_name' => 'ABCD Traders',
-                'mobile' => '9000000001',
-                'type' => 'balances',
-                'type_label' => $typeLabels['balances'],
-                'balance' => 54321.10,
-                'target' => 50000,
-                'target_pct' => 108.64,
-                'assigned_to' => 'Rahul',
-                'assigned_by' => 'Owner',
-                'allocation_date' => '2026-08-01',
-                'action' => 'call',
-                'action_label' => $actionLabels['call'],
-                'frequency' => 'weekly',
-                'response_date' => '2026-08-03',
-                'response' => 'Customer will pay by 10th',
-                'solution' => 'Payment plan agreed',
-                'admin_solution' => null,
-            ],
-        ];
+        $collectorNames = Collector::whereIn('id', $logs->pluck('assigned_to')->filter()->unique())
+            ->pluck('name', 'id');
 
-        return view('owner.tally.tally.followup-history', compact('history'));
+        // ---- Har ledger ka current snapshot ----
+        $today        = Carbon::now()->startOfDay();
+        $nowForTarget = now();
+        $snapshots    = [];
+
+        foreach ($logs->groupBy('company_id') as $companyId => $items) {
+            $tallyCompany = $companies->get($companyId);
+            if (!$tallyCompany) {
+                continue;
+            }
+
+            $ledgerIds = $items->pluck('ledger_id')->unique();
+
+            $vouchersByLedger = TallyVoucher::where('owner_id', $owner->id)
+                ->where('tally_company_id', $companyId)
+                ->whereIn('ledger_id', $ledgerIds)
+                ->get()
+                ->groupBy('ledger_id');
+
+            $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
+                ->pluck('mapped_to', 'voucher_type')->toArray();
+
+            $ownerTargets = OverdueTargetSetting::where('owner_id', $owner->id)
+                ->where('company_id', $companyId)
+                ->pluck('receivable_target', 'bucket_month');
+
+            foreach ($items->unique('ledger_id') as $item) {
+                $under        = $item->under;
+                $creditPeriod = (int) ($item->credit_period ?? 0);
+                $balanceAbs   = ltrim((string) ($item->closing_balance ?? '0'), '-+');
+                $balanceF     = (float) $balanceAbs;
+
+                $vouchers = $vouchersByLedger->get($item->ledger_id, collect())
+                    ->map(fn($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
+                        'id'             => $v->id,
+                        'due_date'       => $v->due_date ?? null,
+                        'voucher_number' => $v->voucher_number,
+                    ]);
+
+                $open      = $this->buildOpenInvoices($vouchers, $under, $creditPeriod, $today);
+                $dueInv    = $open->filter(fn($i) => $i['days'] > 0)->sortByDesc('days')->first();
+                $notDueInv = $open->filter(fn($i) => $i['days'] <= 0)->sortByDesc('days')->first();
+
+                $pendingSum  = $open->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
+                $extraNotDue = bcsub($balanceAbs, $pendingSum, 2);
+                if (bccomp($extraNotDue, '0', 2) < 0) {
+                    $extraNotDue = '0';
+                }
+
+                // Total Due / Not Due (hub jaisa)
+                $dueTotal = $open->filter(fn($i) => $i['days'] > 0)
+                    ->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
+
+                $notDueTotal = bcsub($balanceAbs, $dueTotal, 2);
+                if (bccomp($notDueTotal, '0', 2) < 0) {
+                    $notDueTotal = '0';
+                }
+
+                $targetRows = $this->computeTargetRows($vouchers, $under, $creditPeriod, $ownerTargets, $nowForTarget, $extraNotDue);
+                $firstRow   = collect($targetRows)->reverse()->first(fn($r) => $r['targetBal'] !== null);
+                $target     = (float) ($firstRow['targetBal'] ?? 0);
+
+                $limit   = (float) ($item->balance_limit ?? 0);
+                $dueDays = (int) ($dueInv['days'] ?? 0);
+
+                $interestDue = 0;
+                if ($dueInv && $dueDays > 0 && (float) $item->interest_rate > 0) {
+                    $interestDue = round(((float) $dueInv['pending'] * (float) $item->interest_rate * $dueDays) / 36500, 2);
+                }
+
+                $snapshots[$companyId][$item->ledger_id] = [
+                    'balance'       => $balanceF,
+                    'target'        => $target,
+                    'target_pct'    => $target > 0 ? round(($balanceF / $target) * 100, 2) : 0,
+                    'limit'         => $limit,
+                    'limit_pct'     => $limit > 0 ? round(($balanceF / $limit) * 100, 2) : 0,
+                    'due_inv'       => $dueInv,
+                    'not_due_inv'   => $notDueInv,
+                    'due_total'     => (float) $dueTotal,
+                    'not_due_total' => (float) $notDueTotal,
+                    'due_days'      => max(0, $dueDays),
+                    'days_pending'  => $notDueInv ? max(0, -1 * (int) $notDueInv['days']) : 0,
+                    'interest_due'  => $interestDue,
+                ];
+            }
+        }
+
+        // ---- Final rows ----
+        $history = $logs->map(function ($log) use ($snapshots, $actionLabels, $collectorNames) {
+            $key  = $this->followupTypeKey($log->type);
+            $snap = $snapshots[$log->company_id][$log->ledger_id] ?? [];
+
+            $row = [
+                'id'              => $log->id,
+                'ledger_id'       => $log->ledger_id,
+                'ledger_name'     => $log->ledger_name,
+                'mobile'          => $log->mobile,
+                'type'            => $key,
+                'type_label'      => $log->type,
+                'sub_option'      => $log->sub_option,
+                'balance'         => $snap['balance'] ?? (float) ltrim((string) $log->closing_balance, '-+'),
+                'target'          => null,
+                'target_pct'      => null,
+                'assigned_to'     => $collectorNames[$log->assigned_to] ?? ($log->assigned_to ?: '-'),
+                'assigned_by'     => 'Owner',
+                'allocation_date' => $log->allocation_date,
+                'action'          => $log->action,
+                'action_label'    => $actionLabels[$log->action] ?? ucfirst(str_replace('_', ' ', (string) $log->action)),
+                'frequency'       => $log->frequency,
+                'response_date'   => $log->response_date,
+                'response'        => $log->response ?? null,
+                'solution'        => $log->solution ?? null,
+                'admin_solution'  => $log->admin_solution ?? null,
+                'status'          => $log->status,
+                'clear_status'    => (int) ($log->clearStatus ?? 0),                       // NEW
+                'cleared_at'      => ((int) ($log->clearStatus ?? 0) === 1) ? $log->created_at : null,  // NEW
+            ];
+
+            $dueInv    = $snap['due_inv'] ?? null;
+            $notDueInv = $snap['not_due_inv'] ?? null;
+
+            switch ($key) {
+                case 'due':
+                    $row += [
+                        'date'         => $dueInv['date'] ?? null,
+                        'due_date'     => $dueInv['due_date'] ?? null,
+                        'inv_no'       => $dueInv['voucher_number'] ?? null,
+                        'days'         => $snap['due_days'] ?? 0,
+                        'interest_due' => $snap['interest_due'] ?? 0,
+                    ];
+                    $row['balance'] = $snap['due_total'] ?? 0;
+                    break;
+
+                case 'not_due':
+                    $row += [
+                        'date'         => $notDueInv['date'] ?? null,
+                        'due_date'     => $notDueInv['due_date'] ?? null,
+                        'inv_no'       => $notDueInv['voucher_number'] ?? null,
+                        'days_pending' => $snap['days_pending'] ?? 0,
+                    ];
+                    $row['balance'] = $snap['not_due_total'] ?? 0;
+                    break;
+
+                case 'overdue_10_20_30':
+                    $row += [
+                        'date'         => $dueInv['date'] ?? null,
+                        'due_date'     => $dueInv['due_date'] ?? null,
+                        'inv_no'       => $dueInv['voucher_number'] ?? null,
+                        'interest_due' => $snap['interest_due'] ?? 0,
+                    ];
+                    break;
+
+                case 'not_due_10_20_30':
+                    $row += [
+                        'date'         => $notDueInv['date'] ?? null,
+                        'due_date'     => $notDueInv['due_date'] ?? null,
+                        'inv_no'       => $notDueInv['voucher_number'] ?? null,
+                        'days_pending' => $snap['days_pending'] ?? 0,
+                    ];
+                    break;
+
+                case 'pct_targets':
+                case 'targets_months':
+                    $row['target']     = $snap['target'] ?? 0;
+                    $row['target_pct'] = $snap['target_pct'] ?? 0;
+                    break;
+
+                case 'days_agewise':
+                case 'overlimits':
+                case 'balances':
+                default:
+                    break;
+            }
+
+            return $row;
+        })->values()->all();
+
+        return view('owner.tally.tally.followup-history', compact('history', 'company'));
     }
 
+    /** DB type label ya key -> blade key */
+    private function followupTypeKey(?string $raw): ?string
+    {
+        $t = strtolower(preg_replace('/\s+/', '', (string) $raw));
+
+        if ($t === '')                                                        return null;
+        if (str_contains($t, 'overlimit'))                                    return 'overlimits';
+
+        if (str_contains($t, '10-20-30') || str_contains($t, '10_20_30')) {
+            return str_contains($t, 'notdue') || str_contains($t, 'not_due')
+                ? 'not_due_10_20_30'
+                : 'overdue_10_20_30';
+        }
+
+        if (str_contains($t, 'notdue') || str_contains($t, 'not_due'))        return 'not_due';
+        if (str_contains($t, 'agewise'))                                      return 'days_agewise';
+        if (str_contains($t, 'months'))                                       return 'targets_months';
+        if (str_contains($t, '%targets') || str_contains($t, 'pct_targets'))  return 'pct_targets';
+        if (str_contains($t, 'due'))                                          return 'due';
+        if (str_contains($t, 'balance'))                                      return 'balances';
+
+        return null;
+    }
 
     private array $followupTypes = [
         'Follow Up-Balances',
         'Follow Up-Balances/%Targets',
         'Follow Up-Balances/Targets(months)',
         'Follow Up-Balances/Days(agewise)',
-        'Follow Up-Balances/Days(10-20-30)',
+        'Follow Up-Balances/Overdue(10-20-30)',
+        'Follow Up-Balances/Not Due(10-20-30)',
         'Follow Up-Due',
         'Follow Up-Not Due',
         'Follow Up Overlimits',

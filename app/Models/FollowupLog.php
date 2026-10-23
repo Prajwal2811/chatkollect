@@ -16,14 +16,18 @@ class FollowupLog extends Model
         'action',
         'frequency',
         'template',
+        'status',          // NEW
+        'clearStatus',     // NEW
+        'assigned_to',     // NEW
+        'assigned_by',     // NEW
         'allocation_date',
         'response_date',
         'response',
         'solution',
         'admin_solution',
         'responded_by',
+        'sub_option',
     ];
-
     protected $casts = [
         'allocation_date' => 'datetime',
         'response_date'   => 'datetime',

@@ -19,6 +19,7 @@ return new class extends Migration
             $table->unsignedBigInteger('ledger_id')->index();
 
             $table->string('type', 60)->nullable();          // Follow Up-Balances/%Targets, Follow Up-Due ...
+            $table->string('sub_option', 50)->nullable();
             $table->enum('action', [
                 'allocate_tele_call','call','whatsapp',
                 'physical_visit','escalation','no_action'

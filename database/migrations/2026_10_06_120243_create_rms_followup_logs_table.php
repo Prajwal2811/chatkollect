@@ -20,9 +20,15 @@ return new class extends Migration
             $table->unsignedBigInteger('ledger_id')->index();
 
             $table->string('type', 60)->nullable();
+            $table->string('sub_option', 50)->nullable();
             $table->string('action', 30)->nullable();
             $table->string('frequency', 20)->nullable();
             $table->string('template', 30)->nullable();
+            $table->string('status')->nullable();
+            $table->string('clearStatus')->nullable();
+            
+            $table->unsignedBigInteger('assigned_to')->nullable();
+            $table->unsignedBigInteger('assigned_by')->nullable(); 
 
             $table->timestamp('allocation_date')->nullable();
             $table->timestamp('response_date')->nullable();

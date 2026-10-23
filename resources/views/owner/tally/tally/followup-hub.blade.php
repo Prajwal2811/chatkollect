@@ -218,17 +218,17 @@
                                                             $chips[] = ['label' => 'Balance', 'value' => number_format($bal, 2)];
                                                             $chips[] = ['label' => 'Target', 'value' => number_format($tgt, 2)];
                                                             $chips[] = ['label' => '%Target', 'value' => $tgtPct . '%'];
-                                                            $chips[] = ['label' => 'Target Month', 'value' => !empty($row['target_month']) ? \Carbon\Carbon::createFromFormat('Y-m', $row['target_month'])->format('M Y') : '-'];
+                                                            $chips[] = ['label' => 'Target Month', 'value' => $row['sub_option'] ?? '-'];
 
                                                         } elseif ($rowType === 'Follow Up-Balances/Days(agewise)') {
                                                             $chips[] = ['label' => 'Balance', 'value' => number_format($bal, 2)];
-                                                            $chips[] = ['label' => 'Days', 'value' => $row['days'] ?? '-'];
+                                                            $chips[] = ['label' => 'Days', 'value' => $row['sub_option'] ?? '-'];
 
                                                         } elseif ($rowType === 'Follow Up-Balances/Overdue(10-20-30)') {
                                                             $chips[] = ['label' => 'Date', 'value' => $fmtDate($row['date'] ?? null)];
                                                             $chips[] = ['label' => 'Due Date', 'value' => $fmtDate($row['due_date'] ?? null)];
                                                             $chips[] = ['label' => 'INV No', 'value' => $row['inv_no'] ?? '-'];
-                                                            $chips[] = ['label' => 'Days Overdue', 'value' => $row['days'] ?? '-'];
+                                                            $chips[] = ['label' => 'Days Overdue', 'value' => $row['sub_option'] ?? '-']; // DB se
                                                             $chips[] = ['label' => 'Amount', 'value' => number_format($bal, 2)];
                                                             $chips[] = ['label' => 'Interest Due', 'value' => number_format($row['interest_due'] ?? 0, 2)];
 
@@ -358,7 +358,8 @@
                                                 <div class="card-body">
                                                     <form class="quick-smart-form" id="quickSmartForm-{{ $key }}">
                                                         @csrf
-                                                        <input type="hidden" name="company_id" value="{{ $company }}">
+                                                        {{-- company ka NAAM jata hai (id nahi), controller isse company resolve karta hai --}}
+                                                        <input type="hidden" name="company" value="{{ $company }}">
                                                         <input type="hidden" name="type" value="{{ $label }}">
 
                                                         <div class="quick-smart-message mb-2"></div>
@@ -399,9 +400,11 @@
                                                                 <label class="mb-0 small text-muted" for="pctTargetFilter-{{ $key }}">Show:</label>
 
                                                                 @if($key === 'targets_months')
+                                                                    {{-- sirf pichhle 6 months (current month nahi), single modal jaisa --}}
                                                                     <select name="TargetFilterMonth" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="month">
-                                                                        @foreach(range(0, 5) as $m)
-                                                                            <option value="{{ now()->subMonths($m)->format('Y-m') }}" {{ $m == 0 ? 'selected' : '' }}>{{ now()->subMonths($m)->format('M Y') }}</option>
+                                                                        @foreach(range(1, 6) as $m)
+                                                                            @php $md = now()->startOfMonth()->subMonthsNoOverflow($m); @endphp
+                                                                            <option value="{{ $md->format('Y-m') }}" {{ $m == 1 ? 'selected' : '' }}>{{ $md->format('M Y') }}</option>
                                                                         @endforeach
                                                                     </select>
 
@@ -480,8 +483,17 @@
                                                                         $pct = ($row['targetBalance'] ?? 0) > 0
                                                                             ? round(($row['closing_balance'] / $row['targetBalance']) * 100, 2)
                                                                             : 0;
-                                                                        $rowDays = $row['days'] ?? $row['days_pending'] ?? 0;
-                                                                        $badgeClass = match($row['status']) {
+
+                                                                        $rowDays = $key === '10_20_30_notdue'
+                                                                            ? ($row['days_pending'] ?? '')
+                                                                            : ($row['days'] ?? 0);
+
+                                                                        // status sirf tab dikhao jab ledger isi tab ke type me assign ho (aur clear na hua ho)
+                                                                        $sameType  = (int) ($row['clearStatus'] ?? 0) === 0
+                                                                                    && ($row['type'] ?? null) === $label;
+                                                                        $rowStatus = $sameType ? ($row['status'] ?: 'Not Assign Yet') : 'Not Assign Yet';
+
+                                                                        $badgeClass = match($rowStatus) {
                                                                             'Already Assigned' => 'bg-primary',
                                                                             'Pending'          => 'bg-warning',
                                                                             'Responded'        => 'bg-success',
@@ -491,6 +503,7 @@
 
                                                                     <tr
                                                                         data-target-pct="{{ abs($pct) }}"
+                                                                        data-balance="{{ abs($row['closing_balance'] ?? 0) }}"
                                                                         data-days="{{ $rowDays }}"
                                                                         data-month="{{ !empty($row['target_month']) ? $row['target_month'] : '' }}"
                                                                         data-id="{{ $row['id'] }}">
@@ -503,7 +516,7 @@
                                                                         @if($key === 'targets_months')
                                                                             <td>{{ !empty($row['target_month']) ? \Carbon\Carbon::createFromFormat('Y-m', $row['target_month'])->format('M Y') : '-' }}</td>
                                                                         @elseif($key === 'days_agewise' || $key === '10_20_30_overdue' || $key === '10_20_30_notdue')
-                                                                            <td>{{ $rowDays }}</td>
+                                                                            <td>{{ $rowDays !== '' ? $rowDays : '-' }}</td>
                                                                         @elseif($key === 'due' || $key === 'not_due')
                                                                             <td>{{ !empty($row['due_date']) ? \Carbon\Carbon::parse($row['due_date'])->format('d-M-Y') : '-' }}</td>
                                                                         @else
@@ -512,7 +525,7 @@
 
                                                                         <td>
                                                                             <span class="badge accountant-status-badge {{ $badgeClass }}">
-                                                                                {{ $row['status'] }}
+                                                                                {{ $rowStatus }}
                                                                             </span>
                                                                         </td>
                                                                     </tr>
@@ -557,13 +570,22 @@
                                                     const pct = parseInt(pctStr, 10);
                                                     const cutoff = Math.ceil((pct / 100) * totalCount);
 
-                                                    rows.forEach(function (row, index) {
-                                                        let show;
-                                                        if (direction === 'top') {
-                                                            show = index < cutoff;
-                                                        } else {
-                                                            show = index >= (totalCount - cutoff);
-                                                        }
+                                                    // rows ko balance ke hisab se sort karo (highest -> lowest)
+                                                    const sorted = rows.slice().sort(function (a, b) {
+                                                        const balA = parseFloat(a.getAttribute('data-balance')) || 0;
+                                                        const balB = parseFloat(b.getAttribute('data-balance')) || 0;
+                                                        return balB - balA;
+                                                    });
+
+                                                    // top = highest balance wale, bottom = lowest balance wale
+                                                    const selectedRows = new Set(
+                                                        direction === 'top'
+                                                            ? sorted.slice(0, cutoff)
+                                                            : sorted.slice(totalCount - cutoff)
+                                                    );
+
+                                                    rows.forEach(function (row) {
+                                                        const show = selectedRows.has(row);
                                                         row.style.display = show ? '' : 'none';
                                                         if (show) visibleCount++;
                                                     });
@@ -571,10 +593,11 @@
                                                     const label = direction === 'top' ? 'Top' : 'Bottom';
                                                     if (applyBtn) applyBtn.textContent = 'Apply to ' + label + ' ' + pct + '%';
                                                 }
-
                                             } else if (filterType === 'month') {
                                                 rows.forEach(function (row) {
-                                                    const show = row.getAttribute('data-month') === selectedVal;
+                                                    const rm = row.getAttribute('data-month');
+                                                    // jis ledger ka month nahi (unassigned), use bhi dikhao taaki bulk assign ho sake
+                                                    const show = !rm || rm === selectedVal;
                                                     row.style.display = show ? '' : 'none';
                                                     if (show) visibleCount++;
                                                 });
@@ -582,14 +605,17 @@
 
                                             } else if (filterType === 'agewise' || filterType === 'days3' || filterType === 'days3notdue') {
                                                 rows.forEach(function (row) {
-                                                    const days = parseInt(row.getAttribute('data-days'), 10) || 0;
+                                                    const raw  = row.getAttribute('data-days');
+                                                    const days = parseInt(raw, 10);
                                                     let show = true;
 
                                                     if (selectedVal !== 'total' && selectedVal !== 'all') {
                                                         const limit = parseInt(selectedVal, 10);
                                                         // Overdue / agewise: kitne din se late (days > limit)
-                                                        // Not Due: kitne din mein due hoga (days <= limit)
-                                                        show = (filterType === 'days3notdue') ? (days <= limit) : (days > limit);
+                                                        // Not Due: kitne din mein due hoga (days <= limit), blank = koi not-due invoice nahi
+                                                        show = (filterType === 'days3notdue')
+                                                            ? (raw !== '' && !isNaN(days) && days <= limit)
+                                                            : (days > limit);
                                                     }
 
                                                     row.style.display = show ? '' : 'none';
@@ -619,10 +645,15 @@
                                         const originalText = submitBtn.text();
 
                                         const action = form.find('[name="action"]').val();
+                                        const frequency = form.find('[name="frequency"]').val();
                                         const template = form.find('[name="template"]').val();
 
                                         if (!action) {
                                             msgBox.html('<div class="alert alert-danger">Please select an action.</div>');
+                                            return;
+                                        }
+                                        if (!frequency) {
+                                            msgBox.html('<div class="alert alert-danger">Please select a frequency.</div>');
                                             return;
                                         }
                                         if (action === 'whatsapp' && !template) {
@@ -642,6 +673,15 @@
                                             return;
                                         }
 
+                                        // filter ki value -> sub_option ("total" / "all" = koi sub option nahi)
+                                        const filterEl   = form.find('.pct-target-filter');
+                                        const filterType = filterEl.data('filter-type');
+                                        let subOption = '';
+                                        if (['month', 'agewise', 'days3'].includes(filterType)) {
+                                            const v = filterEl.val();
+                                            subOption = (v === 'total' || v === 'all') ? '' : v;
+                                        }
+
                                         msgBox.html('');
                                         form.find('.is-invalid').removeClass('is-invalid');
                                         submitBtn.prop('disabled', true).text('Saving...');
@@ -649,28 +689,28 @@
                                         $.ajax({
                                             url: "{{ route('owner.tally.followup.saveBulkFollows') }}",
                                             type: "POST",
-                                            data: form.serialize() + '&' + $.param({ ids: ids }),
+                                            data: form.serialize() + '&' + $.param({ ids: ids, sub_option: subOption }),
 
                                             success: function (response) {
                                                 msgBox.html(
-                                                    '<div class="alert alert-' + (response.status ? 'success' : 'danger') + '">' +
+                                                    '<div class="alert alert-' + (response.success ? 'success' : 'danger') + '">' +
                                                     response.message +
                                                     '</div>'
                                                 );
-                                                if (response.status) {
+                                                if (response.success) {
                                                     setTimeout(function () { window.location.reload(); }, 800);
                                                 }
                                             },
 
                                             error: function (xhr) {
-                                                if (xhr.status === 422) {
-                                                    const errors = xhr.responseJSON.errors;
-                                                    $.each(errors, function (field) {
+                                                const json = xhr.responseJSON || {};
+                                                if (xhr.status === 422 && json.errors) {
+                                                    $.each(json.errors, function (field) {
                                                         form.find('[name="' + field + '"]').addClass('is-invalid');
                                                     });
-                                                    msgBox.html('<div class="alert alert-danger">' + Object.values(errors)[0][0] + '</div>');
+                                                    msgBox.html('<div class="alert alert-danger">' + Object.values(json.errors)[0][0] + '</div>');
                                                 } else {
-                                                    msgBox.html('<div class="alert alert-danger">Something went wrong. Please try again.</div>');
+                                                    msgBox.html('<div class="alert alert-danger">' + (json.message || 'Something went wrong. Please try again.') + '</div>');
                                                 }
                                             },
 
@@ -688,7 +728,7 @@
             </div>
         </div>
 
-        {{-- ================= FOLLOW UP ALLOCATE MODAL (type -> action -> frequency -> assign) ================= --}}
+        {{-- ================= FOLLOW UP ALLOCATE MODAL (type -> sub option -> action -> frequency -> assign) ================= --}}
         <div class="modal fade" id="followupAllocateModal" tabindex="-1" aria-labelledby="followupAllocateModalLabel" aria-hidden="true">
             <div class="modal-dialog modal-lg modal-dialog-centered">
                 <div class="modal-content">
@@ -718,6 +758,41 @@
                                         'Follow Up-Not Due'                    => 'Not Due',
                                         'Follow Up Overlimits'                 => 'Overlimits',
                                     ];
+
+                                    // Targets(months): current month chhod ke pichhle 6 months
+                                    $allocatePastMonths = [];
+                                    for ($i = 1; $i <= 6; $i++) {
+                                        $d = \Carbon\Carbon::now()->startOfMonth()->subMonthsNoOverflow($i);
+                                        $allocatePastMonths[] = [
+                                            'value' => $d->format('Y-m'),
+                                            'label' => $d->format('M Y'),
+                                        ];
+                                    }
+
+                                    // Type -> sub options (radio buttons) config
+                                    $allocateSubOptions = [
+                                        'Follow Up-Balances/Targets(months)' => [
+                                            'title'   => 'Select Month',
+                                            'options' => $allocatePastMonths,
+                                        ],
+                                        'Follow Up-Balances/Days(agewise)' => [
+                                            'title'   => 'Select Days',
+                                            'options' => [
+                                                ['value' => '15', 'label' => 'More than 15 days'],
+                                                ['value' => '45', 'label' => 'More than 45 days'],
+                                                ['value' => '90', 'label' => 'More than 90 days'],
+                                            ],
+                                        ],
+                                        'Follow Up-Balances/Overdue(10-20-30)' => [
+                                            'title'   => 'Select Overdue Range',
+                                            'options' => [
+                                                ['value' => '10',       'label' => 'Overdue in 10 days'],
+                                                ['value' => '20',       'label' => 'Overdue in 20 days'],
+                                                ['value' => '30',       'label' => 'Overdue in 30 days'],
+                                                ['value' => 'above_30', 'label' => 'Above 30 days'],
+                                            ],
+                                        ],
+                                    ];
                                 @endphp
                                 @foreach($allocateTypes as $value => $label)
                                     <div class="form-check">
@@ -728,7 +803,14 @@
                             </div>
                         </div>
 
-                        {{-- Step 2: action + frequency (+ WhatsApp template) revealed after a type is picked --}}
+                        {{-- Step 1.5: sub options (month / days / overdue range) - sirf kuch types ke liye --}}
+                        <div id="allocateSubStep" class="mt-4" style="display:none;">
+                            <hr>
+                            <label class="form-label fw-bold" id="allocateSubTitle">Select Option</label>
+                            <div id="allocateSubOptions" class="d-flex flex-column gap-2"></div>
+                        </div>
+
+                        {{-- Step 2: action + frequency (+ WhatsApp template) revealed after a type (and sub option) is picked --}}
                         <div id="allocateStep2" class="mt-4" style="display:none;">
                             <hr>
                             <div class="row g-3">
@@ -837,9 +919,9 @@
                         </p>
                         <div class="alert alert-warning small mb-0">
                             <i class="fa fa-info-circle me-1"></i>
-                            This action will reset the status of the selected ledgers to <strong>"Not Assigned Yet"</strong>
-                            and clear their Follow Up Type / Type Details as well.
-                            This action <strong>cannot be undone</strong>.
+                            This will reset the status of the selected ledgers to <strong>"Not Assigned Yet"</strong>
+                            and clear their Follow Up Type / Type Details.
+                            The previous record will remain available in Follow Up History.
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -1023,22 +1105,16 @@
                         return;
                     }
 
-                    let matchedCount = 0;
-
-                    allRows.forEach(function (row) {
+                    const matchedRows = Array.from(allRows).filter(function (row) {
                         const badge = row.querySelector('.accountant-status-badge');
-                        if (badge && badge.classList.contains(statusClass)) {
-                            markRowAsNotAssigned(row);
-                            matchedCount++;
-                        }
+                        return badge && badge.classList.contains(statusClass);
                     });
 
-                    if (matchedCount === 0) {
+                    if (matchedRows.length === 0) {
                         showAjaxAlert(noRecordsMessage, 'danger', 'ajaxAlertWrapper');
                         return;
                     }
 
-                    // Select URL based on statusClass
                     const url = statusClass === 'bg-success'
                         ? "{{ route('owner.tally.followup.clear-responded-status') }}"
                         : "{{ route('owner.tally.followup.clear-status') }}";
@@ -1047,18 +1123,19 @@
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
+                            'Accept': 'application/json',
                             'X-CSRF-TOKEN': '{{ csrf_token() }}'
-                        }
+                        },
+                        body: JSON.stringify({ company: @json($company) })
                     })
                     .then(function (response) {
                         if (!response.ok) throw new Error('Request failed');
-                        return response.json().catch(() => ({}));
+                        return response.json();
                     })
                     .then(function (data) {
-                        showAjaxAlert(successMessage, 'success', 'ajaxAlertWrapper');
-                        setTimeout(function () {
-                            window.location.reload();
-                        }, 500);
+                        matchedRows.forEach(markRowAsNotAssigned);
+                        showAjaxAlert(data.message || successMessage, 'success', 'ajaxAlertWrapper');
+                        setTimeout(function () { window.location.reload(); }, 500);
                     })
                     .catch(function () {
                         showAjaxAlert('Something went wrong while clearing. Please try again.', 'danger', 'ajaxAlertWrapper');
@@ -1127,6 +1204,43 @@
                     });
                 });
 
+                // ================= ALLOCATE MODAL: SUB OPTIONS CONFIG (server se aata hai) =================
+                // { 'Follow Up-Balances/Targets(months)': { title, options:[{value,label}] }, ... }
+                const allocateSubConfig = @json($allocateSubOptions);
+
+                const allocateSubStepEl = document.getElementById('allocateSubStep');
+                const allocateSubTitleEl = document.getElementById('allocateSubTitle');
+                const allocateSubOptionsEl = document.getElementById('allocateSubOptions');
+                const allocateStep2El = document.getElementById('allocateStep2');
+                const allocateAssignBtnEl = document.getElementById('allocateAssignBtn');
+
+                function resetSubOptions() {
+                    if (allocateSubOptionsEl) allocateSubOptionsEl.innerHTML = '';
+                    if (allocateSubStepEl) allocateSubStepEl.style.display = 'none';
+                }
+
+                function renderSubOptions(typeValue) {
+                    const cfg = allocateSubConfig[typeValue];
+                    resetSubOptions();
+                    if (!cfg || !allocateSubOptionsEl) return false;
+
+                    allocateSubTitleEl.textContent = cfg.title;
+
+                    cfg.options.forEach(function (opt, idx) {
+                        const id = 'allocateSub-' + idx;
+                        const wrap = document.createElement('div');
+                        wrap.className = 'form-check';
+                        wrap.innerHTML = `
+                            <input class="form-check-input allocate-sub-radio" type="radio" name="allocateSubOption" id="${id}" value="${opt.value}" data-label="${opt.label}">
+                            <label class="form-check-label" for="${id}">${opt.label}</label>
+                        `;
+                        allocateSubOptionsEl.appendChild(wrap);
+                    });
+
+                    allocateSubStepEl.style.display = 'block';
+                    return true;
+                }
+
                 // ================= ROW CLICK -> RESPONDED opens LOG MODAL, OTHERWISE opens ALLOCATE MODAL =================
                 const allocateModalEl = document.getElementById('followupAllocateModal');
                 const allocateModal = allocateModalEl ? new bootstrap.Modal(allocateModalEl) : null;
@@ -1142,10 +1256,14 @@
                     const row = e.target.closest('#example12 tbody tr.ledger-row');
                     if (!row) return;
 
-                    // ---- Responded rows open the Log Modal instead of the Allocate Modal ----
                     const statusBadge = row.querySelector('.accountant-status-badge');
-                    const isResponded = statusBadge && statusBadge.classList.contains('bg-success');
+                    const statusText  = statusBadge ? statusBadge.textContent.trim().toLowerCase() : '';
 
+                    const isResponded = statusBadge && statusBadge.classList.contains('bg-success');
+                    const isPending   = statusBadge && statusBadge.classList.contains('bg-warning');
+                    const canAssign   = statusText.startsWith('not assign'); // sirf "Not Assign Yet"
+
+                    // ---- Responded: sirf Log Modal, assign nahi ----
                     if (isResponded) {
                         const rowData = {
                             name: row.getAttribute('data-name') || '-',
@@ -1156,44 +1274,82 @@
 
                         document.getElementById('logModalName').textContent = rowData.name;
                         document.getElementById('logModalMobile').textContent = rowData.mobile;
-
                         renderLogTable([rowData]);
 
-                        const logModal = new bootstrap.Modal(document.getElementById('followupLogModal'));
-                        logModal.show();
+                        new bootstrap.Modal(document.getElementById('followupLogModal')).show();
                         return;
                     }
 
-                    // ---- Otherwise (Pending / Not assign yet / etc.) -> Allocate Modal ----
+                    // ---- Pending / Not assign yet -> Allocate Modal ----
                     selectedLedgerId = row.getAttribute('data-id');
                     selectedLedgerRow = row;
-                    const ledgerName = row.getAttribute('data-name') || '-';
 
-                    if (allocateSelectedNameEl) allocateSelectedNameEl.textContent = ledgerName;
+                    if (allocateSelectedNameEl) allocateSelectedNameEl.textContent = row.getAttribute('data-name') || '-';
 
                     // reset modal state every time it opens
-                    document.querySelectorAll('.allocate-type-radio').forEach(r => r.checked = false);
+                    document.querySelectorAll('.allocate-type-radio').forEach(r => {
+                        r.checked = false;
+                        r.disabled = false;
+                    });
                     document.getElementById('allocateAction').value = '';
                     document.getElementById('allocateFrequency').value = '';
                     document.getElementById('allocateStep2').style.display = 'none';
                     document.getElementById('allocateAssignBtn').style.display = 'none';
+                    resetSubOptions();
 
-                    // reset & hide the WhatsApp template field every time modal opens
                     const templateWrapperReset = document.getElementById('allocateTemplateWrapper');
                     const templateSelectReset = document.getElementById('allocateTemplate');
                     if (templateSelectReset) templateSelectReset.value = '';
                     if (templateWrapperReset) templateWrapperReset.style.display = 'none';
 
+                    // Pending: Step 1 chhupa do, baaki me dikhao
+                    const allocateStep1El = document.getElementById('allocateStep1');
+                    if (allocateStep1El) allocateStep1El.style.display = isPending ? 'none' : 'block';
+
+                    // message
+                    const popupAlertWrapper = document.getElementById('ajaxPopUpAlertWrapper');
+                    if (popupAlertWrapper) {
+                        popupAlertWrapper.innerHTML = '';
+                        if (isPending) {
+                            const assignedType = row.getAttribute('data-followup-type') || '';
+                            popupAlertWrapper.innerHTML = `
+                                <div class="alert alert-warning small mb-0" role="alert">
+                                    <i class="fa fa-exclamation-triangle me-1"></i>
+                                    This ledger is already assigned to the accountant${assignedType ? ' (<strong>' + assignedType + '</strong>)' : ''},
+                                    but the accountant has not responded yet.
+                                </div>
+                            `;
+                        }
+                    }
+
                     if (allocateModal) allocateModal.show();
                 });
 
-                // ================= STEP 1 -> STEP 2 REVEAL =================
+                // ================= STEP 1 -> (SUB OPTIONS) -> STEP 2 REVEAL =================
                 document.querySelectorAll('.allocate-type-radio').forEach(function (radio) {
                     radio.addEventListener('change', function () {
-                        document.getElementById('allocateStep2').style.display = 'block';
-                        document.getElementById('allocateAssignBtn').style.display = 'inline-block';
+                        const hasSub = renderSubOptions(this.value);
+
+                        if (hasSub) {
+                            // sub option choose hone tak Step 2 aur Assign button hide rahenge
+                            allocateStep2El.style.display = 'none';
+                            allocateAssignBtnEl.style.display = 'none';
+                        } else {
+                            allocateStep2El.style.display = 'block';
+                            allocateAssignBtnEl.style.display = 'inline-block';
+                        }
                     });
                 });
+
+                // Sub option radio select hone par Step 2 reveal karo
+                if (allocateSubOptionsEl) {
+                    allocateSubOptionsEl.addEventListener('change', function (e) {
+                        if (e.target.classList.contains('allocate-sub-radio')) {
+                            allocateStep2El.style.display = 'block';
+                            allocateAssignBtnEl.style.display = 'inline-block';
+                        }
+                    });
+                }
 
                 // ================= WHATSAPP TEMPLATE TOGGLE (Allocate Modal) =================
                 const allocateActionSelect = document.getElementById('allocateAction');
@@ -1216,6 +1372,7 @@
                 if (allocateAssignBtn) {
                     allocateAssignBtn.addEventListener('click', function () {
                         const selectedTypeEl = document.querySelector('.allocate-type-radio:checked');
+                        const selectedSubEl = document.querySelector('.allocate-sub-radio:checked');
                         const actionValue = document.getElementById('allocateAction').value;
                         const frequencyValue = document.getElementById('allocateFrequency').value;
                         const templateValue = document.getElementById('allocateTemplate').value;
@@ -1226,6 +1383,11 @@
                         }
                         if (!selectedTypeEl) {
                             showAjaxAlert('Please select a Follow Up type.', 'danger', 'ajaxPopUpAlertWrapper');
+                            return;
+                        }
+                        // is type ke sub options hain to ek select karna zaroori hai
+                        if (allocateSubConfig[selectedTypeEl.value] && !selectedSubEl) {
+                            showAjaxAlert('Please select ' + allocateSubConfig[selectedTypeEl.value].title.replace('Select ', '').toLowerCase() + '.', 'danger', 'ajaxPopUpAlertWrapper');
                             return;
                         }
                         if (!actionValue || !frequencyValue) {
@@ -1250,8 +1412,11 @@
                                 'X-CSRF-TOKEN': '{{ csrf_token() }}'
                             },
                             body: JSON.stringify({
+                                company: @json($company),
                                 ids: [selectedLedgerId],
                                 type: selectedTypeEl.value,
+                                sub_option: selectedSubEl ? selectedSubEl.value : null,
+                                sub_option_label: selectedSubEl ? selectedSubEl.getAttribute('data-label') : null,
                                 action: actionValue,
                                 frequency: frequencyValue,
                                 template: templateValue || null

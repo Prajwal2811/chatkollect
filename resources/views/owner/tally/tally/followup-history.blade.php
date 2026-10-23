@@ -49,10 +49,17 @@
 
             @php
                 $historyCollection = collect($history ?? []);
-                $totalLogs = $historyCollection->count();
+                $totalLogs    = $historyCollection->count();
                 $totalLedgers = $historyCollection->pluck('ledger_id')->unique()->count();
-                $pendingCount = $historyCollection->filter(fn($r) => empty($r['response']))->count();
-                $respondedCount = $totalLogs - $pendingCount;
+
+                $isRowCleared = fn($r) => (int) ($r['clear_status'] ?? 0) === 1;
+                $isRowPending = fn($r) => !$isRowCleared($r)
+                    && empty($r['response'])
+                    && strtolower((string) ($r['status'] ?? '')) !== 'responded';
+
+                $clearedCount   = $historyCollection->filter($isRowCleared)->count();
+                $pendingCount   = $historyCollection->filter($isRowPending)->count();
+                $respondedCount = $totalLogs - $pendingCount - $clearedCount;
 
                 $actionIconMap = [
                     'allocate_tele_call' => ['icon' => 'bi-telephone-plus', 'color' => '#6f42c1'],
@@ -65,66 +72,60 @@
 
                 $buildTypeDetails = function ($row) {
                     $type = $row['type'] ?? '';
-                    $fmt = fn($v) => $v !== null && $v !== '' ? number_format(abs($v), 2) : '-';
-                    $dt = fn($v) => !empty($v) ? \Carbon\Carbon::parse($v)->format('d-M-Y') : '-';
+                    $fmt  = fn($v) => $v !== null && $v !== '' ? number_format(abs((float) $v), 2) : '-';
+                    $dt   = fn($v) => !empty($v) ? \Carbon\Carbon::parse($v)->format('d-M-Y') : '-';
+                    $sub  = !empty($row['sub_option']) ? $row['sub_option'] : '-';
 
-                    switch ($type) {
-                        case 'due':
-                            return [
-                                'Date' => $dt($row['date'] ?? null),
-                                'Due Date' => $dt($row['due_date'] ?? null),
-                                'INV No' => $row['inv_no'] ?? '-',
-                                'Days' => $row['days'] ?? '-',
-                                'Amount' => $fmt($row['balance'] ?? 0),
-                                'Interest Due' => $fmt($row['interest_due'] ?? 0),
-                            ];
-
-                        case 'not_due':
-                            return [
-                                'Date' => $dt($row['date'] ?? null),
-                                'Due Date' => $dt($row['due_date'] ?? null),
-                                'INV No' => $row['inv_no'] ?? '-',
-                                'Days Pending' => $row['days_pending'] ?? '-',
-                                'Amount' => $fmt($row['balance'] ?? 0),
-                            ];
-
-                        case 'days_10_20_30':
-                            return [
-                                'Days' => $row['days'] ?? '-',
-                                'Amt' => $fmt($row['balance'] ?? 0),
-                            ];
-
-                        case 'days_agewise':
-                            return [
-                                'Days' => $row['days'] ?? '-',
-                                'Amt' => $fmt($row['balance'] ?? 0),
-                            ];
-
-                        case 'pct_targets':
-                            return [
-                                'Balance' => $fmt($row['balance'] ?? 0),
-                                'Target' => $row['target'] ? number_format($row['target'], 2) : '-',
-                                '%Target' => $row['target'] ? number_format($row['target_pct'], 2) . '%' : '-',
-                            ];
-
-                        case 'balances':
-                            return [
-                                'Balance' => $fmt($row['balance'] ?? 0),
-                            ];
-
-                        case 'targets_months':
-                            return [
-                                'Balance' => $fmt($row['balance'] ?? 0),
-                                'Target' => $row['target'] ? number_format($row['target'], 2) : '-',
-                                '%Target' => $row['target'] ? number_format($row['target_pct'], 2) . '%' : '-',
-                                'Target Month' => $dt($row['due_date'] ?? null) !== '-' ? \Carbon\Carbon::parse($row['due_date'])->format('M Y') : '-',
-                            ];
-
-                        default:
-                            return [
-                                'Balance' => $fmt($row['balance'] ?? 0),
-                            ];
-                    }
+                    return match ($type) {
+                        'due' => [
+                            'Date'         => $dt($row['date'] ?? null),
+                            'Due Date'     => $dt($row['due_date'] ?? null),
+                            'INV No'       => $row['inv_no'] ?? '-',
+                            'Days'         => $row['days'] ?? '-',
+                            'Amount'       => $fmt($row['balance'] ?? 0),
+                            'Interest Due' => $fmt($row['interest_due'] ?? 0),
+                        ],
+                        'not_due' => [
+                            'Date'         => $dt($row['date'] ?? null),
+                            'Due Date'     => $dt($row['due_date'] ?? null),
+                            'INV No'       => $row['inv_no'] ?? '-',
+                            'Days Pending' => $row['days_pending'] ?? '-',
+                            'Amount'       => $fmt($row['balance'] ?? 0),
+                        ],
+                        'overdue_10_20_30' => [
+                            'Date'         => $dt($row['date'] ?? null),
+                            'Due Date'     => $dt($row['due_date'] ?? null),
+                            'INV No'       => $row['inv_no'] ?? '-',
+                            'Days Overdue' => $sub,
+                            'Amount'       => $fmt($row['balance'] ?? 0),
+                            'Interest Due' => $fmt($row['interest_due'] ?? 0),
+                        ],
+                        'not_due_10_20_30' => [
+                            'Date'      => $dt($row['date'] ?? null),
+                            'Due Date'  => $dt($row['due_date'] ?? null),
+                            'INV No'    => $row['inv_no'] ?? '-',
+                            'Days Left' => $row['days_pending'] ?? '-',
+                            'Amount'    => $fmt($row['balance'] ?? 0),
+                        ],
+                        'days_agewise' => [
+                            'Balance' => $fmt($row['balance'] ?? 0),
+                            'Days'    => $sub,
+                        ],
+                        'pct_targets' => [
+                            'Balance' => $fmt($row['balance'] ?? 0),
+                            'Target'  => number_format((float) ($row['target'] ?? 0), 2),
+                            '%Target' => number_format((float) ($row['target_pct'] ?? 0), 2) . '%',
+                        ],
+                        'targets_months' => [
+                            'Balance'      => $fmt($row['balance'] ?? 0),
+                            'Target'       => number_format((float) ($row['target'] ?? 0), 2),
+                            '%Target'      => number_format((float) ($row['target_pct'] ?? 0), 2) . '%',
+                            'Target Month' => $sub,
+                        ],
+                        default => [
+                            'Balance' => $fmt($row['balance'] ?? 0),
+                        ],
+                    };
                 };
             @endphp
 
@@ -197,7 +198,8 @@
                                     <option value="pct_targets">Balances/%Targets</option>
                                     <option value="targets_months">Balances/Targets(months)</option>
                                     <option value="days_agewise">Balances/Days(agewise)</option>
-                                    <option value="days_10_20_30">Balances/Days(10-20-30)</option>
+                                    <option value="overdue_10_20_30">Balances/Overdue(10-20-30)</option>
+                                    <option value="not_due_10_20_30">Balances/Not Due(10-20-30)</option>
                                     <option value="due">Due</option>
                                     <option value="not_due">Not Due</option>
                                     <option value="overlimits">Overlimits</option>
@@ -223,6 +225,7 @@
                                     <option value="">All</option>
                                     <option value="pending">Pending Response</option>
                                     <option value="responded">Responded</option>
+                                    <option value="cleared">Cleared</option>
                                 </select>
                             </div>
 
@@ -255,17 +258,19 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    @forelse(($history ?? []) as $index => $row)
+                                    @foreach(($history ?? []) as $index => $row)
                                         @php
-                                            $iconInfo = $actionIconMap[$row['action'] ?? ''] ?? ['icon' => 'bi-clock-history', 'color' => '#6c757d'];
-                                            $isPending = empty($row['response']);
+                                            $iconInfo    = $actionIconMap[$row['action'] ?? ''] ?? ['icon' => 'bi-clock-history', 'color' => '#6c757d'];
+                                            $isCleared   = $isRowCleared($row);
+                                            $isPending   = $isRowPending($row);
+                                            $rowStatus   = $isCleared ? 'cleared' : ($isPending ? 'pending' : 'responded');
                                             $typeDetails = $buildTypeDetails($row);
                                         @endphp
                                         <tr data-ledger="{{ $row['ledger_name'] }}" data-type="{{ $row['type'] }}"
                                             data-action="{{ $row['action'] }}"
-                                            data-status="{{ $isPending ? 'pending' : 'responded' }}"
+                                            data-status="{{ $rowStatus }}"
                                             data-allocation-date="{{ $row['allocation_date'] ?? '' }}"
-                                            class="{{ $isPending ? 'row-pending' : '' }}">
+                                            class="{{ $isCleared ? 'row-cleared' : ($isPending ? 'row-pending' : '') }}">
 
                                             <td>{{ $index + 1 }}</td>
                                             <td class="fw-semibold">{{ $row['ledger_name'] }}</td>
@@ -303,37 +308,37 @@
                                             <td class="truncate-cell" title="{{ $row['solution'] ?? '' }}">
                                                 {{ $row['solution'] ?? '-' }}</td>
                                             <td class="text-center">
-                                                @if($isPending)
-                                                    <span class="badge bg-warning text-dark"><i
-                                                            class="bi bi-hourglass-split"></i> Pending</span>
+                                                @if($isCleared)
+                                                    <span class="badge bg-secondary"><i class="bi bi-eraser"></i> Cleared</span>
+                                                    <small class="d-block text-muted">
+                                                        was {{ ucfirst(strtolower((string) ($row['status'] ?? '-'))) }}
+                                                        @if(!empty($row['cleared_at']))
+                                                            &middot; {{ \Carbon\Carbon::parse($row['cleared_at'])->format('d-M-Y') }}
+                                                        @endif
+                                                    </small>
+                                                @elseif($isPending)
+                                                    <span class="badge bg-warning text-dark"><i class="bi bi-hourglass-split"></i> Pending</span>
                                                 @else
                                                     <span class="badge bg-success"><i class="bi bi-check2"></i> Responded</span>
                                                 @endif
                                             </td>
                                         </tr>
-                                    @empty
-                                        <tr>
-                                            <td colspan="12" class="text-center py-5 text-muted">
-                                                <i class="bi bi-inbox display-6 d-block mb-2"></i>
-                                                No history found
-                                            </td>
-                                        </tr>
-                                    @endforelse
+                                    @endforeach
                                 </tbody>
                             </table>
                         </div>
                     </div>
-
                 </div>
             </div>
         </div>
     </div>
 
-    @include('owner.tally.components.footer')
+  @include('owner.tally.components.footer')
 
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
     <link rel="stylesheet" href="https://cdn.datatables.net/rowgroup/1.4.1/css/rowGroup.dataTables.min.css">
     <script src="https://cdn.datatables.net/rowgroup/1.4.1/js/dataTables.rowGroup.min.js"></script>
+
 
     <style>
         /* ============ Stat cards ============ */
@@ -482,6 +487,11 @@
             align-items: center;
             gap: 4px;
         }
+
+        #historyTable tbody tr.row-cleared {
+            background-color: #f1f3f5;
+            color: #6c757d;
+        }
     </style>
 
     <script>
@@ -495,6 +505,7 @@
                 historyTable = $('#historyTable').DataTable({
                     order: [[1, 'asc']],
                     columnDefs: [{ visible: false, targets: 1 }],
+                    language: { emptyTable: 'No history found' },
                     rowGroup: {
                         dataSrc: 1,
                         startRender: function (rows, group) {

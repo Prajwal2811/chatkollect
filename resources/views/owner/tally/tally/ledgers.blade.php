@@ -488,7 +488,8 @@
                                                         <span class="badge bg-primary me-2">{{ $loop->iteration }}</span>
                                                         {{ $label }}
                                                     </div>
-                                                    <span class="badge bg-{{ $style['bg'] }} summary-value-badge">₹ {{ $fmt($value) }}</span>
+                                                    <span class="badge bg-{{ $style['bg'] }} summary-value-badge"
+      data-summary-label="{{ $label }}">₹ {{ $fmt($value) }}</span>
                                                 </div>
                                             </button>
                                         </div>
@@ -521,7 +522,7 @@
                                                         <span class="badge bg-primary me-2">{{ $loop->iteration }}</span>
                                                         {{ $label }}
                                                     </div>
-                                                    <span class="badge bg-{{ $style['bg'] }} summary-value-badge">₹ {{ $fmt($value) }}</span>
+                                                    <span class="badge bg-{{ $style['bg'] }} summary-value-badge" data-summary-label="{{ $label }}">₹ {{ $fmt($value) }}</span>
                                                 </div>
                                             </button>
                                         </div>
@@ -1510,6 +1511,73 @@
                     for (let c = 0; c < Math.min(5, total); c++) pump();
                 }
 
+                // ===== Interest Received/Paid, Due, Waived ke Breakdown: amount AJAX se =====
+                const BD_INT_SIMPLE = {
+                    'Interest Received / Paid': 'received',
+                    'Interest Due':             'dueParty',
+                    'Interest Waived':          'waivedParty'
+                };
+
+                function loadBreakdownInterestSimple(items, key) {
+                    const token = ++bdIntToken;   // purane ajax ignore
+                    const rs    = v => '₹ ' + fmtExact(v.toFixed(2));
+
+                    let html = '';
+                    items.forEach(function (item, i) {
+                        html += `<tr data-i="${i}">
+                            <td>${escHtml(item.ledger)} <span class="badge bg-light text-dark ms-1">${escHtml(item.under)}</span></td>
+                            <td>${escHtml(item.label)}</td>
+                            <td class="bd-amt text-muted"><strong>...</strong></td>
+                        </tr>`;
+                    });
+                    $('#ledgerBreakdownBody').html(html || '<tr><td colspan="3" class="text-center text-muted">No data available</td></tr>');
+                    $('#ledgerBreakdownTotal').text(items.length ? '...' : '₹ 0');
+
+                    if (!items.length) return;
+
+                    let sum = 0, done = 0, next = 0, failed = 0;
+                    const total = items.length;
+
+                    const finishOne = () => {
+                        done++;
+                        $('#ledgerBreakdownTotal').text(
+                            rs(sum) + (done < total ? ' (' + done + '/' + total + '...)' : (failed ? ' *' : ''))
+                        );
+                        pump();
+                    };
+
+                    function pump() {
+                        if (token !== bdIntToken || next >= total) return;
+                        const i    = next++;
+                        const item = items[i];
+                        const $row = $('#ledgerBreakdownBody tr[data-i="' + i + '"]');
+
+                        $.ajax({
+                            url: "{{ route('owner.tally.ledger.interest-data') }}",
+                            method: "GET",
+                            dataType: "json",
+                            data: { company: currentCompanyName, ledger: item.ledger, under: item.under },
+                            success: function (res) {
+                                if (token !== bdIntToken) return;
+                                const v = bdInterestVals(res)[key];
+                                sum += v;
+                                $row.find('.bd-amt').removeClass('text-muted').html('<strong>' + rs(v) + '</strong>');
+                                finishOne();
+                            },
+                            error: function () {
+                                if (token !== bdIntToken) return;
+                                failed++;
+                                $row.find('.bd-amt').addClass('text-danger').html('<strong>Error</strong>');
+                                finishOne();
+                            }
+                        });
+                    }
+
+                    for (let c = 0; c < Math.min(5, total); c++) pump();   // 5 parallel
+                }
+
+                
+
                 function showLedgerBreakdown(label, type) {
                     let dataset = (type === 'creditor') ? breakdownDataCreditor : breakdownDataDebtor;
                     let totals  = (type === 'creditor') ? totalsDataCreditor : totalsDataDebtor;
@@ -1524,6 +1592,14 @@
                         $('#ledgerBreakdownNormalWrap').addClass('d-none');
                         $('#ledgerBreakdownInterestWrap').removeClass('d-none');
                         loadBreakdownInterest(items, type);
+                        return;
+                    }
+
+                    // ===== Interest Received/Paid, Due, Waived: amount AJAX se =====
+                    if (BD_INT_SIMPLE[label]) {
+                        $('#ledgerBreakdownInterestWrap').addClass('d-none');
+                        $('#ledgerBreakdownNormalWrap').removeClass('d-none');
+                        loadBreakdownInterestSimple(items, BD_INT_SIMPLE[label]);
                         return;
                     }
 
@@ -2128,6 +2204,79 @@
                     return $('#creditors-tab').hasClass('active') ? 'creditor' : 'debtor';
                 }
 
+                // ===== Summary: Interest wale cards ke totals (sab ledgers ka AJAX sum) =====
+                const SUMMARY_INT_MAP = {
+                    'Interest Cost':            'costParty',
+                    'Interest Received / Paid': 'received',
+                    'Interest Due':             'dueParty',
+                    'Interest Waived':          'waivedParty'
+                };
+                const summaryIntLoaded = { debtor: false, creditor: false };
+                const summaryIntToken  = { debtor: 0,     creditor: 0 };
+
+                function loadSummaryInterest(scope) {
+                    if (summaryIntLoaded[scope]) return;
+                    summaryIntLoaded[scope] = true;
+
+                    const token   = ++summaryIntToken[scope];
+                    const dataset = (scope === 'creditor') ? breakdownDataCreditor : breakdownDataDebtor;
+                    const items   = dataset['Interest Cost'] || [];   // har ledger ek baar (ledger + under)
+                    const $sec    = (scope === 'creditor') ? $('#summaryCardsSectionCreditor') : $('#summaryCardsSectionDebtor');
+                    const $badges = $sec.find('.summary-value-badge').filter(function () {
+                        return SUMMARY_INT_MAP[$(this).attr('data-summary-label')];
+                    });
+
+                    if (!items.length) return;
+
+                    const keys   = Object.values(SUMMARY_INT_MAP);
+                    const totals = {};
+                    keys.forEach(k => totals[k] = 0);
+
+                    let done = 0, next = 0, failed = 0;
+                    const total = items.length;
+                    const rs = v => '₹ ' + fmtExact(v.toFixed(2));
+
+                    const paint = () => {
+                        $badges.each(function () {
+                            const k = SUMMARY_INT_MAP[$(this).attr('data-summary-label')];
+                            $(this).text(done < total
+                                ? rs(totals[k]) + ' (' + done + '/' + total + '...)'
+                                : rs(totals[k]) + (failed ? ' *' : ''))
+                                .attr('title', failed ? failed + ' ledger(s) ka data load nahi hua' : '');
+                        });
+                    };
+
+                    const finishOne = () => {
+                        done++;
+                        paint();
+                        if (done === total && failed) summaryIntLoaded[scope] = false; // agli baar dobara try
+                        pump();
+                    };
+
+                    function pump() {
+                        if (token !== summaryIntToken[scope] || next >= total) return;
+                        const item = items[next++];
+
+                        $.ajax({
+                            url: "{{ route('owner.tally.ledger.interest-data') }}",
+                            method: "GET",
+                            dataType: "json",
+                            data: { company: currentCompanyName, ledger: item.ledger, under: item.under },
+                            success: function (res) {
+                                const vals = bdInterestVals(res);
+                                keys.forEach(k => totals[k] += vals[k]);
+                                finishOne();
+                            },
+                            error: function () {
+                                failed++;
+                                finishOne();
+                            }
+                        });
+                    }
+
+                    paint();
+                    for (let c = 0; c < Math.min(5, total); c++) pump();   // 5 parallel requests
+                }
                 function showSummaryForActiveTab() {
                     let scope = getActiveLedgerScope();
                     $('.summary-cards-section').hide();
@@ -2136,6 +2285,7 @@
                     } else {
                         $('#summaryCardsSectionDebtor').show();
                     }
+                    loadSummaryInterest(scope);   // ✅ interest totals AJAX se
                 }
 
                 $('#summaryToggleBtn').on('click', function () {
