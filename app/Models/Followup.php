@@ -22,7 +22,6 @@ class Followup extends Model
         'response_date',
         'clearStatus',
         'sub_option',
- 
     ];
 
     protected $casts = [

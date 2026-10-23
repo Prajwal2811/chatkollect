@@ -1699,219 +1699,6 @@ class AccountantController extends Controller
         return $out;
     }
 
-    // public function ledgerInterestData(Request $request)
-    // {
-    //     try {
-    //         $accountant = auth('accountant')->user();
-    //         $ownerId = $accountant->owner_id ?? null ;
-
-    //         $request->validate([
-    //             'company' => 'required|string',
-    //             'ledger'  => 'required|string',
-    //             'under'   => 'nullable|string',
-    //         ]);
-
-    //         $tallyCompany = TallyCompany::where('owner_id', $ownerId)
-    //             ->where('company_name', $request->company)
-    //             ->firstOrFail();
-
-    //         $ledgerModel = TallyLedger::where('owner_id', $ownerId)
-    //             ->where('tally_company_id', $tallyCompany->id)
-    //             ->where('ledger_name', $request->ledger)
-    //             ->firstOrFail();
-
-    //         $under        = $ledgerModel->parent;
-    //         $isCreditor   = $under === 'Sundry Creditors';
-    //         $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
-    //         $today        = Carbon::now()->startOfDay();
-
-    //         $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per annum
-    //         $baseRate  = (string) config('app.base_interest_rate', 12);   // % per annum
-
-    //         // Int Pending: amount * rate% * days / 365  => /36500
-    //         $interestYearly = fn ($amt, $rate, $days) =>
-    //             $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '36500', 2) : '0.00';
-
-    //         // Int on Int: amount * (rate/100) * (days/30)  => /3000
-    //         $interestOnInt = fn ($amt, $rate, $days) =>
-    //             $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '3000', 2) : '0.00';
-
-    //         $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
-
-    //         // ===== PENDING invoices (overdue) =====
-    //         $pending = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today)
-    //             ->filter(fn ($i) => $i['days'] > 0)
-    //             ->sortByDesc('days')
-    //             ->values()
-    //             ->map(function ($i) use ($interestYearly, $partyRate, $baseRate, $today) {
-    //                 $days = $this->overdueDays($i['due_date'], $today);
-
-    //                 return [
-    //                     'id'             => $i['id'] ?? null,
-    //                     'date'           => $i['date'],
-    //                     'due_date'       => $i['due_date'],
-    //                     'inv_no'         => $i['voucher_number'],
-    //                     'days'           => $days,
-    //                     'settlement_status'           => $i['settlement_status'] ?? null,
-    //                     'settlement_amount'           => $i['settlement_amount'] ?? null,
-    //                     'amount'         => $i['pending'],
-    //                     'interest_due'   => $interestYearly($i['pending'], $partyRate, $days),
-    //                     'interest_due_b' => $interestYearly($i['pending'], $baseRate, $days),
-    //                 ];
-    //             });
-
-    //         // ===== RECEIVED invoices (late paid) : FIFO allocation =====
-    //         $receipts = $rows
-    //             ->filter(fn ($r) => $isCreditor
-    //                 ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
-    //                 : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
-    //             ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
-    //             ->map(fn ($r) => [
-    //                 'date'      => Carbon::parse($r['date'])->startOfDay(),
-    //                 'remaining' => $isCreditor ? $r['debit'] : $r['credit'],
-    //             ])
-    //             ->values()
-    //             ->all();
-
-    //         $invoices = $rows
-    //             ->filter(fn ($r) => $isCreditor
-    //                 ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
-    //                 : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
-    //             ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
-    //             ->values();
-
-    //         $received = collect();
-    //         $ptr = 0;
-
-    //             foreach ($invoices as $inv) {
-    //                 $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
-    //                 $voucherDate = Carbon::parse($inv['date'])->startOfDay();
-    //                 $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
-
-    //                 // Invoice ka settlement (ek hi baar, rows mein allocate hoga)
-    //                 $settlementStatus = $inv['settlement_status'] ?? null;
-    //                 $settlementLeft   = is_numeric($inv['settlement_amount'] ?? null)
-    //                     ? (string) $inv['settlement_amount']
-    //                     : '0';
-    //                 $hasSettlement = !empty($settlementStatus) || bccomp($settlementLeft, '0', 2) > 0;
-
-    //                 while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
-    //                     if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
-    //                         $ptr++;
-    //                         continue;
-    //                     }
-
-    //                     $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
-    //                         ? $need : $receipts[$ptr]['remaining'];
-
-    //                     $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
-    //                     $need = bcsub($need, $take, 2);
-
-    //                     $recdDate  = $receipts[$ptr]['date'];
-    //                     $delayDays = (int) $dueDate->diffInDays($recdDate, false);
-
-    //                     if ($delayDays > 0) {
-    //                         $daysSince = (int) $recdDate->diffInDays($today, false);
-
-    //                         $intPending = $interestYearly($take, $partyRate, $delayDays);
-    //                         $intOnInt   = $interestOnInt($intPending, $partyRate, $delayDays);
-    //                         $interestDue = bcadd($intPending, $intOnInt, 2);   // ✅ Interest Due
-
-    //                         $intPendingB = $interestYearly($take, $baseRate, $delayDays);
-    //                         $intOnIntB   = $interestOnInt($intPendingB, $baseRate, $delayDays);
-
-    //                         // ✅ Settlement ko Interest Due se jodo
-    //                         if ($hasSettlement) {
-    //                             // is row ka settlement: bacha hua settlement, par Interest Due se zyada nahi
-    //                             $settlementAmt  = bccomp($settlementLeft, $interestDue, 2) < 0 ? $settlementLeft : $interestDue;
-    //                             $settlementLeft = bcsub($settlementLeft, $settlementAmt, 2);
-    //                             $interestWaived = bcsub($interestDue, $settlementAmt, 2);   // Interest Due - Settlement
-    //                         } else {
-    //                             $settlementAmt  = '0.00';
-    //                             $interestWaived = '0.00';
-    //                         }
-
-    //                         $received->push([
-    //                             'id'                => $inv['id'], 
-    //                             'inv_no'            => $inv['voucher_number'],
-    //                             'recd_date'         => $recdDate->toDateString(),
-    //                             'amount'            => $take,
-    //                             'int_pending'       => $intPending,
-    //                             'days'              => $delayDays,
-    //                             'days_since'        => $daysSince,
-    //                             'int_on_int'        => $intOnInt,
-    //                             'interest_due'      => $interestDue,
-    //                             'settlement_status' => $settlementStatus,
-    //                             'settlement_amount' => $settlementAmt,
-    //                             'interest_waived'   => $interestWaived,
-    //                             'int_pending_b'     => $intPendingB,
-    //                             'int_on_int_b'      => $intOnIntB,
-    //                             'interest_due_b'    => bcadd($intPendingB, $intOnIntB, 2),
-    //                             'is_settled' => strtolower((string) $settlementStatus) === 'settled',   // ✅ NEW
-    //                         ]);
-    //                     }
-    //                 }
-    //             }
-
-    //             $received = $received
-    //             ->groupBy('inv_no')
-    //             ->map(function ($group) {
-    //                 $first = $group->first();
-    //                 $sum = fn ($key) => $group->reduce(fn ($t, $r) => bcadd($t, (string) $r[$key], 2), '0');
-
-    //                 return array_merge($first, [
-    //                     'recd_date'         => $group->last()['recd_date'],
-    //                     'days'              => $group->max('days'),
-    //                     'amount'            => $sum('amount'),
-    //                     'int_pending'       => $sum('int_pending'),
-    //                     'int_on_int'        => $sum('int_on_int'),
-    //                     'interest_due'      => $sum('interest_due'),
-    //                     'settlement_amount' => $sum('settlement_amount'),
-    //                     'interest_waived'   => $sum('interest_waived'),
-    //                     'int_pending_b'     => $sum('int_pending_b'),
-    //                     'int_on_int_b'      => $sum('int_on_int_b'),
-    //                     'interest_due_b'    => $sum('interest_due_b'),
-    //                 ]);
-    //             })
-    //             ->values();
-                
-    //         $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-    //         $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-
-    //         $settledRows = $received->filter(fn ($r) => $r['is_settled']);
-
-    //         $settlementRequestTotal = $settledRows
-    //             ->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-
-    //         $settlementReceivedTotal = $settledRows
-    //             ->reduce(fn ($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
-
-    //         $interestWaivedTotal = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
-    //         return response()->json([
-    //             'party_rate'                => $partyRate,
-    //             'base_rate'                 => $baseRate,
-    //             'total'                     => bcadd($receivedTotal, $pendingTotal, 2),
-    //             'received_total'            => $receivedTotal,
-    //             'pending_total'             => $pendingTotal,
-    //             'settlement_request_total'  => $settlementRequestTotal,    // ✅ NEW
-    //             'settlement_received_total' => $settlementReceivedTotal,   // ✅ NEW
-    //             'interest_waived_total'     => $interestWaivedTotal,       // ✅ NEW
-    //             'received'                  => $received->values(),
-    //             'pending'                   => $pending,
-    //         ]);
-
-    //     } catch (\Illuminate\Validation\ValidationException $e) {
-    //         throw $e;
-    //     } catch (\Throwable $e) {
-    //         Log::error('Tally ledgerInterestData failed', [
-    //             'company' => $request->company,
-    //             'ledger'  => $request->ledger,
-    //             'error'   => $e->getMessage(),
-    //         ]);
-    //         return response()->json(['message' => 'Unable to fetch interest data.'], 500);
-    //     }
-    // }
-
     public function ledgerInterestData(Request $request)
     {
         try {
@@ -1939,22 +1726,21 @@ class AccountantController extends Controller
             $today        = Carbon::now()->startOfDay();
 
             $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per annum
-            // ✅ Ab ledger ka base_interest_rate; khali ho to config fallback
-            $baseRate  = !blank($ledgerModel->base_interest_rate)
-                ? (string) $ledgerModel->base_interest_rate
-                : (string) config('app.base_interest_rate', 12);
+            $baseRate  = (string) config('app.base_interest_rate', 12);   // % per annum
 
-            $interestYearly = fn($amt, $rate, $days) =>
+            // Int Pending: amount * rate% * days / 365  => /36500
+            $interestYearly = fn ($amt, $rate, $days) =>
                 $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '36500', 2) : '0.00';
 
-            $interestOnInt = fn($amt, $rate, $days) =>
+            // Int on Int: amount * (rate/100) * (days/30)  => /3000
+            $interestOnInt = fn ($amt, $rate, $days) =>
                 $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '3000', 2) : '0.00';
 
             $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
 
             // ===== PENDING invoices (overdue) =====
             $pending = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today)
-                ->filter(fn($i) => $i['days'] > 0)
+                ->filter(fn ($i) => $i['days'] > 0)
                 ->sortByDesc('days')
                 ->values()
                 ->map(function ($i) use ($interestYearly, $partyRate, $baseRate, $today) {
@@ -1966,6 +1752,8 @@ class AccountantController extends Controller
                         'due_date'       => $i['due_date'],
                         'inv_no'         => $i['voucher_number'],
                         'days'           => $days,
+                        'settlement_status'           => $i['settlement_status'] ?? null,
+                        'settlement_amount'           => $i['settlement_amount'] ?? null,
                         'amount'         => $i['pending'],
                         'interest_due'   => $interestYearly($i['pending'], $partyRate, $days),
                         'interest_due_b' => $interestYearly($i['pending'], $baseRate, $days),
@@ -1974,233 +1762,142 @@ class AccountantController extends Controller
 
             // ===== RECEIVED invoices (late paid) : FIFO allocation =====
             $receipts = $rows
-                ->filter(fn($r) => $isCreditor
+                ->filter(fn ($r) => $isCreditor
                     ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
                     : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
-                ->sortBy(fn($r) => Carbon::parse($r['date'])->timestamp)
-                ->map(function ($r) use ($isCreditor) {
-                    $left = is_numeric($r['settlement_amount'] ?? null) ? (string) $r['settlement_amount'] : '0';
-                    return [
-                        'voucher_number'    => $r['voucher_number'],
-                        'date'              => Carbon::parse($r['date'])->startOfDay(),
-                        'remaining'         => $isCreditor ? $r['debit'] : $r['credit'],
-                        'settlement_status' => $r['settlement_status'] ?? null,
-                        'settlement_left'   => $left,    // party rate ke liye
-                        'settlement_left_b' => $left,    // ✅ base rate ke liye alag pool
-                    ];
-                })
+                ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
+                ->map(fn ($r) => [
+                    'date'      => Carbon::parse($r['date'])->startOfDay(),
+                    'remaining' => $isCreditor ? $r['debit'] : $r['credit'],
+                ])
                 ->values()
                 ->all();
 
             $invoices = $rows
-                ->filter(fn($r) => $isCreditor
+                ->filter(fn ($r) => $isCreditor
                     ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
                     : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
-                ->sortBy(fn($r) => Carbon::parse($r['date'])->timestamp)
+                ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
                 ->values();
 
             $received = collect();
             $ptr = 0;
-            $settlementLeftById = [];
 
-            foreach ($invoices as $inv) {
-                $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
-                $voucherDate = Carbon::parse($inv['date'])->startOfDay();
-                $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
+                foreach ($invoices as $inv) {
+                    $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
+                    $voucherDate = Carbon::parse($inv['date'])->startOfDay();
+                    $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
 
-                while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
-                    if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
-                        $ptr++;
-                        continue;
-                    }
+                    // Invoice ka settlement (ek hi baar, rows mein allocate hoga)
+                    $settlementStatus = $inv['settlement_status'] ?? null;
+                    $settlementLeft   = is_numeric($inv['settlement_amount'] ?? null)
+                        ? (string) $inv['settlement_amount']
+                        : '0';
+                    $hasSettlement = !empty($settlementStatus) || bccomp($settlementLeft, '0', 2) > 0;
 
-                    $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
-                        ? $need : $receipts[$ptr]['remaining'];
-
-                    $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
-                    $need = bcsub($need, $take, 2);
-
-                    $recdDate  = $receipts[$ptr]['date'];
-                    $delayDays = (int) $dueDate->diffInDays($recdDate, false);
-
-                    if ($delayDays > 0) {
-                        $daysSince = (int) $recdDate->diffInDays($today, false);
-
-                        // ---- Party rate ----
-                        $intPending  = $interestYearly($take, $partyRate, $delayDays);
-                        $intOnInt    = $interestOnInt($intPending, $partyRate, $delayDays);
-                        $interestDue = bcadd($intPending, $intOnInt, 2);
-
-                        // ---- Base rate ----
-                        $intPendingB  = $interestYearly($take, $baseRate, $delayDays);
-                        $intOnIntB    = $interestOnInt($intPendingB, $baseRate, $delayDays);
-                        $interestDueB = bcadd($intPendingB, $intOnIntB, 2);
-
-                        $rStatus        = strtolower((string) ($receipts[$ptr]['settlement_status'] ?? ''));
-                        $isSettledPiece = ($rStatus === 'settled');
-
-                        if ($isSettledPiece) {
-                            // party
-                            $rLeft         = $receipts[$ptr]['settlement_left'];
-                            $settlementAmt = bccomp($rLeft, $interestDue, 2) < 0 ? $rLeft : $interestDue;
-                            $receipts[$ptr]['settlement_left'] = bcsub($rLeft, $settlementAmt, 2);
-                            $interestWaived = bcsub($interestDue, $settlementAmt, 2);
-                            $settledRequest = $interestDue;
-
-                            // base
-                            $rLeftB         = $receipts[$ptr]['settlement_left_b'];
-                            $settlementAmtB = bccomp($rLeftB, $interestDueB, 2) < 0 ? $rLeftB : $interestDueB;
-                            $receipts[$ptr]['settlement_left_b'] = bcsub($rLeftB, $settlementAmtB, 2);
-                            $interestWaivedB = bcsub($interestDueB, $settlementAmtB, 2);
-                            $settledRequestB = $interestDueB;
-                        } else {
-                            $settlementAmt = $interestWaived = $settledRequest = '0.00';
-                            $settlementAmtB = $interestWaivedB = $settledRequestB = '0.00';
+                    while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
+                        if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
+                            $ptr++;
+                            continue;
                         }
 
-                        $received->push([
-                            
-                            'id' => $inv['id'],
-                            'inv_no'            => $inv['voucher_number'],
-                            'recd_date'         => $recdDate->toDateString(),
-                            'amount'            => $take,
-                            'days'              => $delayDays,
-                            'days_since'        => $daysSince,
+                        $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
+                            ? $need : $receipts[$ptr]['remaining'];
 
-                            'int_pending'       => $intPending,
-                            'int_on_int'        => $intOnInt,
-                            'interest_due'      => $interestDue,
-                            'settlement_amount' => $settlementAmt,
-                            'interest_waived'   => $interestWaived,
-                            'settled_request'   => $settledRequest,
+                        $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
+                        $need = bcsub($need, $take, 2);
 
-                            'int_pending_b'       => $intPendingB,
-                            'int_on_int_b'        => $intOnIntB,
-                            'interest_due_b'      => $interestDueB,
-                            'settlement_amount_b' => $settlementAmtB,
-                            'interest_waived_b'   => $interestWaivedB,
-                            'settled_request_b'   => $settledRequestB,
+                        $recdDate  = $receipts[$ptr]['date'];
+                        $delayDays = (int) $dueDate->diffInDays($recdDate, false);
 
-                            'settlement_status' => $rStatus ?: null,
-                            'is_settled'        => $isSettledPiece,
-                            'settlementStatus' => $inv['settlement_status'] ?: null,
-                            'settlementAmount' => $inv['settlement_amount'] ?: null,
-                        ]);
+                        if ($delayDays > 0) {
+                            $daysSince = (int) $recdDate->diffInDays($today, false);
+
+                            $intPending = $interestYearly($take, $partyRate, $delayDays);
+                            $intOnInt   = $interestOnInt($intPending, $partyRate, $delayDays);
+                            $interestDue = bcadd($intPending, $intOnInt, 2);   // ✅ Interest Due
+
+                            $intPendingB = $interestYearly($take, $baseRate, $delayDays);
+                            $intOnIntB   = $interestOnInt($intPendingB, $baseRate, $delayDays);
+
+                            // ✅ Settlement ko Interest Due se jodo
+                            if ($hasSettlement) {
+                                // is row ka settlement: bacha hua settlement, par Interest Due se zyada nahi
+                                $settlementAmt  = bccomp($settlementLeft, $interestDue, 2) < 0 ? $settlementLeft : $interestDue;
+                                $settlementLeft = bcsub($settlementLeft, $settlementAmt, 2);
+                                $interestWaived = bcsub($interestDue, $settlementAmt, 2);   // Interest Due - Settlement
+                            } else {
+                                $settlementAmt  = '0.00';
+                                $interestWaived = '0.00';
+                            }
+
+                            $received->push([
+                                'id'                => $inv['id'], 
+                                'inv_no'            => $inv['voucher_number'],
+                                'recd_date'         => $recdDate->toDateString(),
+                                'amount'            => $take,
+                                'int_pending'       => $intPending,
+                                'days'              => $delayDays,
+                                'days_since'        => $daysSince,
+                                'int_on_int'        => $intOnInt,
+                                'interest_due'      => $interestDue,
+                                'settlement_status' => $settlementStatus,
+                                'settlement_amount' => $settlementAmt,
+                                'interest_waived'   => $interestWaived,
+                                'int_pending_b'     => $intPendingB,
+                                'int_on_int_b'      => $intOnIntB,
+                                'interest_due_b'    => bcadd($intPendingB, $intOnIntB, 2),
+                                'is_settled' => strtolower((string) $settlementStatus) === 'settled',   // ✅ NEW
+                            ]);
+                        }
                     }
                 }
-            }
 
-            $received = $received
+                $received = $received
                 ->groupBy('inv_no')
                 ->map(function ($group) {
                     $first = $group->first();
-                    $sum = fn($key) => $group->reduce(fn($t, $r) => bcadd($t, (string) $r[$key], 2), '0');
+                    $sum = fn ($key) => $group->reduce(fn ($t, $r) => bcadd($t, (string) $r[$key], 2), '0');
 
                     return array_merge($first, [
-                        'recd_date'           => $group->last()['recd_date'],
-                        'days'                => $group->max('days'),
-                        'amount'              => $sum('amount'),
-
-                        'int_pending'         => $sum('int_pending'),
-                        'int_on_int'          => $sum('int_on_int'),
-                        'interest_due'        => $sum('interest_due'),
-                        'settlement_amount'   => $sum('settlement_amount'),
-                        'interest_waived'     => $sum('interest_waived'),
-                        'settled_request'     => $sum('settled_request'),
-
-                        'int_pending_b'       => $sum('int_pending_b'),
-                        'int_on_int_b'        => $sum('int_on_int_b'),
-                        'interest_due_b'      => $sum('interest_due_b'),
-                        'settlement_amount_b' => $sum('settlement_amount_b'),
-                        'interest_waived_b'   => $sum('interest_waived_b'),
-                        'settled_request_b'   => $sum('settled_request_b'),
-
-                        'is_settled'          => $group->contains('is_settled', true),
-                        'settlement_status'   => $group->contains('is_settled', true) ? 'settled' : $first['settlement_status'],
+                        'recd_date'         => $group->last()['recd_date'],
+                        'days'              => $group->max('days'),
+                        'amount'            => $sum('amount'),
+                        'int_pending'       => $sum('int_pending'),
+                        'int_on_int'        => $sum('int_on_int'),
+                        'interest_due'      => $sum('interest_due'),
+                        'settlement_amount' => $sum('settlement_amount'),
+                        'interest_waived'   => $sum('interest_waived'),
+                        'int_pending_b'     => $sum('int_pending_b'),
+                        'int_on_int_b'      => $sum('int_on_int_b'),
+                        'interest_due_b'    => $sum('interest_due_b'),
                     ]);
                 })
                 ->values();
+                
+            $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
+            $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
-            $rowsById = $rows->keyBy('id');
+            $settledRows = $received->filter(fn ($r) => $r['is_settled']);
 
-            $pending = $pending->map(function ($p) use ($rowsById, $settlementLeftById) {
-                $src    = $rowsById->get($p['id']);
-                $status = $src['settlement_status'] ?? null;
+            $settlementRequestTotal = $settledRows
+                ->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
 
-                $left = $settlementLeftById[$p['id']]
-                    ?? (is_numeric($src['settlement_amount'] ?? null) ? (string) $src['settlement_amount'] : '0');
+            $settlementReceivedTotal = $settledRows
+                ->reduce(fn ($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
 
-                $isSettled = strtolower((string) $status) === 'settled';
-
-                $amt  = $isSettled ? (bccomp($left, $p['interest_due'], 2)   < 0 ? $left : $p['interest_due'])   : '0.00';
-                $amtB = $isSettled ? (bccomp($left, $p['interest_due_b'], 2) < 0 ? $left : $p['interest_due_b']) : '0.00';
-
-                return $p + [
-                    'settlementStatus' => $status ?: null,
-                    'settlementAmount' => $amt ?: null,
-                    'settlement_status'   => $status,
-                    'settlement_amount'   => $amt,
-                    'interest_waived'     => $isSettled ? bcsub($p['interest_due'], $amt, 2) : '0.00',
-                    'settlement_amount_b' => $amtB,
-                    'interest_waived_b'   => $isSettled ? bcsub($p['interest_due_b'], $amtB, 2) : '0.00',
-                ];
-            })->values();
-
-            $isSettledRow = fn($r) => strtolower((string) ($r['settlement_status'] ?? '')) === 'settled';
-
-            // ===== Totals: Party =====
-            $receivedTotal = $received->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-            $pendingTotal  = $pending->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-
-            $settlementRequestTotal  = $received->reduce(fn($t, $r) => bcadd($t, $r['settled_request'], 2), '0');
-            $settlementReceivedTotal = $received->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
-            $interestWaivedTotal     = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
-
-            $pendingSettled = $pending->filter($isSettledRow);
-            $pendingSettlementRequestTotal  = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-            $pendingSettlementReceivedTotal = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
-            $pendingInterestWaivedTotal     = bcsub($pendingSettlementRequestTotal, $pendingSettlementReceivedTotal, 2);
-
-            // ===== Totals: Base =====
-            $receivedTotalB = $received->reduce(fn($t, $r) => bcadd($t, $r['interest_due_b'], 2), '0');
-            $pendingTotalB  = $pending->reduce(fn($t, $r) => bcadd($t, $r['interest_due_b'], 2), '0');
-
-            $settlementRequestTotalB  = $received->reduce(fn($t, $r) => bcadd($t, $r['settled_request_b'], 2), '0');
-            $settlementReceivedTotalB = $received->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount_b'], 2), '0');
-            $interestWaivedTotalB     = bcsub($settlementRequestTotalB, $settlementReceivedTotalB, 2);
-
-            $pendingSettlementRequestTotalB  = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['interest_due_b'], 2), '0');
-            $pendingSettlementReceivedTotalB = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount_b'], 2), '0');
-            $pendingInterestWaivedTotalB     = bcsub($pendingSettlementRequestTotalB, $pendingSettlementReceivedTotalB, 2);
-
+            $interestWaivedTotal = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
             return response()->json([
-                'party_rate' => $partyRate,
-                'base_rate'  => $baseRate,
-
-                // party
-                'total'                             => bcadd($receivedTotal, $pendingTotal, 2),
-                'received_total'                    => $receivedTotal,
-                'pending_total'                     => $pendingTotal,
-                'settlement_request_total'          => $settlementRequestTotal,
-                'settlement_received_total'         => $settlementReceivedTotal,
-                'interest_waived_total'             => $interestWaivedTotal,
-                'pending_settlement_request_total'  => $pendingSettlementRequestTotal,
-                'pending_settlement_received_total' => $pendingSettlementReceivedTotal,
-                'pending_interest_waived_total'     => $pendingInterestWaivedTotal,
-
-                // base
-                'total_b'                             => bcadd($receivedTotalB, $pendingTotalB, 2),
-                'received_total_b'                    => $receivedTotalB,
-                'pending_total_b'                     => $pendingTotalB,
-                'settlement_request_total_b'          => $settlementRequestTotalB,
-                'settlement_received_total_b'         => $settlementReceivedTotalB,
-                'interest_waived_total_b'             => $interestWaivedTotalB,
-                'pending_settlement_request_total_b'  => $pendingSettlementRequestTotalB,
-                'pending_settlement_received_total_b' => $pendingSettlementReceivedTotalB,
-                'pending_interest_waived_total_b'     => $pendingInterestWaivedTotalB,
-
-                'received' => $received->values(),
-                'pending'  => $pending,
+                'party_rate'                => $partyRate,
+                'base_rate'                 => $baseRate,
+                'total'                     => bcadd($receivedTotal, $pendingTotal, 2),
+                'received_total'            => $receivedTotal,
+                'pending_total'             => $pendingTotal,
+                'settlement_request_total'  => $settlementRequestTotal,    // ✅ NEW
+                'settlement_received_total' => $settlementReceivedTotal,   // ✅ NEW
+                'interest_waived_total'     => $interestWaivedTotal,       // ✅ NEW
+                'received'                  => $received->values(),
+                'pending'                   => $pending,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
