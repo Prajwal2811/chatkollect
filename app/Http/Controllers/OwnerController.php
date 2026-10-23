@@ -3237,12 +3237,7 @@ class OwnerController extends Controller
             'followUps'      => $followUps,
         ]);
     }
-
-
-    /* ===================================================================
-    | assignFollowUpAction  (single ledger - modal se)
-    =================================================================== */
-
+    
     public function assignFollowUpAction(Request $request)
     {
         $request->validate([
@@ -3339,6 +3334,7 @@ class OwnerController extends Controller
             'skipped'  => $skipped,
         ]);
     }
+    
     public function followUpsHubOLDS(Request $request, $company)
     {
 
