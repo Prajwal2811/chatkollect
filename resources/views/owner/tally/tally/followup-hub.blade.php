@@ -56,7 +56,7 @@
                                 }, 3000);
                             </script>
 
-                            {{-- ================= QUICK / SMART FOLLOW-UP TABS (UNCHANGED) ================= --}}
+                            {{-- ================= QUICK / SMART FOLLOW-UP TABS ================= --}}
                             @if($type === 'Follow Up-Quick /Smart - Follow -up')
                                 @php
                                     $followupTabs = [
@@ -64,7 +64,8 @@
                                         'pct_targets'      => 'Follow Up-Balances/%Targets',
                                         'targets_months'   => 'Follow Up-Balances/Targets(months)',
                                         'days_agewise'     => 'Follow Up-Balances/Days(agewise)',
-                                        'days_10_20_30'    => 'Follow Up-Balances/Days(10-20-30)',
+                                        '10_20_30_overdue' => 'Follow Up-Balances/Overdue(10-20-30)',
+                                        '10_20_30_notdue'  => 'Follow Up-Balances/Not Due(10-20-30)',
                                         'due'              => 'Follow Up-Due',
                                         'not_due'          => 'Follow Up-Not Due',
                                         'overlimits'       => 'Follow Up Overlimits',
@@ -119,11 +120,9 @@
                                                 Click on any ledger row to allocate its Follow Up.
                                             </div>
                                         </div>
-
-                                       
                                     </div>
 
-                                     <!-- Right End -->
+                                    <!-- Right End -->
                                     <button type="button"
                                             class="btn btn-outline-warning btn-sm ms-auto"
                                             id="clearPendingBtn">
@@ -151,7 +150,7 @@
                                             </select>
                                         @endif
 
-                                        @if($type === 'Follow Up-Balances/Days(10-20-30)')
+                                        @if(in_array($type, ['Follow Up-Balances/Overdue(10-20-30)', 'Follow Up-Balances/Not Due(10-20-30)']))
                                             <select id="daysFilter" class="form-select form-select-sm" style="width:160px;">
                                                 <option value="">All Days</option>
                                                 <option value="10">10 Days</option>
@@ -201,52 +200,62 @@
                                                         $rowType  = $row['type'] ?? $type;
                                                         $chips    = [];
 
+                                                        // safe values: key na ho to closing_balance, phir 0
+                                                        $bal       = abs($row['balance'] ?? $row['closing_balance'] ?? 0);
+                                                        $tgt       = $row['target'] ?? $row['targetBalance'] ?? 0;
+                                                        $tgtPct    = $row['target_pct'] ?? ($tgt > 0 ? round(($bal / $tgt) * 100, 2) : 0);
+                                                        $fmtDate   = fn($d) => !empty($d) ? \Carbon\Carbon::parse($d)->format('d-M-Y') : '-';
+
                                                         if ($rowType === 'Follow Up-Balances/%Targets') {
-                                                            $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
-                                                            $chips[] = ['label' => 'Target', 'value' => number_format($row['target'], 2)];
-                                                            $chips[] = ['label' => '%Target', 'value' => $row['target_pct'] . '%'];
+                                                            $chips[] = ['label' => 'Balance', 'value' => number_format($bal, 2)];
+                                                            $chips[] = ['label' => 'Target', 'value' => number_format($tgt, 2)];
+                                                            $chips[] = ['label' => '%Target', 'value' => $tgtPct . '%'];
 
                                                         } elseif ($rowType === 'Follow Up-Balances') {
-                                                            $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
+                                                            $chips[] = ['label' => 'Balance', 'value' => number_format($bal, 2)];
 
                                                         } elseif ($rowType === 'Follow Up-Balances/Targets(months)') {
-                                                            $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
-                                                            $chips[] = ['label' => 'Target', 'value' => number_format($row['target'], 2)];
-                                                            $chips[] = ['label' => '%Target', 'value' => $row['target_pct'] . '%'];
+                                                            $chips[] = ['label' => 'Balance', 'value' => number_format($bal, 2)];
+                                                            $chips[] = ['label' => 'Target', 'value' => number_format($tgt, 2)];
+                                                            $chips[] = ['label' => '%Target', 'value' => $tgtPct . '%'];
                                                             $chips[] = ['label' => 'Target Month', 'value' => !empty($row['target_month']) ? \Carbon\Carbon::createFromFormat('Y-m', $row['target_month'])->format('M Y') : '-'];
 
                                                         } elseif ($rowType === 'Follow Up-Balances/Days(agewise)') {
-                                                            $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
+                                                            $chips[] = ['label' => 'Balance', 'value' => number_format($bal, 2)];
                                                             $chips[] = ['label' => 'Days', 'value' => $row['days'] ?? '-'];
 
-                                                        } elseif ($rowType === 'Follow Up-Balances/Days(10-20-30)') {
-                                                            $chips[] = ['label' => 'Date', 'value' => !empty($row['date']) ? \Carbon\Carbon::parse($row['date'])->format('d-M-Y') : '-'];
-                                                            $chips[] = ['label' => 'Due Date', 'value' => !empty($row['due_date']) ? \Carbon\Carbon::parse($row['due_date'])->format('d-M-Y') : '-'];
+                                                        } elseif ($rowType === 'Follow Up-Balances/Overdue(10-20-30)') {
+                                                            $chips[] = ['label' => 'Date', 'value' => $fmtDate($row['date'] ?? null)];
+                                                            $chips[] = ['label' => 'Due Date', 'value' => $fmtDate($row['due_date'] ?? null)];
                                                             $chips[] = ['label' => 'INV No', 'value' => $row['inv_no'] ?? '-'];
-                                                            $chips[] = ['label' => 'Days', 'value' => $row['days'] ?? '-'];
-                                                            $chips[] = ['label' => 'Amount', 'value' => number_format(abs($row['balance']), 2)];
+                                                            $chips[] = ['label' => 'Days Overdue', 'value' => $row['days'] ?? '-'];
+                                                            $chips[] = ['label' => 'Amount', 'value' => number_format($bal, 2)];
                                                             $chips[] = ['label' => 'Interest Due', 'value' => number_format($row['interest_due'] ?? 0, 2)];
 
+                                                        } elseif ($rowType === 'Follow Up-Balances/Not Due(10-20-30)') {
+                                                            $chips[] = ['label' => 'Date', 'value' => $fmtDate($row['date'] ?? null)];
+                                                            $chips[] = ['label' => 'Due Date', 'value' => $fmtDate($row['due_date'] ?? null)];
+                                                            $chips[] = ['label' => 'INV No', 'value' => $row['inv_no'] ?? '-'];
+                                                            $chips[] = ['label' => 'Days Left', 'value' => $row['days_pending'] ?? $row['days'] ?? '-'];
+                                                            $chips[] = ['label' => 'Amount', 'value' => number_format($bal, 2)];
+
                                                         } elseif ($rowType === 'Follow Up-Due') {
-                                                            $chips[] = ['label' => 'Date', 'value' => !empty($row['date']) ? \Carbon\Carbon::parse($row['date'])->format('d-M-Y') : '-'];
-                                                            $chips[] = ['label' => 'Due Date', 'value' => !empty($row['due_date']) ? \Carbon\Carbon::parse($row['due_date'])->format('d-M-Y') : '-'];
+                                                            $chips[] = ['label' => 'Date', 'value' => $fmtDate($row['date'] ?? null)];
+                                                            $chips[] = ['label' => 'Due Date', 'value' => $fmtDate($row['due_date'] ?? null)];
                                                             $chips[] = ['label' => 'INV No', 'value' => $row['inv_no'] ?? '-'];
                                                             $chips[] = ['label' => 'Days', 'value' => $row['days'] ?? '-'];
                                                             $chips[] = ['label' => 'Amount', 'value' => number_format($row['due'] ?? 0, 2)];
                                                             $chips[] = ['label' => 'Interest Due', 'value' => number_format($row['interest_due'] ?? 0, 2)];
 
                                                         } elseif ($rowType === 'Follow Up-Not Due') {
-                                                            $chips[] = ['label' => 'Date', 'value' => !empty($row['date']) ? \Carbon\Carbon::parse($row['date'])->format('d-M-Y') : '-'];
-                                                            $chips[] = ['label' => 'Due Date', 'value' => !empty($row['due_date']) ? \Carbon\Carbon::parse($row['due_date'])->format('d-M-Y') : '-'];
+                                                            $chips[] = ['label' => 'Date', 'value' => $fmtDate($row['date'] ?? null)];
+                                                            $chips[] = ['label' => 'Due Date', 'value' => $fmtDate($row['due_date'] ?? null)];
                                                             $chips[] = ['label' => 'INV No', 'value' => $row['inv_no'] ?? '-'];
                                                             $chips[] = ['label' => 'Days Pending', 'value' => $row['days_pending'] ?? '-'];
                                                             $chips[] = ['label' => 'Amount', 'value' => number_format($row['not_due'] ?? 0, 2)];
 
-                                                        } elseif ($rowType === 'Follow Up Overlimits') {
-                                                            $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
-
-                                                        } else {
-                                                            $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance'] ?? 0), 2)];
+                                                        } else { // Overlimits + fallback
+                                                            $chips[] = ['label' => 'Balance', 'value' => number_format($bal, 2)];
                                                         }
                                                     @endphp
                                                     <tr
@@ -277,7 +286,7 @@
                                                                         </span>
                                                                     @endforeach
                                                                 @else
-                                                                   @php $chips1[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance'] ?? 0), 2)]; @endphp
+                                                                    @php $chips1 = [['label' => 'Balance', 'value' => number_format(abs($row['balance'] ?? 0), 2)]]; @endphp
                                                                     @foreach($chips1 as $chip)
                                                                         <span class="detail-chip">
                                                                             <strong>{{ $chip['label'] }}:</strong> {{ $chip['value'] }}
@@ -289,8 +298,7 @@
 
                                                         <td>
                                                             @php
-                                                            
-                                                                $accountantStatus = $row['clearStatus'] == 0 ? $row['status'] ?: 'Not Assign Yet' : 'Not Assign Yet';
+                                                                $accountantStatus = $row['clearStatus'] == 0 ? ($row['status'] ?: 'Not Assign Yet') : 'Not Assign Yet';
 
                                                                 $statusClass = match ($accountantStatus) {
                                                                     'Pending' => 'bg-warning',
@@ -303,14 +311,6 @@
                                                                 {{ $accountantStatus }}
                                                             </span>
                                                         </td>
-                                                        {{-- <td>
-                                                            <button
-                                                                type="button"
-                                                                class="btn btn-outline-secondary btn-sm view-log"
-                                                                data-row='@json($row)'>
-                                                                View Log
-                                                            </button>
-                                                        </td> --}}
                                                     </tr>
                                                 @empty
                                                     <tr>
@@ -322,7 +322,7 @@
                                     </div>
                                 @endif
 
-                                {{-- ================= QUICK / SMART TAB CONTENT (UNCHANGED) ================= --}}
+                                {{-- ================= QUICK / SMART TAB CONTENT ================= --}}
                                 @if($type === 'Follow Up-Quick /Smart - Follow -up')
                                     <div class="tab-content" id="followupTabsContent">
                                         @foreach($followupTabs as $key => $label)
@@ -354,206 +354,104 @@
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <form id="quickSmartForm">
-                                                    @csrf
 
-                                                    <input type="hidden" name="company_id" value="1">
-                                                    <input type="hidden" name="type" value="Follow Up-Balances" id="hiddenTypeInput">
                                                 <div class="card-body">
-                                                    <div class="d-flex align-items-center gap-2 mb-3 bulk-action-bar" data-pane="pane-{{ $key }}">
-                                                        <span class="small text-muted">
-                                                            Applies to <span class="visible-count">0</span> ledgers currently shown
-                                                        </span>
+                                                    <form class="quick-smart-form" id="quickSmartForm-{{ $key }}">
+                                                        @csrf
+                                                        <input type="hidden" name="company_id" value="{{ $company }}">
+                                                        <input type="hidden" name="type" value="{{ $label }}">
 
-                                                        <select name="action" class="form-select form-select-sm bulk-action-select" style="width:180px;">
-                                                            <option value="" selected>Select action</option>
-                                                            <option value="allocate_tele_call">Allocate to tele call</option>
-                                                            <option value="call">Call</option>
-                                                            <option value="whatsapp">WhatsApp</option>
-                                                            <option value="physical_visit">Physical visit</option>
-                                                            <option value="escalation">Escalation</option>
-                                                            <option value="no_action">No action</option>
-                                                        </select>
-                                                        
-                                                        <select name="frequency" id="allocateFrequencyBulk" class="form-select form-select-sm" style="width:180px;">
-                                                            <option value="" selected>Select frequency</option>
-                                                            <option value="daily">Daily</option>
-                                                            <option value="weekly">Weekly</option>
-                                                            <option value="monthly">Monthly</option>
-                                                        </select>
-                                                       
-                                                        {{-- WhatsApp Template dropdown for bulk actions, hidden by default --}}
-                                                        <select name="template" class="form-select form-select-sm bulk-template-select" style="width:180px; display:none;">
-                                                            <option value="" selected>Select template</option>
-                                                            <option value="template_1">Template 1</option>
-                                                            <option value="template_2">Template 2</option>
-                                                            <option value="template_3">Template 3</option>
-                                                            <option value="template_4">Template 4</option>
-                                                            <option value="template_5">Template 5</option>
-                                                        </select>
+                                                        <div class="quick-smart-message mb-2"></div>
 
-                                                        <div class="d-flex align-items-center gap-2">
-                                                            <label class="mb-0 small text-muted" for="pctTargetFilter-{{ $key }}">Show:</label>
+                                                        <div class="d-flex align-items-center gap-2 mb-3 bulk-action-bar" data-pane="pane-{{ $key }}">
+                                                            <span class="small text-muted">
+                                                                Applies to <span class="visible-count">0</span> ledgers currently shown
+                                                            </span>
 
-                                                            @if($key === 'targets_months')
-                                                                <select name="TargetFilterMonth" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="month">
-                                                                    @foreach(range(0, 5) as $m)
-                                                                        @php
-                                                                            $monthValue = now()->subMonths($m)->format('Y-m');
-                                                                            $monthLabel = now()->subMonths($m)->format('M Y');
-                                                                        @endphp
-                                                                        <option value="{{ $monthValue }}" {{ $m == 0 ? 'selected' : '' }}>{{ $monthLabel }}</option>
-                                                                    @endforeach
-                                                                </select>
-                                                            @elseif($key === 'days_agewise')
-                                                                <select name="TargetFilterAgewise" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="agewise">
-                                                                    <option value="total" selected>Total</option>
-                                                                    <option value="15">More than 15 days</option>
-                                                                    <option value="45">More than 45 days</option>
-                                                                    <option value="90">More than 90 days</option>
-                                                                </select>
-                                                            @elseif($key === 'days_10_20_30')
-                                                                <select name="TargetFilterDays3" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="days3">
-                                                                    <option value="all" selected>All Days</option>
-                                                                    <option value="10">More than 10 days</option>
-                                                                    <option value="20">More than 20 days</option>
-                                                                    <option value="30">More than 30 days</option>
-                                                                </select>
-                                                            @else
-                                                                <select name="TargetFilterPct" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="pct">
-                                                                    <option value="top_25">Top -25 %</option>
-                                                                    <option value="top_50">Top -50 %</option>
-                                                                    <option value="top_75">Top -75 %</option>
-                                                                    <option value="all" selected>All</option>
-                                                                    <option value="bottom_75">Bottom -75 %</option>
-                                                                    <option value="bottom_50">Bottom -50 %</option>
-                                                                    <option value="bottom_25">Bottom -25 %</option>
-                                                                </select>
-                                                            @endif
+                                                            <select name="action" class="form-select form-select-sm bulk-action-select" style="width:180px;">
+                                                                <option value="" selected>Select action</option>
+                                                                <option value="allocate_tele_call">Allocate to tele call</option>
+                                                                <option value="call">Call</option>
+                                                                <option value="whatsapp">WhatsApp</option>
+                                                                <option value="physical_visit">Physical visit</option>
+                                                                <option value="escalation">Escalation</option>
+                                                                <option value="no_action">No action</option>
+                                                            </select>
+
+                                                            <select name="frequency" class="form-select form-select-sm" style="width:180px;">
+                                                                <option value="" selected>Select frequency</option>
+                                                                <option value="daily">Daily</option>
+                                                                <option value="weekly">Weekly</option>
+                                                                <option value="monthly">Monthly</option>
+                                                            </select>
+
+                                                            {{-- WhatsApp Template dropdown for bulk actions, hidden by default --}}
+                                                            <select name="template" class="form-select form-select-sm bulk-template-select" style="width:180px; display:none;">
+                                                                <option value="" selected>Select template</option>
+                                                                <option value="template_1">Template 1</option>
+                                                                <option value="template_2">Template 2</option>
+                                                                <option value="template_3">Template 3</option>
+                                                                <option value="template_4">Template 4</option>
+                                                                <option value="template_5">Template 5</option>
+                                                            </select>
+
+                                                            <div class="d-flex align-items-center gap-2">
+                                                                <label class="mb-0 small text-muted" for="pctTargetFilter-{{ $key }}">Show:</label>
+
+                                                                @if($key === 'targets_months')
+                                                                    <select name="TargetFilterMonth" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="month">
+                                                                        @foreach(range(0, 5) as $m)
+                                                                            <option value="{{ now()->subMonths($m)->format('Y-m') }}" {{ $m == 0 ? 'selected' : '' }}>{{ now()->subMonths($m)->format('M Y') }}</option>
+                                                                        @endforeach
+                                                                    </select>
+
+                                                                @elseif($key === 'days_agewise')
+                                                                    <select name="TargetFilterAgewise" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="agewise">
+                                                                        <option value="total" selected>Total</option>
+                                                                        <option value="15">More than 15 days</option>
+                                                                        <option value="45">More than 45 days</option>
+                                                                        <option value="90">More than 90 days</option>
+                                                                    </select>
+
+                                                                @elseif($key === '10_20_30_overdue')
+                                                                    <select name="TargetFilterOverdue" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:170px;" data-pane="pane-{{ $key }}" data-filter-type="days3">
+                                                                        <option value="all" selected>All Overdue</option>
+                                                                        <option value="10">More than 10 days</option>
+                                                                        <option value="20">More than 20 days</option>
+                                                                        <option value="30">More than 30 days</option>
+                                                                    </select>
+
+                                                                @elseif($key === '10_20_30_notdue')
+                                                                    <select name="TargetFilterNotDue" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:170px;" data-pane="pane-{{ $key }}" data-filter-type="days3notdue">
+                                                                        <option value="all" selected>All Not Due</option>
+                                                                        <option value="10">Due within 10 days</option>
+                                                                        <option value="20">Due within 20 days</option>
+                                                                        <option value="30">Due within 30 days</option>
+                                                                    </select>
+
+                                                                @elseif(in_array($key, ['balances', 'pct_targets']))
+                                                                    <select name="TargetFilterPct" id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="pct">
+                                                                        <option value="top_25">Top -25 %</option>
+                                                                        <option value="top_50">Top -50 %</option>
+                                                                        <option value="top_75">Top -75 %</option>
+                                                                        <option value="all" selected>All</option>
+                                                                        <option value="bottom_75">Bottom -75 %</option>
+                                                                        <option value="bottom_50">Bottom -50 %</option>
+                                                                        <option value="bottom_25">Bottom -25 %</option>
+                                                                    </select>
+
+                                                                @else {{-- due, not_due, overlimits: koi filter nahi, sab rows --}}
+                                                                    <select id="pctTargetFilter-{{ $key }}" class="form-select form-select-sm pct-target-filter" style="width:150px;" data-pane="pane-{{ $key }}" data-filter-type="none" disabled>
+                                                                        <option value="all" selected>All</option>
+                                                                    </select>
+                                                                @endif
+                                                            </div>
+
+                                                            <button type="submit" class="btn btn-success btn-sm bulk-apply-btn">Submit</button>
                                                         </div>
+                                                    </form>
 
-                                                        <button type="submit" class="btn btn-success btn-sm bulk-apply-btn"  id="quickSmartSubmit">Submit</button>
-                                                    </div>
-</form>
-
-<div id="quickSmartMessage"></div>
-<script>
-    document.querySelectorAll('#followupTabsNav button[data-bs-toggle="tab"]').forEach(function (tab) {
-
-    tab.addEventListener('shown.bs.tab', function (event) {
-
-        const selectedType = event.target.textContent.trim();
-        const hiddenTypeInput = document.getElementById('hiddenTypeInput');
-
-        console.log('Selected Type:', selectedType);
-        console.log('Hidden Input:', hiddenTypeInput);
-
-        if (hiddenTypeInput) {
-            hiddenTypeInput.value = selectedType;
-
-            console.log('Hidden Input Value:', hiddenTypeInput.value);
-        }
-    });
-
-});
-
-$(document).on('submit', '#quickSmartForm', function(e) {
-    e.preventDefault();
-
-    let form = $(this);
-    let submitBtn = $('#quickSmartSubmit');
-
-    // Clear previous errors
-    $('.text-danger').text('');
-    $('#quickSmartMessage').html('');
-
-    submitBtn.prop('disabled', true).text('Saving...');
-
-    $.ajax({
-        url: "{{ route('owner.tally.followup.saveBulkFollows') }}",
-        type: "POST",
-        data: form.serialize(),
-
-        success: function(response) {
-
-            if (response.status) {
-
-                $('#quickSmartMessage').html(
-                    '<div class="alert alert-success">' +
-                    response.message +
-                    '</div>'
-                );
-
-                // Optional: reset form
-                form[0].reset();
-
-            } else {
-
-                $('#quickSmartMessage').html(
-                    '<div class="alert alert-danger">' +
-                    response.message +
-                    '</div>'
-                );
-            }
-        },
-
-        error: function(xhr) {
-
-            if (xhr.status === 422) {
-
-                let errors = xhr.responseJSON.errors;
-
-                $.each(errors, function(field, messages) {
-
-                    $('.error-' + field).text(messages[0]);
-
-                    $('[name="' + field + '"]')
-                        .addClass('is-invalid');
-                });
-
-            } else {
-
-                $('#quickSmartMessage').html(
-                    '<div class="alert alert-danger">' +
-                    'Something went wrong. Please try again.' +
-                    '</div>'
-                );
-            }
-        },
-
-        complete: function() {
-            submitBtn.prop('disabled', false).text('Save');
-        }
-    });
-});
-</script>
                                                     <div class="table-responsive">
-                                                        @php
-                                                            $dummyRows = collect(range(1, 10))->map(function ($dummyIndex) use ($key) {
-                                                                $dummyTarget  = 50000;
-                                                                $dummyBalance = $dummyIndex * 5432.10;
-                                                                $dummyPct     = round(($dummyBalance / $dummyTarget) * 100, 2);
-                                                                $dummyDays    = $dummyIndex * 9;
-                                                                $dummyMonth   = now()->subMonths($dummyIndex % 6)->format('Y-m');
-
-                                                                $accountantStatuses = ['Already Assigned', 'Pendingsssss', 'Responded','Not assign Yet'];
-                                                                $accountantStatus   = $accountantStatuses[array_rand($accountantStatuses)];
-
-                                                                return [
-                                                                    'id'                => $key . '-' . $dummyIndex,
-                                                                    'sr'                => $dummyIndex,
-                                                                    'name'              => 'Dummy Ledger ' . $dummyIndex,
-                                                                    'mobile'            => '90000000' . $dummyIndex,
-                                                                    'balance'           => $dummyBalance,
-                                                                    'target'            => $dummyTarget,
-                                                                    'pct'               => $dummyPct,
-                                                                    'days'              => $dummyDays,
-                                                                    'month'             => $dummyMonth,
-                                                                    'accountant_status' => $accountantStatus,
-                                                                ];
-                                                            })->sortBy('pct')->values();
-                                                        @endphp
-
                                                         <table id="example-{{ $key }}" class="table table-bordered table-striped align-middle followup-target-table">
                                                             <thead>
                                                                 <tr>
@@ -564,8 +462,12 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                                                                     <th>Target</th>
                                                                     @if($key === 'targets_months')
                                                                         <th>Month</th>
-                                                                    @elseif($key === 'days_agewise' || $key === 'days_10_20_30')
+                                                                    @elseif($key === 'days_agewise' || $key === '10_20_30_overdue')
                                                                         <th>Days Overdue</th>
+                                                                    @elseif($key === '10_20_30_notdue')
+                                                                        <th>Days Left</th>
+                                                                    @elseif($key === 'due' || $key === 'not_due')
+                                                                        <th>Due Date</th>
                                                                     @else
                                                                         <th>% Target</th>
                                                                     @endif
@@ -573,49 +475,48 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                                                                 </tr>
                                                             </thead>
                                                             <tbody>
-                                                                @php $i=1 ; @endphp
-                                                                @forelse($followUps as $row)
-                                                                @php
-                                                                    $dummyPct = $row['targetBalance'] > 0
-                                                                        ? round(($row['closing_balance'] / $row['targetBalance']) * 100, 2)
-                                                                        : 0;
-                                                                @endphp
+                                                                @foreach($followUps as $row)
+                                                                    @php
+                                                                        $pct = ($row['targetBalance'] ?? 0) > 0
+                                                                            ? round(($row['closing_balance'] / $row['targetBalance']) * 100, 2)
+                                                                            : 0;
+                                                                        $rowDays = $row['days'] ?? $row['days_pending'] ?? 0;
+                                                                        $badgeClass = match($row['status']) {
+                                                                            'Already Assigned' => 'bg-primary',
+                                                                            'Pending'          => 'bg-warning',
+                                                                            'Responded'        => 'bg-success',
+                                                                            default            => 'bg-secondary',
+                                                                        };
+                                                                    @endphp
 
                                                                     <tr
-                                                                        data-target-pct="{{ abs($dummyPct) }}"
-                                                                        data-days="{{ rand(100, 999) }}"
-                                                                        data-month="{{ now()->subMonths(6)->format('Y-m') }}"
+                                                                        data-target-pct="{{ abs($pct) }}"
+                                                                        data-days="{{ $rowDays }}"
+                                                                        data-month="{{ !empty($row['target_month']) ? $row['target_month'] : '' }}"
                                                                         data-id="{{ $row['id'] }}">
-                                                                        <td>{{ $i }}</td>
+                                                                        <td>{{ $loop->iteration }}</td>
                                                                         <td>{{ $row['name'] }}</td>
                                                                         <td>{{ $row['mobile'] }}</td>
-                                                                        <td>{{ abs(  $row['closing_balance'] ?? 0 ) }}</td>
-                                                                        <td>{{ number_format( $row['targetBalance'] ?? 0  , 2) }}</td>
+                                                                        <td>{{ number_format(abs($row['closing_balance'] ?? 0), 2) }}</td>
+                                                                        <td>{{ number_format($row['targetBalance'] ?? 0, 2) }}</td>
+
                                                                         @if($key === 'targets_months')
-                                                                            <td>{{ \Carbon\Carbon::createFromFormat('Y-m',  '2026-10')->format('M Y') }}</td>
-                                                                        @elseif($key === 'days_agewise' || $key === 'days_10_20_30')
-                                                                            <td>{{ rand(100, 999) }}</td>
+                                                                            <td>{{ !empty($row['target_month']) ? \Carbon\Carbon::createFromFormat('Y-m', $row['target_month'])->format('M Y') : '-' }}</td>
+                                                                        @elseif($key === 'days_agewise' || $key === '10_20_30_overdue' || $key === '10_20_30_notdue')
+                                                                            <td>{{ $rowDays }}</td>
+                                                                        @elseif($key === 'due' || $key === 'not_due')
+                                                                            <td>{{ !empty($row['due_date']) ? \Carbon\Carbon::parse($row['due_date'])->format('d-M-Y') : '-' }}</td>
                                                                         @else
-                                                                            <td>{{ 12 }}%</td>
+                                                                            <td>{{ $pct }}%</td>
                                                                         @endif
+
                                                                         <td>
-                                                                           @php
-                                                                                $badgeClass = match($row['status']) {
-                                                                                    'Already Assigned' => 'bg-primary',
-                                                                                    'Pending'           => 'bg-warning',
-                                                                                    'Responded'         => 'bg-success',
-                                                                                    'Not Assign Yet'    => 'bg-secondary',
-                                                                                    default             => 'bg-secondary',
-                                                                                };
-                                                                            @endphp
-                                                                             
                                                                             <span class="badge accountant-status-badge {{ $badgeClass }}">
                                                                                 {{ $row['status'] }}
                                                                             </span>
                                                                         </td>
                                                                     </tr>
-                                                            @php $i++ ; @endphp
-                                                            @endforeach
+                                                                @endforeach
                                                             </tbody>
                                                         </table>
                                                     </div>
@@ -625,6 +526,7 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                                     </div>
 
                                     <script>
+                                    // ================= PANE FILTERS (top/bottom %, month, days) =================
                                     document.querySelectorAll('.pct-target-filter').forEach(function (selectEl) {
                                         const paneId = selectEl.getAttribute('data-pane');
                                         const filterType = selectEl.getAttribute('data-filter-type');
@@ -669,6 +571,7 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                                                     const label = direction === 'top' ? 'Top' : 'Bottom';
                                                     if (applyBtn) applyBtn.textContent = 'Apply to ' + label + ' ' + pct + '%';
                                                 }
+
                                             } else if (filterType === 'month') {
                                                 rows.forEach(function (row) {
                                                     const show = row.getAttribute('data-month') === selectedVal;
@@ -676,14 +579,27 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                                                     if (show) visibleCount++;
                                                 });
                                                 if (applyBtn) applyBtn.textContent = 'Apply to Shown';
-                                            } else if (filterType === 'agewise' || filterType === 'days3') {
+
+                                            } else if (filterType === 'agewise' || filterType === 'days3' || filterType === 'days3notdue') {
                                                 rows.forEach(function (row) {
                                                     const days = parseInt(row.getAttribute('data-days'), 10) || 0;
-                                                    const show = (selectedVal === 'total') ? true : (days > parseInt(selectedVal, 10));
+                                                    let show = true;
+
+                                                    if (selectedVal !== 'total' && selectedVal !== 'all') {
+                                                        const limit = parseInt(selectedVal, 10);
+                                                        // Overdue / agewise: kitne din se late (days > limit)
+                                                        // Not Due: kitne din mein due hoga (days <= limit)
+                                                        show = (filterType === 'days3notdue') ? (days <= limit) : (days > limit);
+                                                    }
+
                                                     row.style.display = show ? '' : 'none';
                                                     if (show) visibleCount++;
                                                 });
                                                 if (applyBtn) applyBtn.textContent = 'Apply to Shown';
+
+                                            } else { // 'none' (due / not_due / overlimits)
+                                                rows.forEach(function (row) { row.style.display = ''; visibleCount++; });
+                                                if (applyBtn) applyBtn.textContent = 'Apply to All';
                                             }
 
                                             if (visibleCountEl) visibleCountEl.textContent = visibleCount;
@@ -691,6 +607,77 @@ $(document).on('submit', '#quickSmartForm', function(e) {
 
                                         selectEl.addEventListener('change', applyFilter);
                                         applyFilter();
+                                    });
+
+                                    // ================= BULK SUBMIT (ek hi handler, sab tabs ke liye) =================
+                                    $(document).on('submit', '.quick-smart-form', function (e) {
+                                        e.preventDefault();
+
+                                        const form = $(this);
+                                        const submitBtn = form.find('.bulk-apply-btn');
+                                        const msgBox = form.find('.quick-smart-message');
+                                        const originalText = submitBtn.text();
+
+                                        const action = form.find('[name="action"]').val();
+                                        const template = form.find('[name="template"]').val();
+
+                                        if (!action) {
+                                            msgBox.html('<div class="alert alert-danger">Please select an action.</div>');
+                                            return;
+                                        }
+                                        if (action === 'whatsapp' && !template) {
+                                            msgBox.html('<div class="alert alert-danger">Please select a WhatsApp template.</div>');
+                                            return;
+                                        }
+
+                                        // sirf wahi rows jo abhi dikh rahi hain aur status "Not Assign Yet" hai
+                                        const ids = form.closest('.tab-pane').find('tbody tr:visible').filter(function () {
+                                            return $(this).find('.accountant-status-badge').text().trim().toLowerCase().startsWith('not assign');
+                                        }).map(function () {
+                                            return $(this).data('id');
+                                        }).get();
+
+                                        if (!ids.length) {
+                                            msgBox.html('<div class="alert alert-warning">No assignable ledgers in the current view.</div>');
+                                            return;
+                                        }
+
+                                        msgBox.html('');
+                                        form.find('.is-invalid').removeClass('is-invalid');
+                                        submitBtn.prop('disabled', true).text('Saving...');
+
+                                        $.ajax({
+                                            url: "{{ route('owner.tally.followup.saveBulkFollows') }}",
+                                            type: "POST",
+                                            data: form.serialize() + '&' + $.param({ ids: ids }),
+
+                                            success: function (response) {
+                                                msgBox.html(
+                                                    '<div class="alert alert-' + (response.status ? 'success' : 'danger') + '">' +
+                                                    response.message +
+                                                    '</div>'
+                                                );
+                                                if (response.status) {
+                                                    setTimeout(function () { window.location.reload(); }, 800);
+                                                }
+                                            },
+
+                                            error: function (xhr) {
+                                                if (xhr.status === 422) {
+                                                    const errors = xhr.responseJSON.errors;
+                                                    $.each(errors, function (field) {
+                                                        form.find('[name="' + field + '"]').addClass('is-invalid');
+                                                    });
+                                                    msgBox.html('<div class="alert alert-danger">' + Object.values(errors)[0][0] + '</div>');
+                                                } else {
+                                                    msgBox.html('<div class="alert alert-danger">Something went wrong. Please try again.</div>');
+                                                }
+                                            },
+
+                                            complete: function () {
+                                                submitBtn.prop('disabled', false).text(originalText);
+                                            }
+                                        });
                                     });
                                     </script>
                                 @endif
@@ -721,13 +708,15 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                             <div class="d-flex flex-column gap-2">
                                 @php
                                     $allocateTypes = [
-                                        'Follow Up-Balances/%Targets'      => 'Balances / %Targets',
-                                        'Follow Up-Balances/Targets(months)'=> 'Balances / Targets (months)',
-                                        'Follow Up-Balances/Days(agewise)' => 'Balances / Days (agewise)',
-                                        'Follow Up-Balances/Days(10-20-30)'=> 'Balances / Days (10-20-30)',
-                                        'Follow Up-Due'                    => 'Due',
-                                        'Follow Up-Not Due'                => 'Not Due',
-                                        'Follow Up-Balances'                => 'Balances', 
+                                        'Follow Up-Balances'                   => 'Balances',
+                                        'Follow Up-Balances/%Targets'          => 'Balances / %Targets',
+                                        'Follow Up-Balances/Targets(months)'   => 'Balances / Targets (months)',
+                                        'Follow Up-Balances/Days(agewise)'     => 'Balances / Days (agewise)',
+                                        'Follow Up-Balances/Overdue(10-20-30)' => 'Balances / Overdue (10-20-30)',
+                                        'Follow Up-Balances/Not Due(10-20-30)' => 'Balances / Not Due (10-20-30)',
+                                        'Follow Up-Due'                        => 'Due',
+                                        'Follow Up-Not Due'                    => 'Not Due',
+                                        'Follow Up Overlimits'                 => 'Overlimits',
                                     ];
                                 @endphp
                                 @foreach($allocateTypes as $value => $label)
@@ -952,7 +941,7 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                 let followupTable = null;
 
                 if (window.jQuery && $.fn.DataTable) {
-                    // Days filter plugin (10/20/30) — reads data-days on the <tr>
+                    // Days / agewise / month filter plugin — reads data-* on the <tr>
                     $.fn.dataTable.ext.search.push(function (settings, data, dataIndex, rowData, counter) {
                         if (settings.nTable.id !== 'example12') return true;
 
@@ -969,11 +958,9 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                             if (rowDays <= parseInt(agewiseFilterEl.value, 10)) return false;
                         }
 
-                        // Month filter — reads data-month on the <tr>
+                        // Month filter — data-month (Y-m) vs selection ("M Y")
                         const monthFilterEl = document.getElementById('monthFilter');
                         if (monthFilterEl && monthFilterEl.value) {
-                            const selectedMonth = new Date(monthFilterEl.value + ' 1, 2000'); // just for parsing "M Y" -> month
-                            // Compare using formatted month string stored on row's data-month (Y-m) vs selection (M Y)
                             const rowMonth = rowNode.getAttribute('data-month'); // e.g. 2026-08
                             if (rowMonth) {
                                 const [y, m] = rowMonth.split('-');
@@ -989,7 +976,7 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                     followupTable = $('#example12').DataTable({ fixedHeader: false });
                 }
 
-                function showAjaxAlert(message, type = 'success',divId) {
+                function showAjaxAlert(message, type = 'success', divId) {
                     const wrapper = document.getElementById(divId);
                     if (!wrapper) return;
 
@@ -1050,13 +1037,12 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                         showAjaxAlert(noRecordsMessage, 'danger', 'ajaxAlertWrapper');
                         return;
                     }
-                    
+
                     // Select URL based on statusClass
                     const url = statusClass === 'bg-success'
                         ? "{{ route('owner.tally.followup.clear-responded-status') }}"
                         : "{{ route('owner.tally.followup.clear-status') }}";
 
-                    
                     fetch(url, {
                         method: 'POST',
                         headers: {
@@ -1070,22 +1056,13 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                     })
                     .then(function (data) {
                         showAjaxAlert(successMessage, 'success', 'ajaxAlertWrapper');
-
-                        // allocateModal.hide();
-                        // selectedLedgerId = null;
-                        // selectedLedgerRow = null;
                         setTimeout(function () {
                             window.location.reload();
                         }, 500);
                     })
                     .catch(function () {
-                        showAjaxAlert('Something went wrong while allocating. Please try again.', 'danger', 'ajaxAlertWrapper');
-                    })
-                    .finally(function () {
-                        self.disabled = false;
-                        self.textContent = originalText;
+                        showAjaxAlert('Something went wrong while clearing. Please try again.', 'danger', 'ajaxAlertWrapper');
                     });
-                        
                 }
 
                 // ================= CLEAR PENDING -> CONFIRM VIA ITS OWN MODAL =================
@@ -1134,12 +1111,28 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                     });
                 }
 
+                // ================= WHATSAPP TEMPLATE TOGGLE (Bulk Action Bar - all panes) =================
+                document.querySelectorAll('.bulk-action-select').forEach(function (actionSelect) {
+                    const bar = actionSelect.closest('.bulk-action-bar');
+                    const templateSelect = bar ? bar.querySelector('.bulk-template-select') : null;
+                    if (!templateSelect) return;
+
+                    actionSelect.addEventListener('change', function () {
+                        if (this.value === 'whatsapp') {
+                            templateSelect.style.display = 'inline-block';
+                        } else {
+                            templateSelect.style.display = 'none';
+                            templateSelect.value = '';
+                        }
+                    });
+                });
+
                 // ================= ROW CLICK -> RESPONDED opens LOG MODAL, OTHERWISE opens ALLOCATE MODAL =================
                 const allocateModalEl = document.getElementById('followupAllocateModal');
                 const allocateModal = allocateModalEl ? new bootstrap.Modal(allocateModalEl) : null;
                 const allocateSelectedNameEl = document.getElementById('allocateSelectedName');
 
-                let selectedLedgerId = null; // holds the single ledger currently being allocated
+                let selectedLedgerId = null;  // holds the single ledger currently being allocated
                 let selectedLedgerRow = null; // holds the <tr> element currently being allocated
 
                 document.addEventListener('click', function (e) {
@@ -1171,7 +1164,7 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                         return;
                     }
 
-                    // ---- Otherwise (Pending / Not assign yet / etc.) -> Allocate Modal (existing behaviour) ----
+                    // ---- Otherwise (Pending / Not assign yet / etc.) -> Allocate Modal ----
                     selectedLedgerId = row.getAttribute('data-id');
                     selectedLedgerRow = row;
                     const ledgerName = row.getAttribute('data-name') || '-';
@@ -1217,50 +1210,6 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                         }
                     });
                 }
-
-                // ================= WHATSAPP TEMPLATE TOGGLE (Bulk Action Bar - all panes) =================
-                document.querySelectorAll('.bulk-action-select').forEach(function (actionSelect) {
-                    const bar = actionSelect.closest('.bulk-action-bar');
-                    const templateSelect = bar ? bar.querySelector('.bulk-template-select') : null;
-                    if (!templateSelect) return;
-
-                    actionSelect.addEventListener('change', function () {
-                        if (this.value === 'whatsapp') {
-                            templateSelect.style.display = 'inline-block';
-                        } else {
-                            templateSelect.style.display = 'none';
-                            templateSelect.value = '';
-                        }
-                    });
-                });
-
-                // ================= BULK APPLY BUTTON VALIDATION (template required for WhatsApp) =================
-                document.querySelectorAll('.bulk-apply-btn').forEach(function (applyBtn) {
-                    applyBtn.addEventListener('click', function () {
-                        const bar = applyBtn.closest('.bulk-action-bar');
-                        if (!bar) return;
-
-                        const actionSelect = bar.querySelector('.bulk-action-select');
-                        const templateSelect = bar.querySelector('.bulk-template-select');
-
-                        const actionValue = actionSelect ? actionSelect.value : '';
-                        const templateValue = templateSelect ? templateSelect.value : '';
-
-                        if (!actionValue) {
-                            showAjaxAlert('Please select an action.', 'danger', 'ajaxPopUpAlertWrapper');
-                            return;
-                        }
-
-                        if (actionValue === 'whatsapp' && !templateValue) {
-                            showAjaxAlert('Please select a WhatsApp template.', 'danger', 'ajaxPopUpAlertWrapper');
-                            return;
-                        }
-
-                        // TODO: hook this up to your bulk-assign AJAX call.
-                        // Example payload you'd send to backend:
-                        // { action: actionValue, template: templateValue || null, ids: [...visible row ids...] }
-                    });
-                });
 
                 // ================= ASSIGN BUTTON =================
                 const allocateAssignBtn = document.getElementById('allocateAssignBtn');
@@ -1322,7 +1271,7 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                             }, 500);
                         })
                         .catch(function () {
-                            showAjaxAlert('Something went wrong while allocating. Please try again.', 'danger', 'ajaxAlertWrapper');
+                            showAjaxAlert('Something went wrong while allocating. Please try again.', 'danger', 'ajaxPopUpAlertWrapper');
                         })
                         .finally(function () {
                             self.disabled = false;
@@ -1331,7 +1280,7 @@ $(document).on('submit', '#quickSmartForm', function(e) {
                     });
                 }
 
-                // ================= VIEW LOG MODAL LOGIC (explicit "View Log" button, e.g. in Quick/Smart tabs) =================
+                // ================= VIEW LOG MODAL LOGIC (explicit "View Log" button) =================
                 document.addEventListener('click', function (e) {
                     const btn = e.target.closest('.view-log');
                     if (!btn) return;

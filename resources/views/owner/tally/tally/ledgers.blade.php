@@ -176,7 +176,7 @@
                         color: #4E3F6B;
                     }
 
-                    /* ===== Debtor Ranking table (image wali UI) ===== */
+                    /* ===== Debtor Ranking table ===== */
                     .ranking-table thead th {
                         position: sticky;
                         top: 0;
@@ -186,25 +186,13 @@
                         white-space: nowrap;
                     }
 
-                    .ranking-table thead th.th-orange {
-                        background: #ff9800;
-                    }
-
-                    .ranking-table thead th.th-green {
-                        background: #00e000;
-                    }
-
-                    /* ===== Interest Cost modal (Excel-style) ===== */
-                    .int-xl td, .int-xl th { padding: 4px 8px; font-size: 14px; vertical-align: middle; }
-                    .int-xl .int-name   { background: #e9e9ef; border-radius: 12px; }
-                    .int-xl .int-pink   { background: #e99a9a; font-weight: 700; text-align: center; }
-                    .int-xl .int-yellow { background: #ffff00; font-weight: 700; text-align: center; }
-                    .int-xl .int-green  { background: #00ff00; font-weight: 700; text-align: center; }
-                    .int-xl .int-head th { font-weight: 400; background: #fff; }
-                    
-                    /* Base-rate columns / cells (grey) */
+                    /* ===== Interest Cost modal ===== */
                     .int-grey { background: #e9ecef !important; }
-                    .int-highlight { outline: 2px solid #4E3F6B; }
+
+                    .int-summary-table th,
+                    .int-summary-table td { font-size: 13px; white-space: nowrap; padding: 6px 10px; }
+                    .int-summary-table thead tr:first-child th { font-weight: 700; }
+                    .int-summary-table .int-sum-val.int-highlight { outline: 2px solid #4E3F6B; outline-offset: -2px; }
                 </style>
 
                 <div class="container-fluid">
@@ -416,7 +404,7 @@
                         $breakdownDebtor   = $computeBreakdown($debtorLedgers);
                         $breakdownCreditor = $computeBreakdown($creditorLedgers);
 
-                        // ===== Debtor Ranking table (image wali UI) =====
+                        // ===== Debtor Ranking table =====
                         $rankingRows = $debtorLedgers->map(function ($l) use ($num) {
                             $overdue = $l['rows']['Balance Overdue'];
                             $notDue  = $l['rows']['Not Due'];
@@ -434,8 +422,8 @@
                                 'target_collection' => $targetCollection, 
                                 'pct_overdue' => $hasTotal ? round($overdue / $total * 100, 2) : 0,
                                 'pct_not_due' => $hasTotal ? round($notDue  / $total * 100, 2) : 0,
-                                'pct_target'    => $l['pct_target'],        // pehle recalculate ho raha tha
-                                'class'         => $l['rank'],              // pehle: $l['rank'] ?? 'D'
+                                'pct_target'    => $l['pct_target'],
+                                'class'         => $l['rank'],
                                 'debtor_rank'   => $l['debtor_rank'],
                                 'priority_rank' => $l['priority_rank'],
                             ];
@@ -548,7 +536,7 @@
 
                     <!-- Ledger Breakdown Modal -->
                     <div class="modal fade" id="ledgerBreakdownModal" tabindex="-1" aria-hidden="true">
-                        <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+                        <div class="modal-dialog modal-dialog-centered modal-xl modal-dialog-scrollable">
                             <div class="modal-content">
                                 <div class="modal-header">
                                     <h5 class="modal-title" id="ledgerBreakdownTitle">-</h5>
@@ -564,26 +552,68 @@
                                         </div>
                                     </div>
 
-                                    <div class="table-responsive" style="max-height: 55vh; overflow-y: auto;">
-                                        <table class="table table-bordered text-center align-middle table-hover mb-0">
-                                            <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                    <!-- NORMAL breakdown (Interest Cost ko chhodkar sab labels) -->
+                                    <div id="ledgerBreakdownNormalWrap">
+                                        <div class="table-responsive" style="max-height: 55vh; overflow-y: auto;">
+                                            <table class="table table-bordered text-center align-middle table-hover mb-0">
+                                                <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                    <tr>
+                                                        <th>Ledger</th>
+                                                        <th>Field</th>
+                                                        <th>Amount</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="ledgerBreakdownBody"></tbody>
+                                            </table>
+                                        </div>
+                                        <table class="table table-bordered text-center align-middle mb-0">
+                                            <tfoot>
                                                 <tr>
-                                                    <th>Ledger</th>
-                                                    <th>Field</th>
-                                                    <th>Amount</th>
+                                                    <th colspan="2">Total</th>
+                                                    <th id="ledgerBreakdownTotal">-</th>
                                                 </tr>
-                                            </thead>
-                                            <tbody id="ledgerBreakdownBody"></tbody>
+                                            </tfoot>
                                         </table>
                                     </div>
-                                    <table class="table table-bordered text-center align-middle mb-0">
-                                        <tfoot>
-                                            <tr>
-                                                <th colspan="2">Total</th>
-                                                <th id="ledgerBreakdownTotal">-</th>
-                                            </tr>
-                                        </tfoot>
-                                    </table>
+
+                                    <!-- INTEREST COST breakdown (sirf Interest Cost label ke liye) -->
+                                    <div id="ledgerBreakdownInterestWrap" class="d-none">
+                                        <div class="small text-muted mb-2" id="bdIntProgress"></div>
+                                        <!-- Har ledger ki row -->
+                                        <div class="table-responsive" style="max-height: 45vh; overflow: auto;">
+                                            <table class="table table-bordered table-hover text-center align-middle mb-0 int-summary-table">
+                                                <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                    <tr>
+                                                        <th class="text-start">Ledger</th>
+                                                        <th>Interest <span class="bd-int-cleared-label">Received</span></th>
+                                                        <th>Interest Due (Party)</th>
+                                                        <th class="int-grey">Interest Due (Base)</th>
+                                                        <th>Interest Waived (Party)</th>
+                                                        <th class="int-grey">Interest Waived (Base)</th>
+                                                        <th>Interest Cost (Party Rate)</th>
+                                                        <th class="int-grey">Interest Cost (Base Rate)</th>
+                                                        <th class="int-grey">Base Int Premium / Concession</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="bdIntBody"></tbody>
+                                                <!-- ✅ FIX: Total row (JS .bd-sum-val ko yahin update karta hai) -->
+                                                <tfoot style="position: sticky; bottom: 0; background: #fff; z-index: 1;">
+                                                    <tr class="fw-bold">
+                                                        <th class="text-start">Total</th>
+                                                        <th class="bd-sum-val" data-k="received">-</th>
+                                                        <th class="bd-sum-val" data-k="dueParty">-</th>
+                                                        <th class="bd-sum-val int-grey" data-k="dueBase">-</th>
+                                                        <th class="bd-sum-val" data-k="waivedParty">-</th>
+                                                        <th class="bd-sum-val int-grey" data-k="waivedBase">-</th>
+                                                        <th class="bd-sum-val" data-k="costParty">-</th>
+                                                        <th class="bd-sum-val int-grey" data-k="costBase">-</th>
+                                                        <th class="bd-sum-val int-grey" data-k="premium">-</th>
+                                                    </tr>
+                                                </tfoot>
+                                            </table>
+                                        </div>
+                                    </div>
+
                                 </div>
                             </div>
                         </div>
@@ -603,6 +633,12 @@
                                         <p class="mt-2 mb-0 text-muted">Loading vouchers...</p>
                                     </div>
                                     <div id="ledgerVoucherError" class="alert alert-danger d-none"></div>
+
+                                    <!-- ✅ FIX: Credit period save alert ab wraps ke bahar hai (Sale table me bhi dikhega) -->
+                                    <div id="creditPeriodSaveAlert" class="alert alert-dismissible d-none py-2 px-3 mb-2" role="alert">
+                                        <span id="creditPeriodSaveAlertText"></span>
+                                        <button type="button" class="btn-close" id="creditPeriodAlertClose" aria-label="Close"></button>
+                                    </div>
 
                                     <!-- 🔍 Search box -->
                                     <div class="mb-2">
@@ -654,11 +690,6 @@
 
                                     <!-- ===== BALANCE DUE table (Date / Voucher No. / Days / Pending Amount) ===== -->
                                     <div class="table-responsive d-none" id="ledgerVoucherDueWrap" style="max-height: 55vh; overflow-y: auto;">
-                                        <!-- Save success/error feedback -->
-                                        <div id="creditPeriodSaveAlert" class="alert alert-success alert-dismissible fade d-none py-2 px-3 mb-2" role="alert">
-                                            <span id="creditPeriodSaveAlertText"></span>
-                                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                                        </div>
                                         <table class="table table-bordered table-hover align-middle mb-0" id="ledgerDueTable">
                                             <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
                                                 <tr id="ledgerDueHeadRow">
@@ -697,7 +728,7 @@
                                                 </tr>
                                             </thead>
                                             <tbody id="ledgerTargetBody">
-                                                <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
+                                                <tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>
                                             </tbody>
                                         </table>
                                     </div>
@@ -705,63 +736,34 @@
                                     <!-- ===== INTEREST COST table ===== -->
                                     <div class="table-responsive d-none" id="ledgerVoucherInterestWrap" style="max-height: 55vh; overflow: auto;">
 
-                                        <!-- Summary -->
-                                        <table class="table table-bordered align-middle mb-3">
+                                        <div class="d-flex gap-4 small mb-2">
+                                            <span>Rate Of Interest: <strong id="intPartyRate">-</strong></span>
+                                            <span>Base Rate Of Interest: <strong id="intBaseRate">-</strong></span>
+                                        </div>
+                                        <!-- Summary (single table) -->
+                                        <table class="table table-bordered text-center align-middle mb-3 int-summary-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Interest <span class="int-cleared-label">Received</span></th>
+                                                    <th>Interest Due (Party)</th>
+                                                    <th class="int-grey">Interest Due (Base)</th>
+                                                    <th>Interest Waived (Party)</th>
+                                                    <th class="int-grey">Interest Waived (Base)</th>
+                                                    <th>Interest Cost (Party Rate)</th>
+                                                    <th class="int-grey">Interest Cost (Base Rate)</th>
+                                                    <th class="int-grey">Base Int Premium / Concession</th>
+                                                </tr>
+                                            </thead>
                                             <tbody>
                                                 <tr>
-                                                    <th width="25%">Rate Of Interest</th>
-                                                    <td id="intPartyRate" class="text-end" width="25%">-</td>
-                                                    <th width="25%">Interest Due Invoices <span id="intTabLabel">Received</span></th>
-                                                    <td id="intTabDue" class="text-end fw-bold" width="25%">-</td>
-                                                </tr>
-                                                <tr>
-                                                    <th>Interest Due Invoices <span class="int-cleared-label">Received</span></th>
-                                                    <td id="intSummaryReceived" class="text-end fw-bold">-</td>
-                                                    <th>Settlement Request Amount</th>
-                                                    <td id="intSettlementRequest" class="text-end fw-bold">-</td>
-                                                </tr>
-                                                <tr>
-                                                    <th>Interest Due Invoices Pending</th>
-                                                    <td id="intSummaryPending" class="text-end fw-bold">-</td>
-                                                    <th>Interest Received Amount</th>
-                                                    <td id="intSettlementReceived" class="text-end fw-bold text-success">-</td>
-                                                </tr>
-                                                <tr>
-                                                    <th>Interest Due Total</th>
-                                                    <td id="intTotal" class="text-end fw-bold">-</td>
-                                                    <th>Interest Waived</th>
-                                                    <td id="intWaivedTotal" class="text-end fw-bold text-danger">-</td>
-                                                </tr>
-                                            </tbody>
-                                        </table>
-
-                                        <!-- Summary (Base Rate) -->
-                                        <div class="fw-bold small text-muted mb-1">Base Rate Calculation</div>
-                                        <table class="table table-bordered align-middle mb-3">
-                                            <tbody>
-                                                <tr>
-                                                    <th width="25%" class="int-grey">Base Rate Of Interest</th>
-                                                    <td id="intBaseRate" class="text-end int-grey" width="25%">-</td>
-                                                    <th width="25%" class="int-grey">Interest Due Invoices <span id="intTabLabelB">Received</span></th>
-                                                    <td id="intTabDueB" class="text-end fw-bold int-grey" width="25%">-</td>
-                                                </tr>
-                                                <tr>
-                                                    <th class="int-grey">Interest Due Invoices <span class="int-cleared-label">Received</span></th>
-                                                    <td id="intSummaryReceivedB" class="text-end fw-bold int-grey">-</td>
-                                                    <th class="int-grey">Settlement Request Amount</th>
-                                                    <td id="intSettlementRequestB" class="text-end fw-bold int-grey">-</td>
-                                                </tr>
-                                                <tr>
-                                                    <th class="int-grey">Interest Due Invoices Pending</th>
-                                                    <td id="intSummaryPendingB" class="text-end fw-bold int-grey">-</td>
-                                                    <th class="int-grey">Interest Received Amount</th>
-                                                    <td id="intSettlementReceivedB" class="text-end fw-bold text-success int-grey">-</td>
-                                                </tr>
-                                                <tr>
-                                                    <th class="int-grey">Interest Due Total</th>
-                                                    <td id="intTotalB" class="text-end fw-bold int-grey">-</td>
-                                                    <th class="int-grey">Interest Waived</th>
-                                                    <td id="intWaivedTotalB" class="text-end fw-bold text-danger int-grey">-</td>
+                                                    <td class="int-sum-val" data-k="received">-</td>
+                                                    <td class="int-sum-val" data-k="dueParty">-</td>
+                                                    <td class="int-sum-val int-grey" data-k="dueBase">-</td>
+                                                    <td class="int-sum-val" data-k="waivedParty">-</td>
+                                                    <td class="int-sum-val int-grey" data-k="waivedBase">-</td>
+                                                    <td class="int-sum-val" data-k="costParty">-</td>
+                                                    <td class="int-sum-val int-grey" data-k="costBase">-</td>
+                                                    <td class="int-sum-val int-grey" data-k="premium">-</td>
                                                 </tr>
                                             </tbody>
                                         </table>
@@ -776,8 +778,8 @@
                                                     <span class="badge bg-primary ms-1" id="intReceivedCount">0</span>
                                                 </button>
                                             </li>
-                                            <li class="nav-item me-2" role="presentation">
-                                                <button class="nav-link" id="intTabPendingBtn" type="button" role="tab"
+                                            <li class="nav-item me-2" role="presentation" id="intTabPendingLi">
+                                                    <button class="nav-link" id="intTabPendingBtn" type="button" role="tab"
                                                         data-bs-toggle="pill" data-bs-target="#intTabPending"
                                                         aria-controls="intTabPending" aria-selected="false">
                                                     Interest Due Invoices Pending
@@ -786,31 +788,31 @@
                                             </li>
                                         </ul>
 
-                                            <div class="tab-content">
-                                                <!-- Tab 1: Invoices Received / Paid -->
-                                                <div class="tab-pane fade show active" id="intTabReceived" role="tabpanel" aria-labelledby="intTabReceivedBtn">
-                                                    <table class="table table-bordered table-hover align-middle mb-0 text-end">
-                                                        <thead id="intReceivedHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
-                                                        <tbody id="intReceivedBody">
-                                                            <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
-                                                        </tbody>
-                                                        <tfoot id="intReceivedFoot"></tfoot>
-                                                    </table>
-                                                </div>
+                                        <div class="tab-content">
+                                            <!-- Tab 1: Invoices Received / Paid -->
+                                            <div class="tab-pane fade show active" id="intTabReceived" role="tabpanel" aria-labelledby="intTabReceivedBtn">
+                                                <table class="table table-bordered table-hover align-middle mb-0 text-end">
+                                                    <thead id="intReceivedHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
+                                                    <tbody id="intReceivedBody">
+                                                        <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
+                                                    </tbody>
+                                                    <tfoot id="intReceivedFoot"></tfoot>
+                                                </table>
+                                            </div>
 
-                                                <!-- Tab 2: Invoices Pending -->
-                                                <div class="tab-pane fade" id="intTabPending" role="tabpanel" aria-labelledby="intTabPendingBtn">
-                                                    <table class="table table-bordered table-hover align-middle mb-0 text-end">
-                                                        <thead id="intPendingHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
-                                                        <tbody id="intPendingBody">
-                                                            <tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>
-                                                        </tbody>
-                                                        <tfoot id="intPendingFoot"></tfoot>
-                                                    </table>
-                                                </div>
+                                            <!-- Tab 2: Invoices Pending -->
+                                            <div class="tab-pane fade" id="intTabPending" role="tabpanel" aria-labelledby="intTabPendingBtn">
+                                                <table class="table table-bordered table-hover align-middle mb-0 text-end">
+                                                    <thead id="intPendingHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
+                                                    <tbody id="intPendingBody">
+                                                        <tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>
+                                                    </tbody>
+                                                    <tfoot id="intPendingFoot"></tfoot>
+                                                </table>
                                             </div>
                                         </div>
                                     </div>
+                                </div>
                                 <div class="modal-footer justify-content-between">
                                     <a href="javascript:void(0);" id="ledgerVoucherViewAllLink" target="_blank" class="btn btn-outline-primary btn-sm">
                                         <i class="fa fa-external-link-alt me-1"></i> View Full Ledger Vouchers
@@ -842,7 +844,7 @@
                                             <thead>
                                                 <tr>
                                                     <th>Debtor</th>
-                                                    <th class="text-end">Monthwise Balance Overdue  & target  report</th>
+                                                    <th class="text-end">Balance Overdue</th>
                                                     <th class="text-end">Not Due</th>
                                                     <th class="text-end">Total Due</th>
                                                     <th class="text-end">Target Balance</th>
@@ -866,10 +868,10 @@
                                                         <td class="text-end">{{ $fmt($r['target_collection']) }}</td> 
                                                         <td class="text-end">{{ $r['pct_overdue'] }}%</td>
                                                         <td class="text-end">{{ $r['pct_not_due'] }}%</td>
-                                                        <td class="text-end">{{ $r['pct_target'] ?? '-' }}</td>
-                                                        <td>{{ $r['priority_rank'] ?? '-' }}</td>
-                                                        <td>{{ $r['debtor_rank'] ?? '-' }}</td>
-                                                        <td>
+                                                        <td class="text-end">{{ isset($r['pct_target']) ? $r['pct_target'] . '%' : '-' }}</td>
+                                                        <td class="text-end">{{ $r['priority_rank'] ?? '-' }}</td>
+                                                        <td class="text-end">{{ $r['debtor_rank'] ?? '-' }}</td>
+                                                        <td class="text-end">
                                                             @if($r['class'])
                                                                 <span class="badge" style="background-color: {{ $rankColorMap[$r['class']] }};">{{ $r['class'] }}</span>
                                                             @else
@@ -997,9 +999,6 @@
                                 <div class="card-header d-flex justify-content-between align-items-center">
                                     <h4 class="card-title mb-0">Ledger List</h4>
                                     <div class="d-flex align-items-center gap-2">
-                                        {{-- <span class="badge bg-primary">
-                                            {{ count($ledgers) }}
-                                        </span> --}}
                                         <button type="button"
                                             class="btn btn-outline-danger btn-sm bad-debt-toggle-btn"
                                             data-type="debtor">
@@ -1318,7 +1317,7 @@
                                                                     </div>
 
                                                                     <div class="d-flex justify-content-end gap-2">
-                                                                        <a href="{{ route('owner.tally.ledger.vouchers', [
+                                                                        <a target="_blank" href="{{ route('owner.tally.ledger.vouchers', [
                                                                             'company' => urlencode($company),
                                                                             'ledger'  => urlencode($l['name']),
                                                                             'under'   => urlencode($l['under'] ?? '')
@@ -1362,6 +1361,16 @@
             @include('owner.tally.components.footer')
 
             <script>
+                // ✅ HTML escape helper (XSS + broken attribute se bachne ke liye)
+                function escHtml(s) {
+                    return String(s ?? '')
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#039;');
+                }
+
                 // ✅ Bina round kiye amount dikhata hai (Indian grouping). DB ki value jaisi hai waisi hi.
                 function fmtExact(n) {
                     if (n === null || n === undefined || n === '') return '0';
@@ -1393,16 +1402,141 @@
                 const totalsDataCreditor    = @json($totalsCreditor);
                 const currentCompanyName    = @json($company);
 
+                // ✅ Voucher modal ke ajax race condition se bachne ke liye token
+                let voucherReqToken = 0;
+
+                // ===== Interest Cost Breakdown (sab ledgers ka total + har ledger ki row) =====
+                const BD_INT_KEYS = ['received','dueParty','dueBase','waivedParty','waivedBase','costParty','costBase','premium'];
+                const BD_INT_BASE_KEYS = ['dueBase','waivedBase','costBase','premium'];
+                let bdIntToken = 0;   // modal dobara khule to purane ajax ignore karne ke liye
+
+                function bdInterestVals(res) {
+                    const n = v => parseFloat(String(v ?? 0).replace(/,/g, '')) || 0;
+
+                    const received    = n(res.settlement_received_total) + n(res.pending_settlement_received_total);
+                    const waivedParty = n(res.interest_waived_total)     + n(res.pending_interest_waived_total);
+                    const waivedBase  = n(res.interest_waived_total_b)   + n(res.pending_interest_waived_total_b);
+                    const costParty   = n(res.total);
+                    const costBase    = n(res.total_b);
+
+                    return {
+                        received:    received,
+                        dueParty:    Math.max(costParty - received - waivedParty, 0),
+                        dueBase:     Math.max(costBase  - received - waivedBase,  0),
+                        waivedParty: waivedParty,
+                        waivedBase:  waivedBase,
+                        costParty:   costParty,
+                        costBase:    costBase,
+                        premium:     costParty - costBase
+                    };
+                }
+
+                function loadBreakdownInterest(items, type) {
+                    const token      = ++bdIntToken;
+                    const isCreditor = (type === 'creditor');
+                    const rs         = v => '₹ ' + fmtExact(v.toFixed(2));
+                    const esc        = escHtml;
+
+                    $('.bd-int-cleared-label').text(isCreditor ? 'Paid' : 'Received');
+
+                    // Pehle saari rows "..." ke saath banao
+                    let html = '';
+                    items.forEach(function (item, i) {
+                        html += `<tr data-i="${i}">
+                            <td class="text-start fw-bold">${esc(item.ledger)}</td>
+                            ${BD_INT_KEYS.map(k => `<td data-k="${k}" class="text-muted ${BD_INT_BASE_KEYS.includes(k) ? 'int-grey' : ''}">...</td>`).join('')}
+                        </tr>`;
+                    });
+                    $('#bdIntBody').html(html || '<tr><td colspan="9" class="text-center text-muted">No data available</td></tr>');
+                    $('.bd-sum-val').text('-');
+
+                    if (!items.length) {
+                        $('#bdIntProgress').text('');
+                        return;
+                    }
+
+                    const totals = {};
+                    BD_INT_KEYS.forEach(k => totals[k] = 0);
+
+                    let done = 0, next = 0, failed = 0;
+                    const total = items.length;
+
+                    const updateProgress = () => {
+                        $('#bdIntProgress').text(
+                            done < total
+                                ? 'Loading interest data... ' + done + ' / ' + total
+                                : (failed ? 'Loaded with ' + failed + ' error(s).' : '')
+                        );
+                    };
+                    updateProgress();
+
+                    const finishOne = () => {
+                        done++;
+                        BD_INT_KEYS.forEach(k => $('.bd-sum-val[data-k="' + k + '"]').text(rs(totals[k])));
+                        updateProgress();
+                        pump();
+                    };
+
+                    function pump() {
+                        if (token !== bdIntToken || next >= total) return;
+                        const i    = next++;
+                        const item = items[i];
+                        const $row = $('#bdIntBody tr[data-i="' + i + '"]');
+
+                        $.ajax({
+                            url: "{{ route('owner.tally.ledger.interest-data') }}",
+                            method: "GET",
+                            dataType: "json",
+                            data: { company: currentCompanyName, ledger: item.ledger, under: item.under },
+                            success: function (res) {
+                                if (token !== bdIntToken) return;
+                                const vals = bdInterestVals(res);
+                                BD_INT_KEYS.forEach(k => {
+                                    totals[k] += vals[k];
+                                    $row.find('td[data-k="' + k + '"]').removeClass('text-muted').text(rs(vals[k]));
+                                });
+                                finishOne();
+                            },
+                            error: function () {
+                                if (token !== bdIntToken) return;
+                                failed++;
+                                $row.find('td[data-k]').text('Error').addClass('text-danger');
+                                finishOne();
+                            }
+                        });
+                    }
+
+                    // 5 parallel requests
+                    for (let c = 0; c < Math.min(5, total); c++) pump();
+                }
+
                 function showLedgerBreakdown(label, type) {
                     let dataset = (type === 'creditor') ? breakdownDataCreditor : breakdownDataDebtor;
                     let totals  = (type === 'creditor') ? totalsDataCreditor : totalsDataDebtor;
                     let items = dataset[label] || [];
-                    let html = '';
+                    let typeLabel = (type === 'creditor') ? 'Sundry Creditors' : 'Sundry Debtors';
 
+                    $('#ledgerBreakdownTitle').text(label + ' Breakdown (' + typeLabel + ')');
+                    $('#ledgerBreakdownSearch').val('');
+
+                    // ===== Interest Cost: naya 8-column UI =====
+                    if (label === 'Interest Cost') {
+                        $('#ledgerBreakdownNormalWrap').addClass('d-none');
+                        $('#ledgerBreakdownInterestWrap').removeClass('d-none');
+                        loadBreakdownInterest(items, type);
+                        return;
+                    }
+
+                    // ===== Baaki sab labels: pehle jaisa =====
+                    bdIntToken++;   // chal rahe interest ajax band
+                    $('#ledgerBreakdownInterestWrap').addClass('d-none');
+                    $('#ledgerBreakdownNormalWrap').removeClass('d-none');
+
+                    let html = '';
                     items.forEach(function (item) {
                         html += `<tr>
-                            <td>${item.ledger} <span class="badge bg-light text-dark ms-1">${item.under}</span></td>
-                            <td>${item.label}</td>
+                            <td>${escHtml(item.ledger)} <span class="badge bg-light text-dark ms-1">${escHtml(item.under)}</span></td>
+                            <td>${escHtml(item.label)}</td>
                             <td><strong>₹ ${fmtExact(item.value)}</strong></td>
                         </tr>`;
                     });
@@ -1411,15 +1545,13 @@
                         html = '<tr><td colspan="3" class="text-center text-muted">No data available</td></tr>';
                     }
 
-                    let typeLabel = (type === 'creditor') ? 'Sundry Creditors' : 'Sundry Debtors';
-                    $('#ledgerBreakdownTitle').text(label + ' Breakdown (' + typeLabel + ')');
                     $('#ledgerBreakdownBody').html(html);
                     // Total PHP se aaya hua exact value (JS me float sum nahi)
                     $('#ledgerBreakdownTotal').text('₹ ' + fmtExact(totals[label] ?? 0));
                 }
 
                 // ===== TARGET modal: DB se data =====
-                function renderTargetData(ledger, under) {
+                function renderTargetData(ledger, under, token) {
                     const amt = n => (n === null || n === undefined) ? '' : fmtExact(n);
                     const pct = n => (n === null || n === undefined) ? '' : fmtExact(n) + '%';
 
@@ -1431,11 +1563,12 @@
                         dataType: "json",
                         data: { company: currentCompanyName, ledger: ledger, under: under },
                         success: function (res) {
+                            if (token !== voucherReqToken) return;
                             $('#ledgerVoucherLoading').addClass('d-none');
                             let html = '';
                             (res.rows || []).forEach(function (r) {
                                 html += `<tr>
-                                    <td class="month-cell text-start">${r.month}</td>
+                                    <td class="month-cell text-start">${escHtml(r.month)}</td>
                                     <td>${amt(r.overdue)}</td>
                                     <td>${amt(r.notDue)}</td>
                                     <td>${amt(r.balance)}</td>
@@ -1446,9 +1579,10 @@
                                     <td>${amt(r.targetBal)}</td>
                                 </tr>`;
                             });
-                            $('#ledgerTargetBody').html(html || '<tr><td colspan="10" class="text-center text-muted">No data found</td></tr>');
+                            $('#ledgerTargetBody').html(html || '<tr><td colspan="9" class="text-center text-muted">No data found</td></tr>');
                         },
                         error: function () {
+                            if (token !== voucherReqToken) return;
                             $('#ledgerVoucherLoading').addClass('d-none');
                             $('#ledgerVoucherError').removeClass('d-none').text('Could not load target data.');
                         }
@@ -1456,16 +1590,24 @@
                 }
 
 
-                // ===== INTEREST modal: field ke hisaab se columns =====
+                // ===== Interest summary (single table) =====
+                function fillInterestSummary(res, isCreditor) {
+                    const rs   = v => '₹ ' + fmtExact(v.toFixed(2));
+                    const vals = bdInterestVals(res);
+
+                    Object.keys(vals).forEach(k => $('.int-sum-val[data-k="' + k + '"]').text(rs(vals[k])));
+                    $('.int-cleared-label').text(isCreditor ? 'Paid' : 'Received');
+                }
+
                 // ===== INTEREST modal: field ke hisaab se columns (Party + Base[grey]) =====
-                function renderInterestData(ledger, under, field = 'Interest Cost') {
+                function renderInterestData(ledger, under, field = 'Interest Cost', token) {
                     const amt = n => (n === null || n === undefined || n === '') ? '-' : fmtExact(n);
                     const rs  = n => '₹ ' + amt(n);
                     const num = v => parseFloat(String(v ?? 0).replace(/,/g, '')) || 0;
                     const fmtD = d => {
                         if (!d) return '-';
                         const o = new Date(d);
-                        return isNaN(o.getTime()) ? d : fmtDateShared(o);
+                        return isNaN(o.getTime()) ? escHtml(d) : fmtDateShared(o);
                     };
                     const isCreditor = (under === 'Sundry Creditors');
                     const clr        = isCreditor ? 'Paid' : 'Recd';
@@ -1505,21 +1647,21 @@
 
                     const badge = r => r.settlement_status
                         ? `<span class="badge ${r.settlement_status === 'settled' ? 'bg-success' : 'bg-warning text-dark'}">
-                                ${r.settlement_status.charAt(0).toUpperCase() + r.settlement_status.slice(1)}
-                        </span>`
+                                ${escHtml(r.settlement_status.charAt(0).toUpperCase() + r.settlement_status.slice(1))}
+                           </span>`
                         : '-';
                     const remaining  = r => num(r.interest_due)   - num(r.settlement_amount)   - num(r.interest_waived);
                     const remainingB = r => num(r.interest_due_b) - num(r.settlement_amount_b) - num(r.interest_waived_b);
 
                     // grey:true => base rate column
                     const colDefs = {
-                        inv:        { h: 'INV No',              cls: 'text-start', v: r => r.inv_no ?? '-' },
+                        inv:        { h: 'INV No',              cls: 'text-start', v: r => escHtml(r.inv_no ?? '-') },
                         recdDate:   { h: `Inv ${clr} Date`,     v: r => fmtD(r.recd_date) },
                         date:       { h: 'Date',                cls: 'text-start', v: r => fmtD(r.date) },
                         dueDate:    { h: 'Due Date',            v: r => fmtD(r.due_date) },
                         intPending: { h: 'Int Pending',         v: r => rs(r.int_pending) },
                         amount:     { h: 'Amount',              v: r => rs(r.amount) },
-                        days:       { h: 'Days',                cls: 'text-center', v: r => `<span class="badge bg-danger">${r.days ?? '-'} days</span>` },
+                        days:       { h: 'Days',                cls: 'text-center', v: r => `<span class="badge bg-danger">${escHtml(r.days ?? '-')} days</span>` },
                         intOnInt:   { h: 'Int on Int',          v: r => rs(r.int_on_int) },
                         due:        { h: 'Interest Due',        cls: 'fw-bold', v: r => rs(r.interest_due) },
                         status:     { h: 'Settlement Status',   cls: 'text-center', v: r => badge(r) },
@@ -1541,29 +1683,29 @@
                     const layouts = {
                         'Interest Cost': {
                             received: ['inv','recdDate','intPending','days','intOnInt','due','status','settle','waived',
-                                    'intPendingB','intOnIntB','dueB','settleB','waivedB'],
+                                       'intPendingB','intOnIntB','dueB','settleB','waivedB'],
                             pending:  ['date','dueDate','inv','days','amount','due','status','settle','waived',
-                                    'dueB','settleB','waivedB'],
+                                       'dueB','settleB','waivedB'],
                             label: 'Interest Due',
                             rTotal: 'due', rTotalB: 'dueB', pTotal: 'due', pTotalB: 'dueB'
                         },
                         'Interest Received': {
                             received: ['inv','recdDate','intPending','days','intOnInt','due','settleShort','waived',
-                                    'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
+                                       'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
                             pending:  ['date','inv','days','due','status','settle','dueB','settleB'],
                             label: settleWord,
                             rTotal: 'settleShort', rTotalB: 'settleShortB', pTotal: 'settle', pTotalB: 'settleB'
                         },
                         'Interest Due': {
                             received: ['inv','recdDate','intPending','days','intOnInt','due','remaining',
-                                    'intPendingB','intOnIntB','dueB','remainingB'],
+                                       'intPendingB','intOnIntB','dueB','remainingB'],
                             pending:  ['date','dueDate','inv','days','amount','due','remaining','dueB','remainingB'],
                             label: 'Interest Due',
                             rTotal: 'due', rTotalB: 'dueB', pTotal: 'due', pTotalB: 'dueB'
                         },
                         'Interest Waived': {
                             received: ['inv','recdDate','intPending','days','intOnInt','due','settleShort','waived',
-                                    'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
+                                       'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
                             pending:  ['date','inv','days','due','status','waived','dueB','waivedB'],
                             label: 'Interest Waived',
                             rTotal: 'waived', rTotalB: 'waivedB', pTotal: 'waived', pTotalB: 'waivedB'
@@ -1614,21 +1756,25 @@
                         isCostOrDue ? 'Interest Due Invoices Pending' : `${layout.label} (Invoices Pending)`,
                         layout.pTotal, 'intPendingTotal', layout.pTotalB, 'intPendingTotalB'));
 
-                    const highlightId = {
-                        'Interest Cost':     ['#intTotal', '#intTotalB'],
-                        'Interest Due':      ['#intTotal', '#intTotalB'],
-                        'Interest Received': ['#intSettlementReceived', '#intSettlementReceivedB'],
-                        'Interest Paid':     ['#intSettlementReceived', '#intSettlementReceivedB'],
-                        'Interest Waived':   ['#intWaivedTotal', '#intWaivedTotalB'],
+                    // Summary table me kaunsi value highlight karni hai
+                    const highlightKeys = {
+                        'Interest Cost':     ['costParty', 'costBase'],
+                        'Interest Due':      ['dueParty', 'dueBase'],
+                        'Interest Received': ['received'],
+                        'Interest Paid':     ['received'],
+                        'Interest Waived':   ['waivedParty', 'waivedBase'],
                     }[field];
                     $('#ledgerVoucherInterestWrap .int-highlight').removeClass('int-highlight');
-                    if (highlightId) $(highlightId.join(',')).addClass('int-highlight');
+                    if (highlightKeys) {
+                        $(highlightKeys.map(k => 'tbody .int-sum-val[data-k="' + k + '"]').join(',')).addClass('int-highlight');
+                    }
 
-                    $('.int-cleared-label').text(clr);
+                    // Reset
+                    $('.int-cleared-label').text(cleared);
                     $('#intReceivedLabel').text(cleared);
-                    $('#intPartyRate, #intBaseRate, #intTotal, #intTotalB, #intReceivedTotal, #intReceivedTotalB, #intPendingTotal, #intPendingTotalB, '
-                    + '#intSummaryReceived, #intSummaryReceivedB, #intSummaryPending, #intSummaryPendingB, #intTabDue, #intTabDueB, '
-                    + '#intSettlementRequest, #intSettlementRequestB, #intSettlementReceived, #intSettlementReceivedB, #intWaivedTotal, #intWaivedTotalB').text('-');
+                    const isSettleField = (field === 'Interest Received' || field === 'Interest Paid');
+                    $('#intTabPendingLi').toggleClass('d-none', isSettleField);
+                    $('#intPartyRate, #intBaseRate, .int-sum-val').text('-');
 
                     const emptyRow = n => `<tr><td colspan="${n}" class="text-center text-muted">No data loaded</td></tr>`;
                     $('#intReceivedBody').html(emptyRow(rKeys.length));
@@ -1644,6 +1790,7 @@
                         dataType: "json",
                         data: { company: currentCompanyName, ledger: ledger, under: under },
                         success: function (res) {
+                            if (token !== voucherReqToken) return;
                             $('#ledgerVoucherLoading').addClass('d-none');
 
                             const ft = footerTotals(res);
@@ -1651,22 +1798,14 @@
                             $('#intPartyRate').text(res.party_rate != null ? res.party_rate + '%' : '-');
                             $('#intBaseRate').text(res.base_rate  != null ? res.base_rate  + '%' : '-');
 
-                            $('#intTotal').text(rs(res.total ?? 0));
-                            $('#intTotalB').text(rs(res.total_b ?? 0));
+                            // Top summary table
+                            fillInterestSummary(res, isCreditor);
 
+                            // Tab footers
                             $('#intReceivedTotal').text(rs(ft.rec[0] ?? 0));
                             $('#intReceivedTotalB').text(rs(ft.rec[1] ?? 0));
                             $('#intPendingTotal').text(rs(ft.pend[0] ?? 0));
                             $('#intPendingTotalB').text(rs(ft.pend[1] ?? 0));
-
-                            $('#intSummaryReceived').text(rs(res.received_total ?? 0));
-                            $('#intSummaryReceivedB').text(rs(res.received_total_b ?? 0));
-                            $('#intSummaryPending').text(rs(res.pending_total ?? 0));
-                            $('#intSummaryPendingB').text(rs(res.pending_total_b ?? 0));
-
-                            window.intData       = res;
-                            window.intIsCreditor = isCreditor;
-                            updateInterestSummary('received');
 
                             const received = (res.received || []).filter(keep);
                             const pending  = (res.pending  || []).filter(keep);
@@ -1679,51 +1818,22 @@
 
                             $('#intPendingBody').html(
                                 pending.length ? buildRows(pKeys, pending)
-                                            : `<tr><td colspan="${pKeys.length}" class="text-center text-muted">No data found</td></tr>`
+                                               : `<tr><td colspan="${pKeys.length}" class="text-center text-muted">No data found</td></tr>`
                             );
                             $('#intPendingCount').text(pending.length);
                         },
                         error: function () {
+                            if (token !== voucherReqToken) return;
                             $('#ledgerVoucherLoading').addClass('d-none');
                             $('#ledgerVoucherError').removeClass('d-none').text('Could not load interest data.');
                         }
                     });
                 }
 
-                // ===== Interest summary: tab ke hisaab se right column update (Party + Base) =====
-                function updateInterestSummary(tab) {
-                    const d = window.intData;
-                    if (!d) return;
-
-                    const rs = n => '₹ ' + fmtExact(n ?? 0);
-                    const isPending = (tab === 'pending');
-                    const clearedWord = window.intIsCreditor ? 'Paid' : 'Received';
-                    const label = isPending ? 'Pending' : clearedWord;
-
-                    $('#intTabLabel, #intTabLabelB').text(label);
-
-                    $('#intTabDue').text(rs(isPending ? d.pending_total : d.received_total));
-                    $('#intSettlementRequest').text(rs(isPending ? d.pending_settlement_request_total : d.settlement_request_total));
-                    $('#intSettlementReceived').text(rs(isPending ? d.pending_settlement_received_total : d.settlement_received_total));
-                    $('#intWaivedTotal').text(rs(isPending ? d.pending_interest_waived_total : d.interest_waived_total));
-
-                    $('#intTabDueB').text(rs(isPending ? d.pending_total_b : d.received_total_b));
-                    $('#intSettlementRequestB').text(rs(isPending ? d.pending_settlement_request_total_b : d.settlement_request_total_b));
-                    $('#intSettlementReceivedB').text(rs(isPending ? d.pending_settlement_received_total_b : d.settlement_received_total_b));
-                    $('#intWaivedTotalB').text(rs(isPending ? d.pending_interest_waived_total_b : d.interest_waived_total_b));
-                }
-
-
-                 
-                $(document).on('shown.bs.tab', '#intTabReceivedBtn', function () { updateInterestSummary('received'); });
-                $(document).on('shown.bs.tab', '#intTabPendingBtn',  function () { updateInterestSummary('pending'); });
                 // ===== Per-ledger, per-field (Balance / Balance Overdue / Target / Sale / ...) voucher modal =====
-                //
-                // "Balance"         -> #ledgerBalanceTable (Original / Received-Paid / Pending)
-                // "Balance Overdue" -> #ledgerDueTable     (Date / Voucher No. / Days / Pending Amount)
-                // "Target"          -> #ledgerTargetTable  (Month-wise)
-                // baaki fields      -> #ledgerVoucherTable (normal debit/credit voucher list)
                 function showLedgerVoucherDetail(ledger, under, field) {
+                    const token = ++voucherReqToken;
+
                     let isBalance  = (field === 'Balance');
                     let isNotDue   = (field === 'Not Due');
                     let isDue      = (field === 'Balance Overdue') || isNotDue;   // Not Due bhi Due wali table use karta hai
@@ -1737,6 +1847,7 @@
                         ledger + ' — ' + field + (isBalance ? ' Breakdown' : (isDue ? (isNotDue ? ' (Not Due Vouchers)' : ' (Overdue Vouchers)') : (isTarget ? ' (Month-wise)' : (isInterest ? ' (' + field + ' Breakdown)' : ' Vouchers'))))
                     );
                     $('#ledgerVoucherError').addClass('d-none').text('');
+                    $('#creditPeriodSaveAlert').addClass('d-none');
                     $('#ledgerVoucherLoading').removeClass('d-none');
                     $('#ledgerVoucherNormalWrap').toggleClass('d-none', isBalance || isDue || isTarget || isInterest);
                     $('#ledgerVoucherBalanceWrap').toggleClass('d-none', !isBalance);
@@ -1747,7 +1858,7 @@
                     $('#ledgerVoucherBody').html('<tr><td colspan="6" class="text-center text-muted">No vouchers loaded</td></tr>');
                     $('#ledgerBalanceBody').html('<tr><td colspan="5" class="text-center text-muted">No vouchers loaded</td></tr>');
                     $('#ledgerDueBody').html('<tr><td colspan="4" class="text-center text-muted">No vouchers loaded</td></tr>');
-                    $('#ledgerTargetBody').html('<tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>');
+                    $('#ledgerTargetBody').html('<tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>');
                     $('#ledgerDueTotal').text('-');
 
                     $('#ledgerVoucherSearch').val('');
@@ -1780,12 +1891,12 @@
 
                     // ===== TARGET: DB se data =====
                     if (isTarget) {
-                        renderTargetData(ledger, under);
+                        renderTargetData(ledger, under, token);
                         return;
                     }
 
                     if (isInterest) {
-                        renderInterestData(ledger, under, field);
+                        renderInterestData(ledger, under, field, token);
                         return;
                     }
 
@@ -1805,7 +1916,7 @@
                     let fmtDate = function (d) {
                         if (!d) return '-';
                         let dateObj = new Date(d);
-                        if (isNaN(dateObj.getTime())) return d;
+                        if (isNaN(dateObj.getTime())) return escHtml(d);
                         return dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
                     };
 
@@ -1817,6 +1928,7 @@
                             : { field: field },
                         dataType: "json",
                         success: function (res) {
+                            if (token !== voucherReqToken) return;
                             $('#ledgerVoucherLoading').addClass('d-none');
 
                             let vouchers = (res && res.vouchers) ? res.vouchers : (Array.isArray(res) ? res : []);
@@ -1846,16 +1958,16 @@
                                         rows += `<tr>
                                             <td>${fmtDate(v.date)}</td>
                                             <td>${fmtDate(v.due_date)}</td>
-                                            <td>${v.voucher_number ?? '-'}</td>
+                                            <td>${escHtml(v.voucher_number ?? '-')}</td>
                                             <td class="text-end fw-bold">₹ ${fmtAmt(v.amount)}</td>
                                         </tr>`;
                                         return;
                                     }
 
-                                    rows += `<tr data-voucher-id="${v.id ?? v.voucher_number ?? ''}">
+                                    rows += `<tr data-voucher-id="${escHtml(v.id ?? v.voucher_number ?? '')}">
                                         <td>${fmtDate(v.date)}</td>
-                                        <td>${v.voucher_number ?? '-'}</td>
-                                        <td class="text-center"><span class="badge bg-danger days-badge">${v.days} days</span></td>
+                                        <td>${escHtml(v.voucher_number ?? '-')}</td>
+                                        <td class="text-center"><span class="badge bg-danger days-badge">${escHtml(v.days)} days</span></td>
                                         <td class="text-end fw-bold">₹ ${fmtAmt(v.amount)}${partial}</td>
                                     </tr>`;
                                 });
@@ -1872,7 +1984,7 @@
                                 vouchers.forEach(function (v) {
                                     rows += `<tr>
                                         <td>${fmtDate(v.date)}</td>
-                                        <td>${v.voucher_number ?? '-'}</td>
+                                        <td>${escHtml(v.voucher_number ?? '-')}</td>
                                         <td class="text-end">₹ ${fmtAmt(v.original)}</td>
                                         <td class="text-end">₹ ${fmtAmt(v[clearedKey])}</td>
                                         <td class="text-end fw-bold ${parseFloat(v.pending) > 0 ? 'text-danger' : 'text-success'}">₹ ${fmtAmt(v.pending)}</td>
@@ -1896,25 +2008,25 @@
                                         <div class="d-flex align-items-center justify-content-center gap-1">
                                             <input type="number" min="0"
                                                 class="form-control form-control-sm credit-period-input"
-                                                value="${v.credit_period ?? 0}"
-                                                data-voucher-id="${v.id ?? ''}"
-                                                data-voucher-number="${v.voucher_no ?? ''}"
-                                                data-ledger="${ledger}"
-                                                data-under="${under}">
+                                                value="${escHtml(v.credit_period ?? 0)}"
+                                                data-voucher-id="${escHtml(v.id ?? '')}"
+                                                data-voucher-number="${escHtml(v.voucher_no ?? '')}"
+                                                data-ledger="${escHtml(ledger)}"
+                                                data-under="${escHtml(under)}">
                                             <button type="button" class="btn btn-sm btn-outline-primary credit-period-save-btn" title="Save">
                                                 <i class="fa fa-save"></i>
                                             </button>
                                         </div>
                                     </td>`;
 
-                                    daysCell = `<td class="col-days text-center"><span class="badge bg-danger days-badge">${v.days ?? 0} days</span></td>`;
+                                    daysCell = `<td class="col-days text-center"><span class="badge bg-danger days-badge">${escHtml(v.days ?? 0)} days</span></td>`;
                                 }
 
                                 rows += `<tr>
                                     <td class="col-date">${fmtDate(v.date)}</td>
-                                    <td class="col-voucherno" style="${hideVoucherNo ? 'display:none;' : ''}">${v.voucher_no ?? '-'}</td>
-                                    <td class="col-vouchertype">${v.voucher_type ?? '-'}</td>
-                                    <td class="col-particulars">${v.particulars ?? '-'}</td>
+                                    <td class="col-voucherno" style="${hideVoucherNo ? 'display:none;' : ''}">${escHtml(v.voucher_no ?? '-')}</td>
+                                    <td class="col-vouchertype">${escHtml(v.voucher_type ?? '-')}</td>
+                                    <td class="col-particulars">${escHtml(v.particulars ?? '-')}</td>
                                     ${dueDateCell}
                                     ${creditPeriodCell}
                                     ${daysCell}
@@ -1925,6 +2037,7 @@
                             $('#ledgerVoucherBody').html(rows);
                         },
                         error: function () {
+                            if (token !== voucherReqToken) return;
                             $('#ledgerVoucherLoading').addClass('d-none');
                             $('#ledgerVoucherError')
                                 .removeClass('d-none')
@@ -1933,7 +2046,26 @@
                     });
                 }
 
-                // ===== Balance Overdue modal: per-voucher editable Credit Period -> Save button se update =====
+                // ===== Credit Period alert helper (manual dismiss, DOM se delete nahi hota) =====
+                let creditPeriodAlertTimer = null;
+                function showCreditPeriodAlert(type, message) {
+                    const $alert = $('#creditPeriodSaveAlert');
+                    clearTimeout(creditPeriodAlertTimer);
+
+                    $alert.removeClass('alert-success alert-danger d-none').addClass('alert-' + type);
+                    $('#creditPeriodSaveAlertText').text(message);
+
+                    creditPeriodAlertTimer = setTimeout(function () {
+                        $alert.addClass('d-none');
+                    }, 2500);
+                }
+
+                $(document).on('click', '#creditPeriodAlertClose', function () {
+                    clearTimeout(creditPeriodAlertTimer);
+                    $('#creditPeriodSaveAlert').addClass('d-none');
+                });
+
+                // ===== Per-voucher editable Credit Period -> Save button se update =====
                 $(document).on('click', '.credit-period-save-btn', function () {
                     let $btn   = $(this);
                     let $input = $btn.closest('td').find('.credit-period-input');
@@ -1956,10 +2088,11 @@
                         data: {
                             _token: "{{ csrf_token() }}",
                             company: currentCompanyName,
-                            ledger: $input.data('ledger'),
-                            under: $input.data('under'),
-                            voucher_id: $input.data('voucher-id'),
-                            voucher_number: $input.data('voucher-number'),
+                            // .attr() taaki ledger naam / id string hi rahe (.data() type convert kar deta hai)
+                            ledger: $input.attr('data-ledger'),
+                            under: $input.attr('data-under'),
+                            voucher_id: $input.attr('data-voucher-id'),
+                            voucher_number: $input.attr('data-voucher-number'),
                             credit_period: newValue
                         },
                         dataType: "json",
@@ -1975,7 +2108,7 @@
 
                             showCreditPeriodAlert('success', 'Credit period updated successfully.');
 
-                            // Row ko bhi ek pal ke liye highlight kar do, visual confirmation ke liye
+                            // Row ko ek pal ke liye highlight, visual confirmation ke liye
                             $row.addClass('table-success');
                             setTimeout(() => $row.removeClass('table-success'), 1200);
                         },
@@ -1983,28 +2116,10 @@
                             $input.prop('disabled', false);
                             $btn.prop('disabled', false);
                             $btn.html(originalIcon);
-                            showCreditPeriodAlert('danger', 'Credit period update nahi ho paya. Dobara try karein.');
+                            showCreditPeriodAlert('danger', 'Could not update credit period. Please try again.');
                         }
                     });
                 });
-
-                // Reusable alert helper — modal ke andar hi auto show/hide hota hai
-                let creditPeriodAlertTimer = null;
-                function showCreditPeriodAlert(type, message) {
-                    let $alert = $('#creditPeriodSaveAlert');
-                    clearTimeout(creditPeriodAlertTimer);
-
-                    $alert
-                        .removeClass('alert-success alert-danger d-none')
-                        .addClass('alert-' + type + ' show')
-                        .find('#creditPeriodSaveAlertText').text(message);
-
-                    $alert.removeClass('d-none');
-
-                    creditPeriodAlertTimer = setTimeout(function () {
-                        $alert.removeClass('show').addClass('d-none');
-                    }, 2500);
-                }
 
                 // ===== Tab-wise Summary Cards =====
                 let summaryVisible = false;
@@ -2071,7 +2186,6 @@
                 });
 
                 // ===== Bad Debts / Family A/c assignment feature (separate for Debtors & Creditors) =====
-
                 $('.bad-debt-toggle-btn').on('click', function () {
                     let $btn = $(this);
                     let type = $btn.data('type');
@@ -2126,14 +2240,13 @@
                     selected.forEach(function (item, i) {
                         rows += `<tr>
                             <td>${i + 1}</td>
-                            <td>${$('<div>').text(item.ledger).html()}</td>
-                            <td>${$('<div>').text(item.under).html()}</td>
+                            <td>${escHtml(item.ledger)}</td>
+                            <td>${escHtml(item.under)}</td>
                         </tr>`;
                     });
                     $('#confirmBadDebtList').html(rows);
 
-                    let confirmModal = new bootstrap.Modal(document.getElementById('confirmBadDebtModal'));
-                    confirmModal.show();
+                    bootstrap.Modal.getOrCreateInstance(document.getElementById('confirmBadDebtModal')).show();
                 });
 
                 $('#confirmBadDebtProceedBtn').on('click', function () {
@@ -2315,9 +2428,10 @@
                     }
                 }
 
-                // Live search - Breakdown Modal
+                // Live search - Breakdown Modal (Interest Cost ho to bdIntBody, warna normal table)
                 $(document).on('input', '#ledgerBreakdownSearch', function () {
-                    filterModalTableRows('ledgerBreakdownSearch', 'ledgerBreakdownBody');
+                    const tbodyId = $('#ledgerBreakdownInterestWrap').hasClass('d-none') ? 'ledgerBreakdownBody' : 'bdIntBody';
+                    filterModalTableRows('ledgerBreakdownSearch', tbodyId);
                 });
 
                 // Live search - Voucher Modal (Normal / Balance / Balance Overdue / Target, jo table visible ho usi me)
@@ -2338,13 +2452,16 @@
                     filterModalTableRows('ledgerVoucherSearch', tbodyId);
                 });
 
-                // Modal band hone par search box reset
+                // Modal band hone par search box reset + chal rahe requests band
                 $('#ledgerBreakdownModal').on('hidden.bs.modal', function () {
                     $('#ledgerBreakdownSearch').val('');
+                    bdIntToken++;
                 });
                 $('#ledgerVoucherModal').on('hidden.bs.modal', function () {
+                    voucherReqToken++;   // pending voucher/target/interest ajax ignore
                     $('#ledgerVoucherSearch').val('');
-                    $('#creditPeriodSaveAlert').addClass('d-none').removeClass('show alert-success alert-danger');
+                    clearTimeout(creditPeriodAlertTimer);
+                    $('#creditPeriodSaveAlert').addClass('d-none').removeClass('alert-success alert-danger');
                 });
 
                 // ===== Debtor Ranking modal: live search =====

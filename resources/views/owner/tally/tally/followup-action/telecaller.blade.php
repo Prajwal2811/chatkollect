@@ -1,8 +1,6 @@
 @php
-    // ================= DUMMY DATA (remove once controller is ready) =================
-    // Har row ab uske "type" ke saath aayegi (jis Follow-Up tab se allocate hui thi),
-    // taaki us type ke hisaab se relevant fields table me show ho sakein.
-    $company = $company ?? 'Demo Company Pvt Ltd';
+    $company = $company ?? '';
+    $teleCallData = $teleCallData ?? [];
 
     $followupTypeLabels = [
         'pct_targets'    => 'Balances/%Targets',
@@ -15,6 +13,18 @@
         'balances'       => 'Balances',
     ];
 
+    // Follow Up Hub me jo label dikhta h wahi pill me dikhana h
+    $followupTypeFull = [
+        'balances'       => 'Follow Up-Balances',
+        'pct_targets'    => 'Follow Up-Balances/%Targets',
+        'targets_months' => 'Follow Up-Balances/Targets(months)',
+        'days_agewise'   => 'Follow Up-Balances/Days(agewise)',
+        'days_10_20_30'  => 'Follow Up-Balances/Days(10-20-30)',
+        'due'            => 'Follow Up-Due',
+        'not_due'        => 'Follow Up-Not Due',
+        'overlimits'     => 'Follow Up Overlimits',
+    ];
+
     $followupTypeColors = [
         'pct_targets'    => 'primary',
         'targets_months' => 'info',
@@ -24,107 +34,6 @@
         'not_due'        => 'success',
         'overlimits'     => 'dark',
         'balances'       => 'primary',
-    ];
-
-    $teleCallData = $teleCallData ?? [
-        [
-            'id'            => 1,
-            'type'          => 'due',
-            'name'          => 'Rajesh Traders',
-            'mobile'        => '9876543210',
-            'balance'       => 45230.50,
-            'date'          => now()->subDays(20),
-            'due_date'      => now()->subDays(5),
-            'inv_no'        => 'INV-1001',
-            'days'          => 5,
-            'interest_due'  => 320.00,
-            'assigned_date' => now()->subDays(5),
-            'frequency'     => 'weekly',
-            'status'        => 'pending',
-        ],
-        [
-            'id'            => 2,
-            'type'          => 'not_due',
-            'name'          => 'Sharma Enterprises',
-            'mobile'        => '9123456780',
-            'balance'       => 12800.00,
-            'date'          => now()->subDays(10),
-            'due_date'      => now()->addDays(15),
-            'inv_no'        => 'INV-1002',
-            'days_pending'  => 15,
-            'assigned_date' => now()->subDays(2),
-            'frequency'     => 'daily',
-            'status'        => 'done',
-        ],
-        [
-            'id'            => 3,
-            'type'          => 'pct_targets',
-            'name'          => 'Gupta & Sons',
-            'mobile'        => '9988776655',
-            'balance'       => 98750.75,
-            'target'        => 150000,
-            'target_pct'    => 65.83,
-            'assigned_date' => now()->subDays(10),
-            'frequency'     => 'monthly',
-            'status'        => 'pending',
-        ],
-        [
-            'id'            => 4,
-            'type'          => 'targets_months',
-            'name'          => 'Verma Industries',
-            'mobile'        => '9871234560',
-            'balance'       => 5600.00,
-            'target'        => 20000,
-            'target_pct'    => 28.00,
-            'due_date'      => now()->addMonths(1),
-            'assigned_date' => now()->subDays(1),
-            'frequency'     => 'weekly',
-            'status'        => 'pending',
-        ],
-        [
-            'id'            => 5,
-            'type'          => 'days_agewise',
-            'name'          => 'Patel Textiles',
-            'mobile'        => '9012345678',
-            'balance'       => 76400.25,
-            'days'          => 47,
-            'assigned_date' => now()->subDays(7),
-            'frequency'     => 'daily',
-            'status'        => 'done',
-        ],
-        [
-            'id'            => 6,
-            'type'          => 'days_10_20_30',
-            'name'          => 'Bansal Traders',
-            'mobile'        => '9090909090',
-            'balance'       => 34210.00,
-            'days'          => 20,
-            'assigned_date' => now()->subDays(3),
-            'frequency'     => 'weekly',
-            'status'        => 'pending',
-        ],
-        [
-            'id'            => 7,
-            'type'          => 'overlimits',
-            'name'          => 'Mehta Corp',
-            'mobile'        => '9345678123',
-            'balance'       => 205000.00,
-            'target'        => 150000,
-            'target_pct'    => 136.67,
-            'assigned_date' => now()->subDays(4),
-            'frequency'     => 'monthly',
-            'status'        => 'pending',
-        ],
-        [
-            'id'            => 8,
-            'type'          => 'balances',
-            'name'          => 'Kapoor & Co',
-            'mobile'        => '9595959595',
-            'balance'       => 15750.25,
-            'assigned_date' => now()->subDays(6),
-            'frequency'     => 'weekly',
-            'status'        => 'pending',
-        ],
     ];
 @endphp
 
@@ -220,112 +129,116 @@
                                         <thead>
                                             <tr>
                                                 <th>Sr.No</th>
-                                                <th>Name</th>
+                                                <th style="width: 150px;">Name</th>
                                                 <th>Mobile</th>
-                                                <th>Follow Up Type</th>
-                                                <th>Balance</th>
-                                                <th>Type Wise Details</th>
+                                                <th style="width: 250px;">Follow Up Type</th>
+                                                <th>Type Details</th>
+                                                <th>Accountant Status</th>
                                                 <th>Assigned Date</th>
                                                 <th>Frequency</th>
-                                                 
                                             </tr>
                                         </thead>
 
                                         <tbody>
 
-                                        @forelse($teleCallData as $row)
+                                        {{-- Empty state DataTables khud handle karta hai --}}
+                                        @foreach($teleCallData as $row)
+                                            @php
+                                                $rowType = $row['type'] ?? '';
+                                                $fmtDate = fn($d) => !empty($d) ? \Carbon\Carbon::parse($d)->format('d-M-Y') : '-';
+                                                $chips   = [];
 
-                                            <tr data-type="{{ $row['type'] ?? '' }}">
+                                                if ($rowType === 'pct_targets') {
+                                                    $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
+                                                    $chips[] = ['label' => 'Target', 'value' => number_format($row['target'] ?? 0, 2)];
+                                                    $chips[] = ['label' => '%Target', 'value' => ($row['target_pct'] ?? 0) . '%'];
 
-                                                <td>{{ $row['id'] }}</td>
+                                                } elseif ($rowType === 'balances') {
+                                                    $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
+
+                                                } elseif ($rowType === 'targets_months') {
+                                                    $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
+                                                    $chips[] = ['label' => 'Target', 'value' => number_format($row['target'] ?? 0, 2)];
+                                                    $chips[] = ['label' => '%Target', 'value' => ($row['target_pct'] ?? 0) . '%'];
+                                                    $chips[] = ['label' => 'Target Month', 'value' => !empty($row['target_month']) ? \Carbon\Carbon::createFromFormat('Y-m', $row['target_month'])->format('M Y') : '-'];
+
+                                                } elseif ($rowType === 'days_agewise') {
+                                                    $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
+                                                    $chips[] = ['label' => 'Days', 'value' => $row['days'] ?? '-'];
+
+                                                } elseif ($rowType === 'days_10_20_30') {
+                                                    $chips[] = ['label' => 'Date', 'value' => $fmtDate($row['date'] ?? null)];
+                                                    $chips[] = ['label' => 'Due Date', 'value' => $fmtDate($row['due_date'] ?? null)];
+                                                    $chips[] = ['label' => 'INV No', 'value' => $row['inv_no'] ?? '-'];
+                                                    $chips[] = ['label' => 'Days', 'value' => $row['days'] ?? '-'];
+                                                    $chips[] = ['label' => 'Amount', 'value' => number_format(abs($row['balance']), 2)];
+                                                    $chips[] = ['label' => 'Interest Due', 'value' => number_format($row['interest_due'] ?? 0, 2)];
+
+                                                } elseif ($rowType === 'due') {
+                                                    $chips[] = ['label' => 'Date', 'value' => $fmtDate($row['date'] ?? null)];
+                                                    $chips[] = ['label' => 'Due Date', 'value' => $fmtDate($row['due_date'] ?? null)];
+                                                    $chips[] = ['label' => 'INV No', 'value' => $row['inv_no'] ?? '-'];
+                                                    $chips[] = ['label' => 'Days', 'value' => $row['days'] ?? '-'];
+                                                    $chips[] = ['label' => 'Amount', 'value' => number_format($row['due'] ?? 0, 2)];
+                                                    $chips[] = ['label' => 'Interest Due', 'value' => number_format($row['interest_due'] ?? 0, 2)];
+
+                                                } elseif ($rowType === 'not_due') {
+                                                    $chips[] = ['label' => 'Date', 'value' => $fmtDate($row['date'] ?? null)];
+                                                    $chips[] = ['label' => 'Due Date', 'value' => $fmtDate($row['due_date'] ?? null)];
+                                                    $chips[] = ['label' => 'INV No', 'value' => $row['inv_no'] ?? '-'];
+                                                    $chips[] = ['label' => 'Days Pending', 'value' => $row['days_pending'] ?? '-'];
+                                                    $chips[] = ['label' => 'Amount', 'value' => number_format($row['not_due'] ?? 0, 2)];
+
+                                                } elseif ($rowType === 'overlimits') {
+                                                    $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance']), 2)];
+
+                                                } else {
+                                                    $chips[] = ['label' => 'Balance', 'value' => number_format(abs($row['balance'] ?? 0), 2)];
+                                                }
+
+                                                $accountantStatus = $row['status'] ?: 'Not Assign Yet';
+                                                $statusClass = match ($accountantStatus) {
+                                                    'Pending'   => 'bg-warning',
+                                                    'Responded' => 'bg-success',
+                                                    default     => 'bg-secondary',
+                                                };
+                                            @endphp
+
+                                            <tr data-type="{{ $rowType }}">
+
+                                                <td>{{ $loop->iteration }}</td>
 
                                                 <td>{{ $row['name'] }}</td>
 
                                                 <td>{{ $row['mobile'] }}</td>
 
+                                                <td class="followup-type-cell">
+                                                    <span class="badge type-pill">{{ $followupTypeFull[$rowType] ?? '-' }}</span>
+                                                </td>
+
+                                                <td class="followup-details-cell">
+                                                    <div class="d-flex flex-wrap gap-2">
+                                                        @foreach($chips as $chip)
+                                                            <span class="detail-chip">
+                                                                <strong>{{ $chip['label'] }}:</strong> {{ $chip['value'] }}
+                                                            </span>
+                                                        @endforeach
+                                                    </div>
+                                                </td>
+
                                                 <td>
-                                                    <span class="badge bg-{{ $followupTypeColors[$row['type']] ?? 'secondary' }}">
-                                                        {{ $followupTypeLabels[$row['type']] ?? '-' }}
+                                                    <span class="badge accountant-status-badge {{ $statusClass }}">
+                                                        {{ $accountantStatus }}
                                                     </span>
                                                 </td>
 
-                                                <td>
-                                                    {{ number_format(abs($row['balance']),2) }}
-                                                </td>
+                                                <td>{{ $fmtDate($row['assigned_date'] ?? null) }}</td>
 
-                                                {{-- ================= Type wise fields (as per Follow Up type) ================= --}}
-                                                <td>
-                                                    @switch($row['type'] ?? '')
-
-                                                        @case('due')
-                                                            <div><strong>Date:</strong> {{ !empty($row['date']) ? \Carbon\Carbon::parse($row['date'])->format('d-M-Y') : '-' }}</div>
-                                                            <div><strong>Due Date:</strong> {{ !empty($row['due_date']) ? \Carbon\Carbon::parse($row['due_date'])->format('d-M-Y') : '-' }}</div>
-                                                            <div><strong>INV No:</strong> {{ $row['inv_no'] ?? '-' }}</div>
-                                                            <div><strong>Days:</strong> {{ $row['days'] ?? '-' }}</div>
-                                                            <div><strong>Interest Due:</strong> {{ number_format(abs($row['interest_due'] ?? 0),2) }}</div>
-                                                            @break
-
-                                                        @case('not_due')
-                                                            <div><strong>Date:</strong> {{ !empty($row['date']) ? \Carbon\Carbon::parse($row['date'])->format('d-M-Y') : '-' }}</div>
-                                                            <div><strong>Due Date:</strong> {{ !empty($row['due_date']) ? \Carbon\Carbon::parse($row['due_date'])->format('d-M-Y') : '-' }}</div>
-                                                            <div><strong>INV No:</strong> {{ $row['inv_no'] ?? '-' }}</div>
-                                                            <div><strong>Days Pending:</strong> {{ $row['days_pending'] ?? '-' }}</div>
-                                                            @break
-
-                                                        @case('pct_targets')
-                                                            <div><strong>Target:</strong> {{ isset($row['target']) ? number_format($row['target'],2) : '-' }}</div>
-                                                            <div><strong>% Target:</strong> {{ isset($row['target_pct']) ? number_format($row['target_pct'],2).'%' : '-' }}</div>
-                                                            @break
-
-                                                        @case('targets_months')
-                                                            <div><strong>Target:</strong> {{ isset($row['target']) ? number_format($row['target'],2) : '-' }}</div>
-                                                            <div><strong>% Target:</strong> {{ isset($row['target_pct']) ? number_format($row['target_pct'],2).'%' : '-' }}</div>
-                                                            <div><strong>Target Month:</strong> {{ !empty($row['due_date']) ? \Carbon\Carbon::parse($row['due_date'])->format('M Y') : '-' }}</div>
-                                                            @break
-
-                                                        @case('days_agewise')
-                                                            <div><strong>Days Overdue:</strong> {{ $row['days'] ?? '-' }}</div>
-                                                            @break
-
-                                                        @case('days_10_20_30')
-                                                            <div><strong>Days:</strong> {{ $row['days'] ?? '-' }}</div>
-                                                            @break
-
-                                                        @case('overlimits')
-                                                            <div><strong>Target:</strong> {{ isset($row['target']) ? number_format($row['target'],2) : '-' }}</div>
-                                                            <div><strong>% Over Limit:</strong> {{ isset($row['target_pct']) ? number_format($row['target_pct'],2).'%' : '-' }}</div>
-                                                            @break
-
-                                                        @case('balances')
-                                                            <div><strong>Balance:</strong> {{ number_format(abs($row['balance'] ?? 0),2) }}</div>
-                                                            @break
-
-                                                        @default
-                                                            -
-                                                    @endswitch
-                                                </td>
-
-                                                <td>
-                                                    {{ !empty($row['assigned_date']) ? \Carbon\Carbon::parse($row['assigned_date'])->format('d-M-Y') : '-' }}
-                                                </td>
-
-                                                <td>
-                                                    {{ ucfirst($row['frequency'] ?? '-') }}
-                                                </td>
-
-                                               
+                                                <td>{{ ucfirst($row['frequency'] ?? '-') }}</td>
 
                                             </tr>
 
-                                        @empty
-
-                                            <tr>
-                                                <td colspan="9" class="text-center">
-                                                    No Records Found
-                                                </td>
-                                            </tr>
-
-                                        @endforelse
+                                        @endforeach
 
                                         </tbody>
 
@@ -420,6 +333,41 @@
             #example13 td div {
                 white-space: nowrap;
             }
+
+            /* ===== Follow Up Type pill + Type Details chips (same as Follow Up Hub) ===== */
+            .type-pill {
+                display: inline-block;
+                background: #ece9f5;
+                color: #402c67;
+                font-weight: 600;
+                font-size: 0.8rem;
+                padding: 8px 14px;
+                border-radius: 999px;
+                white-space: normal;
+                text-align: center;
+            }
+
+            .detail-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                background: #fff;
+                border: 1px solid #e2e6ea;
+                border-radius: 8px;
+                padding: 6px 12px;
+                font-size: 0.8rem;
+                color: #333;
+                white-space: nowrap;
+            }
+
+            .detail-chip strong {
+                color: #555;
+                font-weight: 600;
+            }
+
+            .accountant-status-badge.bg-secondary {
+                background-color: #6c757d !important;
+            }
         </style>
 
 		@include('owner.tally.components.footer')
@@ -432,8 +380,7 @@
                 if (window.jQuery && $.fn.DataTable) {
 
                     // Custom search plugin for the "Follow Up Type" filter.
-                    // Reads the data-type attribute on the <tr> since type isn't
-                    // a simple visible column we can regex-match cleanly.
+                    // Reads the data-type attribute on the <tr>.
                     $.fn.dataTable.ext.search.push(function (settings, data, dataIndex, rowData, counter) {
                         if (settings.nTable.id !== 'example13') return true;
 
