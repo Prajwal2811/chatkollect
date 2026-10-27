@@ -20,8 +20,7 @@ class Followup extends Model
         'assigned_by',
         'allocation_date',
         'response_date',
-        'clearStatus',
-        'sub_option',
+        'clearStatus'
     ];
 
     protected $casts = [

@@ -88,7 +88,10 @@ Route::prefix('accountant')->middleware(['auth:accountant', 'accountant.subscrip
             '/tally/company/{company}/followup/hub/', 
             [AccountantController::class, 'followUpsHub']
         )->name('accountant.tally.followup.hub');
+        
+        Route::get('/tally/followup/{id}/logs', [AccountantController::class,'getFollowUpsLogs'])->name('accountant.tally.followup.logs');
 
+        Route::post('/followup/submit-response', [AccountantController::class, 'submitResponse'])->name('accountant.followup.submit-response');
 
         Route::post('/tally/{company}/bad-debts/assign', [AccountantController::class, 'assignBadDebts'])->name('accountant.tally.baddebts.assign'); 
 
