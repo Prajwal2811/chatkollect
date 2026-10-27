@@ -4758,7 +4758,7 @@ public function telecaller(Request $request, $company = null)
             'mark' => 'nullable|in:red,green,unmarked',
             'red_reason' => 'nullable|string|max:255',
             'credit_period' => 'nullable|integer|min:0',
-            'assigned_collector' => 'nullable|integer|exists:collectors,id',
+            'assigned_collector' => 'nullable|integer|exists:rms_collectors,id',
         ]);
 
         if ($validator->fails()) {
