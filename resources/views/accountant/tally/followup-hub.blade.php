@@ -18,11 +18,13 @@
 @include('accountant.components.navbar')
 @include('accountant.components.sidebar')
 
+
         <div class="content-body default-height">
             <div class="container-fluid">
                 <div class="row">
                     <div class="col-12">
                         <div class="card">
+
                             <div class="col-10 mx-auto mt-4">
                                 @if (session('success'))
                                     <div id="successAlert" class="alert alert-success alert-dismissible fade show text-center" role="alert">
@@ -30,12 +32,14 @@
                                         {{ session('success') }}
                                     </div>
                                 @endif
+
                                 @if (session('error'))
                                     <div id="errorAlert" class="alert alert-danger alert-dismissible fade show text-center" role="alert">
                                         <button class="btn-close" data-bs-dismiss="alert"></button>
                                         {{ session('error') }}
                                     </div>
                                 @endif
+
                                 <div id="ajaxAlertWrapper"></div>
                             </div>
 
@@ -54,15 +58,25 @@
                             <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                                 <div class="d-flex align-items-start">
                                     <div>
-                                        <h4 class="card-title mb-0">My Follow Ups</h4>
+                                        <h4 class="card-title mb-0">Call - Assigned Ledgers</h4>
+                                        <small class="text-muted">
+                                            Ledgers allocated for calling
+                                        </small>
+
                                         <small class="text-muted">
                                             @if(!empty($selectedLedger))
                                                 &nbsp;|&nbsp; Ledger: <span class="fw-bold">{{ $selectedLedger }}</span>
                                             @endif
+
                                             @if(!empty($selectedUnder))
                                                 &nbsp;|&nbsp; Under: <span class="fw-bold">{{ $selectedUnder }}</span>
                                             @endif
                                         </small>
+
+                                        <div class="small text-muted mt-1">
+                                            <i class="fa fa-info-circle me-1"></i>
+                                            Click on a <span class="fw-bold text-warning">Pending</span> row to submit your response. Click a <span class="fw-bold text-success">Responded</span> row to view its log.
+                                        </div>
                                     </div>
                                 </div>
 
@@ -100,6 +114,7 @@
 
                             <div class="card-body">
                                 <input type="hidden" value="{{ $company }}">
+
                                 <div class="table-responsive">
                                     <table id="example12" class="table table-bordered table-striped align-middle">
                                         <thead>
@@ -115,6 +130,7 @@
                                             </tr>
                                         </thead>
                                         <tbody>
+                                            @php $k = 1 ; @endphp
                                             @forelse($followUps as $row)
                                                 @php
                                                     $rowType = $row['type'] ?? $type ?? '';
@@ -172,7 +188,9 @@
                                                 @endphp
                                                 <tr
                                                     class="ledger-row"
+                                                    style="cursor:pointer;"
                                                     data-id="{{ $row['id'] }}"
+                                                    data-followup-id="{{ $row['followup_id'] }}"
                                                     data-name="{{ $row['name'] }}"
                                                     data-mobile="{{ $row['mobile'] }}"
                                                     data-balance="{{ $row['balance'] ?? 0 }}"
@@ -183,7 +201,7 @@
                                                     data-allocation-date="{{ $row['allocation_date'] ?? '-' }}"
                                                     data-response-date="{{ $row['response_date'] ?? '-' }}"
                                                     data-status="{{ $status }}">
-                                                    <td>{{ $row['id'] }}</td>
+                                                    <td>{{ $k++ }}</td>
                                                     <td>{{ $row['name'] }}</td>
                                                     <td>{{ $row['mobile'] }}</td>
 
@@ -242,6 +260,7 @@
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
+
                         <div class="row mb-3">
                             <div class="col-md-6"><strong>Name:</strong> <span id="respModalName">-</span></div>
                             <div class="col-md-6"><strong>Mobile:</strong> <span id="respModalMobile">-</span></div>
@@ -258,17 +277,11 @@
                                 <label class="form-label fw-bold">Response</label>
                                 <select id="respModalResponse" class="form-select form-select-sm">
                                     <option value="" selected>Select response</option>
-                                    <option value="paid_cleared">PAID/CLEARED</option>
-                                    <option value="send_ledger">SEND LEDGER</option>
-                                    <option value="wrong_no">Wrong NO</option>
-                                    <option value="sir_involvement">SIR INVOLVEMENT</option>
-                                    <option value="will_pay_shortly">Will pay shortly</option>
-                                    <option value="will_come_to_office">Will come to office</option>
-                                    <option value="dispute">Dispute</option>
-                                    <option value="send_invoices">Send invoices</option>
-                                    <option value="no_response_avoiding">No response/Avoiding calls</option>
-                                    <option value="send_someone_to_collect">Send someone to collect</option>
-                                    <option value="accountant_se_bat_karta_hu">Accountant se bat karta hu</option>
+                                    @foreach($responseOptions as $option)
+                                        <option value="{{ $option->response }}">
+                                            {{ $option->response }}
+                                        </option>
+                                    @endforeach
                                 </select>
                             </div>
 
@@ -276,13 +289,11 @@
                                 <label class="form-label fw-bold">Solution</label>
                                 <select id="respModalSolution" class="form-select form-select-sm">
                                     <option value="" selected>Select solution</option>
-                                    <option value="ok">OK</option>
-                                    <option value="pending">PENDING</option>
-                                    <option value="ledger_sent">LEDGER SENT</option>
-                                    <option value="mobile_no_ok">MOBILE NO.OK</option>
-                                    <option value="dispute_ok">DISPUTE OK</option>
-                                    <option value="invoice_sent">INVOICE SENT</option>
-                                    <option value="accountant_call_ok">ACCOUNTANT CALL OK</option>
+                                    @foreach($solutionOptions as $option)
+                                        <option value="{{ $option->solution }}">
+                                            {{ $option->solution }}
+                                        </option>
+                                    @endforeach
                                 </select>
                             </div>
                         </div>
@@ -295,6 +306,7 @@
                                 <option value="pending">Pending</option>
                             </select>
                         </div>
+
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -344,7 +356,8 @@
                 </div>
             </div>
         </div>
-       
+        {{-- ================= END VIEW LOG MODAL ================= --}}
+
         <style>
             .dataTables_wrapper .dataTables_paginate { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; }
             .dataTables_wrapper .dataTables_paginate .paginate_button,
@@ -355,6 +368,7 @@
                 width: auto !important; height: auto !important; display: inline-flex !important;
                 align-items: center; justify-content: center; line-height: normal !important;
             }
+            #example12 tbody tr.ledger-row:hover { background-color: rgba(64, 44, 103, 0.08); }
 
             .type-pill {
                 display: inline-block;
@@ -389,153 +403,283 @@
 
         @include('accountant.components.footer')
 
-        <script>
-            document.addEventListener('DOMContentLoaded', function () {
+       <script>
+    document.addEventListener('DOMContentLoaded', function () {
 
-                let followupTable = null;
+        let followupTable = null;
 
-                if (window.jQuery && $.fn.DataTable) {
-                    $.fn.dataTable.ext.search.push(function (settings, data, dataIndex, rowData, counter) {
-                        if (settings.nTable.id !== 'example12') return true;
+        function updateTotalLedgerBadge(count) {
+            const badge = document.getElementById('totalLedgerBadge');
+            if (badge) badge.textContent = count;
+        }
 
-                        const rowNode = settings.aoData[dataIndex].nTr;
+        if (window.jQuery && $.fn.DataTable) {
+            $.fn.dataTable.ext.search.push(function (settings, data, dataIndex, rowData, counter) {
+                if (settings.nTable.id !== 'example12') return true;
 
-                        const statusFilterEl = document.getElementById('statusFilter');
-                        if (statusFilterEl && statusFilterEl.value) {
-                            if (rowNode.getAttribute('data-status') !== statusFilterEl.value) return false;
-                        }
-
-                        const typeFilterEl = document.getElementById('typeFilter');
-                        if (typeFilterEl && typeFilterEl.value) {
-                            if (rowNode.getAttribute('data-followup-type') !== typeFilterEl.value) return false;
-                        }
-
-                        return true;
-                    });
-
-                    followupTable = $('#example12').DataTable({ fixedHeader: false });
-                }
+                const rowNode = settings.aoData[dataIndex].nTr;
 
                 const statusFilterEl = document.getElementById('statusFilter');
-                if (statusFilterEl && followupTable) {
-                    statusFilterEl.addEventListener('change', function () { followupTable.draw(); });
+                if (statusFilterEl && statusFilterEl.value) {
+                    if (rowNode.getAttribute('data-status') !== statusFilterEl.value) return false;
                 }
 
                 const typeFilterEl = document.getElementById('typeFilter');
-                if (typeFilterEl && followupTable) {
-                    typeFilterEl.addEventListener('change', function () { followupTable.draw(); });
+                if (typeFilterEl && typeFilterEl.value) {
+                    if (rowNode.getAttribute('data-followup-type') !== typeFilterEl.value) return false;
                 }
 
-                // ================= UPDATE BADGE COUNT ON FILTER =================
-                const totalLedgerBadgeEl = document.getElementById('totalLedgerBadge');
-                if (followupTable && totalLedgerBadgeEl) {
-                    followupTable.on('draw', function () {
-                        const filteredCount = followupTable.rows({ search: 'applied' }).count();
-                        totalLedgerBadgeEl.textContent = filteredCount;
-                    });
-                }
-
-                function showAjaxAlert(message, type = 'success') {
-                    const wrapper = document.getElementById('ajaxAlertWrapper');
-                    if (!wrapper) return;
-
-                    const alertId = 'ajaxAlert_' + Date.now();
-                    wrapper.innerHTML = `
-                        <div id="${alertId}" class="alert alert-${type} alert-dismissible fade show text-center" role="alert">
-                            <button class="btn-close" data-bs-dismiss="alert"></button>
-                            ${message}
-                        </div>
-                    `;
-
-                    setTimeout(function () {
-                        let alertEl = document.getElementById(alertId);
-                        if (alertEl) {
-                            let bsAlert = bootstrap.Alert.getOrCreateInstance(alertEl);
-                            bsAlert.close();
-                        }
-                    }, 3000);
-                }
-
-                // ================= RESPONSE MODAL SETUP =================
-                const responseModalEl = document.getElementById('followupResponseModal');
-                const responseModal = responseModalEl ? new bootstrap.Modal(responseModalEl) : null;
-
-                let respLedgerId = null;
-                let respLedgerRow = null;
-
-                // ================= SUBMIT RESPONSE =================
-                const respModalSubmitBtn = document.getElementById('respModalSubmitBtn');
-                if (respModalSubmitBtn) {
-                    respModalSubmitBtn.addEventListener('click', function () {
-                        const responseValue      = document.getElementById('respModalResponse').value;
-                        const solutionValue      = document.getElementById('respModalSolution').value;
-                        const adminSolutionValue = document.getElementById('respModalAdminSolution').value;
-
-                        if (!respLedgerId) {
-                            showAjaxAlert('Ledger select nahi hui.', 'danger');
-                            return;
-                        }
-                        if (!responseValue) {
-                            showAjaxAlert('Response select karo.', 'danger');
-                            return;
-                        }
-                        if (!solutionValue) {
-                            showAjaxAlert('Solution select karo.', 'danger');
-                            return;
-                        }
-                        if (!adminSolutionValue) {
-                            showAjaxAlert('Clear Solution (ADMIN) select karo.', 'danger');
-                            return;
-                        }
-
-                        const originalText = this.textContent;
-                        this.disabled = true;
-                        this.textContent = 'Submitting...';
-                        const self = this;
-
-                        fetch("{{ url('accountant/followup/submit-response') }}", {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-CSRF-TOKEN': '{{ csrf_token() }}'
-                            },
-                            body: JSON.stringify({
-                                id: respLedgerId,
-                                response: responseValue,
-                                solution: solutionValue,
-                                admin_solution: adminSolutionValue
-                            })
-                        })
-                        .then(function (r) {
-                            if (!r.ok) throw new Error('Request failed');
-                            return r.json().catch(() => ({}));
-                        })
-                        .then(function (data) {
-                            showAjaxAlert(data.message ?? 'Response submit ho gaya!', 'success');
-
-                            if (respLedgerRow) {
-                                respLedgerRow.setAttribute('data-status', 'Responded');
-                                const badge = respLedgerRow.querySelector('.accountant-status-badge');
-                                if (badge) {
-                                    badge.textContent = 'Responded';
-                                    badge.classList.remove('bg-warning');
-                                    badge.classList.add('bg-success');
-                                }
-                            }
-
-                            responseModal.hide();
-                            respLedgerId = null;
-                            respLedgerRow = null;
-                        })
-                        .catch(function () {
-                            showAjaxAlert('Response submit karte waqt error aaya. Dobara try karo.', 'danger');
-                        })
-                        .finally(function () {
-                            self.disabled = false;
-                            self.textContent = originalText;
-                        });
-                    });
-                }
-
+                return true;
             });
-        </script>
+
+            followupTable = $('#example12').DataTable({ fixedHeader: false });
+
+            // Har draw (filter/search/page change) ke baad badge ko filtered count se update karo
+            followupTable.on('draw', function () {
+                const info = followupTable.page.info();
+                updateTotalLedgerBadge(info.recordsDisplay);
+            });
+
+            // Initial load pe bhi ek baar sahi count dikhado
+            updateTotalLedgerBadge(followupTable.page.info().recordsDisplay);
+        }
+
+        const statusFilterEl = document.getElementById('statusFilter');
+        if (statusFilterEl && followupTable) {
+            statusFilterEl.addEventListener('change', function () { followupTable.draw(); });
+        }
+
+        const typeFilterEl = document.getElementById('typeFilter');
+        if (typeFilterEl && followupTable) {
+            typeFilterEl.addEventListener('change', function () { followupTable.draw(); });
+        }
+
+        function showAjaxAlert(message, type = 'success') {
+            const wrapper = document.getElementById('ajaxAlertWrapper');
+            if (!wrapper) return;
+
+            const alertId = 'ajaxAlert_' + Date.now();
+            wrapper.innerHTML = `
+                <div id="${alertId}" class="alert alert-${type} alert-dismissible fade show text-center" role="alert">
+                    <button class="btn-close" data-bs-dismiss="alert"></button>
+                    ${message}
+                </div>
+            `;
+
+            setTimeout(function () {
+                let alertEl = document.getElementById(alertId);
+                if (alertEl) {
+                    let bsAlert = bootstrap.Alert.getOrCreateInstance(alertEl);
+                    bsAlert.close();
+                }
+            }, 3000);
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return dateStr;
+            return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+        }
+
+        function renderLogTable(logs) {
+            const tbody = document.getElementById('followupLogTableBody');
+            tbody.innerHTML = '';
+
+            if (!logs || logs.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="10" class="text-center">No log entries found</td></tr>`;
+                return;
+            }
+
+            logs.forEach(function (log, index) {
+                const balance = Number(log.balance || 0);
+                const target = Number(log.target || 0);
+                const pct = target > 0 ? ((Math.abs(balance) / target) * 100).toFixed(2) : '0.00';
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td class="text-end">${balance.toLocaleString()}</td>
+                    <td class="text-end">${target.toLocaleString()}</td>
+                    <td class="text-end">${pct}%</td>
+                    <td>${formatDate(log.allocation_date)}</td>
+                    <td>${formatDate(log.response_date)}</td>
+                    <td>${log.action ?? '-'}</td>
+                    <td>${log.frequency ?? '-'}</td>
+                    <td>${log.response ?? '-'}</td>
+                    <td>${log.solution ?? '-'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // ================= RESPONSE MODAL SETUP =================
+        const responseModalEl = document.getElementById('followupResponseModal');
+        const responseModal = responseModalEl ? new bootstrap.Modal(responseModalEl) : null;
+
+        let respLedgerId = null;
+        let respLedgerRow = null;
+
+        function openLogForRow(row) {
+            const rowId = row.getAttribute('data-followup-id');
+            const rowData = {
+                name: row.getAttribute('data-name'),
+                mobile: row.getAttribute('data-mobile'),
+                balance: row.getAttribute('data-balance'),
+                target: row.getAttribute('data-target'),
+                action: row.getAttribute('data-action'),
+                frequency: row.getAttribute('data-frequency'),
+            };
+
+            document.getElementById('logModalName').textContent = rowData.name ?? '-';
+            document.getElementById('logModalMobile').textContent = rowData.mobile ?? '-';
+
+            const tbody = document.getElementById('followupLogTableBody');
+
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="text-center">Loading data...</td>
+                </tr>
+            `;
+            
+            $.ajax({
+                url: `/accountant/tally/followup/${encodeURIComponent(rowId)}/logs`,
+                method: 'GET',
+                dataType: 'json',
+
+                success: function (response) {
+                    if (response.success) {
+                        renderLogTable(response.logs);
+                    } else {
+                        renderLogTable([]);
+                    }
+                },
+
+                error: function (xhr) {
+                    console.error(xhr.responseText);
+
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="text-center text-danger">
+                                Failed to load data.
+                            </td>
+                        </tr>
+                    `;
+                }
+            });
+            
+            // ideally fetch actual history from server; using row data as fallback
+            //renderLogTable([rowData]);
+
+            new bootstrap.Modal(document.getElementById('followupLogModal')).show();
+        }
+
+        // ================= ROW CLICK -> STATUS KE HISAAB SE MODAL =================
+        document.addEventListener('click', function (e) {
+            const row = e.target.closest('#example12 tbody tr.ledger-row');
+            if (!row) return;
+
+            const status = row.getAttribute('data-status');
+
+            if (status === 'Responded') {
+                openLogForRow(row);
+                return;
+            }
+
+            respLedgerId = row.getAttribute('data-id');
+            respFollowUpId = row.getAttribute('data-followup-id') || '';
+            respLedgerRow = row;
+
+            document.getElementById('respModalName').textContent = row.getAttribute('data-name') || '-';
+            document.getElementById('respModalMobile').textContent = row.getAttribute('data-mobile') || '-';
+            document.getElementById('respModalType').textContent = row.getAttribute('data-followup-type') || '-';
+            document.getElementById('respModalAction').textContent = row.getAttribute('data-action') || '-';
+            document.getElementById('respModalFrequency').textContent = row.getAttribute('data-frequency') || '-';
+
+            document.getElementById('respModalResponse').value = '';
+            document.getElementById('respModalSolution').value = '';
+            document.getElementById('respModalAdminSolution').value = '';
+
+            if (responseModal) responseModal.show();
+        });
+
+        // ================= SUBMIT RESPONSE =================
+        const respModalSubmitBtn = document.getElementById('respModalSubmitBtn');
+        if (respModalSubmitBtn) {
+            respModalSubmitBtn.addEventListener('click', function () {
+                const responseValue      = document.getElementById('respModalResponse').value;
+                const solutionValue      = document.getElementById('respModalSolution').value;
+                const adminSolutionValue = document.getElementById('respModalAdminSolution').value;
+
+                if (!respLedgerId) {
+                    showAjaxAlert('Ledger select nahi hui.', 'danger');
+                    return;
+                }
+                if (!responseValue) {
+                    showAjaxAlert('Response select karo.', 'danger');
+                    return;
+                }
+                if (!solutionValue) {
+                    showAjaxAlert('Solution select karo.', 'danger');
+                    return;
+                }
+                if (!adminSolutionValue) {
+                    showAjaxAlert('Clear Solution (ADMIN) select karo.', 'danger');
+                    return;
+                }
+
+                const originalText = this.textContent;
+                this.disabled = true;
+                this.textContent = 'Submitting...';
+                const self = this;
+
+                fetch("{{ url('accountant/followup/submit-response') }}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                    },
+                    body: JSON.stringify({
+                        id: respFollowUpId,
+                        response: responseValue,
+                        solution: solutionValue,
+                        admin_solution: adminSolutionValue
+                    })
+                })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('Request failed');
+                    return r.json().catch(() => ({}));
+                })
+                .then(function (data) {
+                    showAjaxAlert(data.message ?? 'Response submit ho gaya!', 'success');
+
+                    if (respLedgerRow) {
+                        respLedgerRow.setAttribute('data-status', 'Responded');
+                        const badge = respLedgerRow.querySelector('.accountant-status-badge');
+                        if (badge) {
+                            badge.textContent = 'Responded';
+                            badge.classList.remove('bg-warning');
+                            badge.classList.add('bg-success');
+                        }
+                    }
+
+                    responseModal.hide();
+                    respLedgerId = null;
+                    respLedgerRow = null;
+                    // Refresh the page after successful submission
+                    setTimeout(function () {
+                        window.location.reload();
+                    }, 1000);
+                })
+                .catch(function () {
+                    showAjaxAlert('Response submit karte waqt error aaya. Dobara try karo.', 'danger');
+                })
+                .finally(function () {
+                    self.disabled = false;
+                    self.textContent = originalText;
+                });
+            });
+        }
+
+    });
+</script>
