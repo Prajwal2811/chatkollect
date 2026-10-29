@@ -100,10 +100,15 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
 
         Route::post('/tally/followup/saveBulkFollows', [OwnerController::class, 'saveBulkFollowUps'])->name('owner.tally.followup.saveBulkFollows');
         
-        Route::get('/tally/company/{company}/ledgers-assign',[OwnerController::class, 'asignLedgers'])->name('owner.tally.company.ledgers-assign');
+        Route::get('/tally/company/{company}/assign-ledgers', [OwnerController::class, 'assignLedgers'])->name('owner.collectors.assign');
 
-        Route::post('/owner/assign-collectors', [OwnerController::class, 'assignLedgers'])->name('owner.assign.collectors');
+        Route::post('/assign-ledgers/save', [OwnerController::class, 'saveLedgerCollectors'])->name('owner.collectors.ledgers.assign.save');
 
+        Route::post('/assign-ledgers/remove', [OwnerController::class, 'removeLedgerCollectors'])->name('owner.collectors.ledgers.assign.remove');
+
+        Route::post('/tally/ledger/save-settlement', [OwnerController::class, 'saveLedgerSettlement'])->name('owner.tally.ledger.save-settlement');
+
+        Route::post('/tally/ledger/save-bulk-settlement', [OwnerController::class, 'saveBulkLedgerSettlement'])->name('owner.tally.ledger.save-bulk-settlement');
 
         // Followup Actions
         Route::get( '/tally/company/{company}/followup-action/telecaller', [OwnerController::class, 'telecaller'])->name('owner.tally.company.followup-action.telecaller');

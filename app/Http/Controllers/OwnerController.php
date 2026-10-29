@@ -38,6 +38,8 @@ use App\Models\OwnerBankDetail;
 use Illuminate\Support\Facades\Artisan;
 
 
+use Illuminate\Validation\ValidationException;
+
 class OwnerController extends Controller
 {
     protected TallyService $tally;
@@ -1077,152 +1079,256 @@ class OwnerController extends Controller
     }
  
 
+    // $rows = classifyVoucherRow() se bane vouchers, $under = Debtor/Creditor, $creditPeriod = ledger ke days
+    // $today = aaj ki date, $asOf = (optional) kisi purani date ke hisaab se snapshot chahiye to wo date
     private function buildOpenInvoices($rows, string $under, int $creditPeriod, Carbon $today, ?Carbon $asOf = null)
     {
+        // Creditor hai ya nahi (nahi hai to Debtor maana jayega)
         $isCreditor = $under === 'Sundry Creditors';
 
-        // ✅ Date-wise: asOf tak ke hi vouchers (invoice + receipt dono)
+        // Date-wise snapshot: agar $asOf diya hai (jaise pichhle mahine ka end) to us date tak ke hi vouchers lo
+        // (invoice aur receipt dono, taaki us din ki sthiti dikhe)
         if ($asOf) {
+            // $asOf ki copy li (original object na bigde) aur us din ka end (23:59:59) set kiya
             $cut = $asOf->copy()->endOfDay();
+
+            // Sirf wahi rows rakhi jinki date cutoff se pehle ya barabar hai
             $rows = $rows->filter(fn($r) => Carbon::parse($r['date'])->lte($cut));
         }
+
+        // Reference din: snapshot hai to $asOf, warna aaj. Overdue days isi din ke hisaab se nikalenge
         $refDay = ($asOf ?? $today)->copy()->startOfDay();
 
+        // INVOICES list banai
         $invoices = $rows
             ->filter(fn($r) => $isCreditor
+                // Creditor: purchase type + credit amount > 0
                 ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
+                // Debtor: sales type + debit amount > 0
                 : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
+            // Sabse purani invoice pehle (FIFO ke liye zaroori)
             ->sortBy(fn($r) => Carbon::parse($r['date'])->timestamp)
+            // sortBy ke baad index bigad jaate hain, isliye 0,1,2... dobara
             ->values();
 
+        // POOL: saare receipts (Debtor) ya payments (Creditor) ka total ek number me
         $pool = $rows
             ->filter(fn($r) => $isCreditor
+                // Creditor: voucher type me "payment" aur debit > 0
                 ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
+                // Debtor: voucher type me "receipt" aur credit > 0
                 : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
+            // Sab ka amount jod kar ek total (string, bcmath se)
             ->reduce(fn($t, $r) => bcadd($t, $isCreditor ? $r['debit'] : $r['credit'], 2), '0');
 
         return $invoices
+            // &$pool = reference se, taaki har invoice ke baad pool kam hota rahe (agli invoice ko bacha hua mile)
             ->map(function ($r) use (&$pool, $isCreditor, $creditPeriod, $refDay) {
+
+                // Invoice ki poori amount (Creditor me credit side, Debtor me debit side)
                 $original = $isCreditor ? $r['credit'] : $r['debit'];
+
+                // Is invoice me pool se kitna adjust hoga:
+                // pool chhota hai to poora pool, warna invoice ki poori amount
                 $cleared = bccomp($pool, $original, 2) < 0 ? $pool : $original;
+
+                // Pool se wo amount ghata di (agli invoice ke liye bacha hua)
                 $pool = bcsub($pool, $cleared, 2);
+
+                // Pending = invoice amount - clear hui amount
                 $pending = bcsub($original, $cleared, 2);
 
+                // Invoice ki date (din ki shuruaat par)
                 $voucherDate = Carbon::parse($r['date'])->startOfDay();
+
+                // Due date: voucher me saved due_date valid ho to wahi, warna voucher date + credit period
                 $dueDate = $this->resolveDueDate($r['due_date'] ?? null, $voucherDate, $creditPeriod);
 
                 return [
-                    'id' => $r['id'] ?? null,
-                    'date' => $voucherDate->toDateString(),
-                    'due_date' => $dueDate->toDateString(),
-                    'voucher_number' => $r['voucher_number'] ?? null,
-                    'days' => (int) $dueDate->diffInDays($refDay, false), // asOf ke hisaab se
-                    'original' => $original,
-                    'cleared' => $cleared,
-                    'pending' => $pending,
+                    'id' => $r['id'] ?? null,                          // voucher ka DB id (kuch jagah 'id' nahi hota to null)
+                    'date' => $voucherDate->toDateString(),            // invoice date (Y-m-d)
+                    'due_date' => $dueDate->toDateString(),            // due date (Y-m-d)
+                    'voucher_number' => $r['voucher_number'] ?? null,  // invoice number
+                    // Due date se refDay tak kitne din: positive = overdue, 0 ya negative = abhi due nahi
+                    'days' => (int) $dueDate->diffInDays($refDay, false),
+                    'original' => $original,                           // invoice ki poori amount
+                    'cleared' => $cleared,                             // kitni clear hui
+                    'pending' => $pending,                             // kitni baaki
                 ];
             })
+            // Jo invoices poori clear ho gayi (pending 0) unhe hata do, sirf open bachi rahengi
             ->filter(fn($i) => bccomp($i['pending'], '0', 2) > 0)
+            // Index dobara 0,1,2...
             ->values();
     }
 
 
+    private function isOtherCredit(array $v): bool
+    {
+        return $v['mapped_type_low'] !== 'purchase'
+            && bccomp($v['credit'], '0', 2) > 0;
+    }
+
     public function companyLedgers($company)
     {
         try {
+            // URL se aaya raw company naam $com me rakh liya (abhi aage use nahi hua, unused variable hai)
             $com = $company;
+
+            // URL-encoded naam (jaise "ABC%20Traders") ko normal text me badla
             $company = urldecode($company);
+
+            // Logged-in owner (owner guard se) nikala
             $owner = Auth::guard('owner')->user();
 
+            // Is owner ki wahi company dhundhi jiska naam URL wale naam se match kare
             $tallyCompany = TallyCompany::where('owner_id', $owner->id)
                 ->where('company_name', $company)
                 ->first();
+            // NOTE: agar company nahi mili to $tallyCompany null hoga aur neeche ->id par error aayega (catch me jayega)
 
+            // Is company ke saare ledgers, naam ke hisaab se A-Z sorted
             $ledgerModels = TallyLedger::where('owner_id', $owner->id)
                 ->where('tally_company_id', $tallyCompany->id)
                 ->orderBy('ledger_name')
                 ->get();
 
+            // In saare ledgers ke vouchers EK hi query me laaye 
             $vouchersByLedger = TallyVoucher::where('owner_id', $owner->id)
                 ->where('tally_company_id', $tallyCompany->id)
                 ->whereIn('ledger_id', $ledgerModels->pluck('id'))
                 ->get()
                 ->groupBy('ledger_id');
 
+            // Voucher type -> mapped type ka dictionary, e.g. ["Sales GST" => "Sales"]
+            // Isse pata chalta hai konsa voucher type Sales/Purchase maana jayega
             $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
                 ->pluck('mapped_to', 'voucher_type')
                 ->toArray();
 
             // echo "<pre>"; print_r($vouchersByLedger); echo "</pre>"; die;
 
+            // Aaj ki date, din ki shuruaat (00:00:00) par - overdue days nikalne ke kaam aayegi
             $today = Carbon::now()->startOfDay();
 
+            // Owner ne overdue target % set kiye hain (month bucket 1..6 -> receivable target %)
+            // pluck se result: [bucket_month => receivable_target]
             $ownerTargets = OverdueTargetSetting::where('owner_id', $owner->id)
                 ->where('company_id', $tallyCompany->id)
                 ->pluck('receivable_target', 'bucket_month');
 
+            // Abhi ka exact time, target calculation me month-end nikalne ke liye pass hoga
             $nowForTarget = now();
 
-            $ledgers = $ledgerModels->map(function ($ledger) use ($vouchersByLedger, $today, $voucherMappings, $ownerTargets, $nowForTarget) {
+            // ledger_id => [collector_id, ...] banane ke liye is company ki saari collector assignments laaye
+            $ledgerCollectorRows = DB::table('rms_ledger_collectors')
+                ->where('owner_id', $owner->id)
+                ->where('company_id', $tallyCompany->id)
+                ->get();
+
+            // Har ledger ke saath uske collector IDs ki list (duplicate hata ke) map me rakhi
+            $ledgerCollectorMap = $ledgerCollectorRows
+                ->groupBy('ledger_id')
+                ->map(fn($rows) => $rows->pluck('collector_id')->unique()->values()->all());
+
+            // Page ke collector dropdown ke liye: sirf wahi collectors jinko is company me kam se kam 1 ledger assign hai
+            $collectors = Collector::whereIn('id', $ledgerCollectorRows->pluck('collector_id')->unique())
+                ->orderBy('name')
+                ->get(['id', 'name']);
+
+            // Ab har ledger ko transform karke ek array banate hain (collection map)
+            $ledgers = $ledgerModels->map(function ($ledger) use (
+                $vouchersByLedger, $today, $voucherMappings, $ownerTargets, $nowForTarget, $ledgerCollectorMap
+            ) {
+                // Ledger Debtor hai ya Creditor ("Sundry Debtors" / "Sundry Creditors")
                 $under = $ledger->parent;
 
-
+                // Is ledger ke vouchers nikaale (nahi hain to khali collection)
+                // Har voucher ko classifyVoucherRow() se debit/credit/mapped type me classify kiya
+                // aur due_date + voucher_number extra jod diye
                 $vouchers = $vouchersByLedger->get($ledger->id, collect())
                     ->map(fn($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
                         'due_date' => $v->due_date ?? null,
                         'voucher_number' => $v->voucher_number,
                     ]);
 
+                // Helper closures: voucher type me "receipt" ya "payment" word hai ya nahi
                 $isReceipt = fn($v) => str_contains($v['voucher_type_low'], 'receipt');
                 $isPayment = fn($v) => str_contains($v['voucher_type_low'], 'payment');
 
+                // Saare totals '0' string se shuru (bcmath string par chalta hai, float ki galti se bachne ke liye)
                 $sale = $purchase = $otherDebits = $otherCredits = $receipts = $payments = '0';
 
                 if ($under === 'Sundry Creditors') {
+                    // CREDITOR: Purchase = purchase type ke vouchers ka credit total
                     $purchase = $vouchers->filter(fn($v) => $v['mapped_type_low'] === 'purchase' && bccomp($v['credit'], '0', 2) > 0)
                         ->reduce(fn($t, $v) => bcadd($t, $v['credit'], 2), '0');
-                    $otherCredits = $vouchers->filter(fn($v) => $v['mapped_type_low'] !== 'purchase' && bccomp($v['credit'], '0', 2) > 0)
+
+                    // Other Credits = purchase ke alawa baaki credit entries (isOtherCredit helper se)
+                    $otherCredits = $vouchers->filter(fn($v) => $this->isOtherCredit($v))
                         ->reduce(fn($t, $v) => bcadd($t, $v['credit'], 2), '0');
+
+                    // Payments = payment vouchers ka debit total (creditor ko paisa diya)
                     $payments = $vouchers->filter(fn($v) => $isPayment($v) && bccomp($v['debit'], '0', 2) > 0)
                         ->reduce(fn($t, $v) => bcadd($t, $v['debit'], 2), '0');
                 } else {
+                    // DEBTOR: Sale = sales type ke vouchers ka debit total
                     $sale = $vouchers->filter(fn($v) => $v['mapped_type_low'] === 'sales' && bccomp($v['debit'], '0', 2) > 0)
                         ->reduce(fn($t, $v) => bcadd($t, $v['debit'], 2), '0');
+
+                    // Other Debits = sales ke alawa baaki debit entries
                     $otherDebits = $vouchers->filter(fn($v) => $v['mapped_type_low'] !== 'sales' && bccomp($v['debit'], '0', 2) > 0)
                         ->reduce(fn($t, $v) => bcadd($t, $v['debit'], 2), '0');
+
+                    // Receipts = receipt vouchers ka credit total (debtor se paisa aaya)
                     $receipts = $vouchers->filter(fn($v) => $isReceipt($v) && bccomp($v['credit'], '0', 2) > 0)
                         ->reduce(fn($t, $v) => bcadd($t, $v['credit'], 2), '0');
                 }
 
+                // Ledger ka credit period (days) integer me; khali ho to 0
                 $creditPeriod = (int) ($ledger->credit_period ?? 0);
 
+                // Open (unpaid/partly paid) invoices nikale: receipts ko FIFO se invoices me adjust karke
                 $openInvoices = $this->buildOpenInvoices($vouchers, $under, $creditPeriod, $today);
 
+                // Tally ka closing balance string me (null ho to '0')
                 $balance = (string) ($ledger->closing_balance ?? '0');
 
+                // DUE = sirf wo open invoices jinki days > 0 (due date nikal chuki), unka pending total
                 $due = $openInvoices->filter(fn($i) => $i['days'] > 0)
                     ->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
 
-
-                $notDue = bcsub(ltrim($balance, '-+'), $due, 2);
-                if (bccomp($notDue, '0', 2) < 0) {
-                    $notDue = '0';
-                }
-
+                // Saare open invoices ka pending total (due + not due dono)
                 $pendingBal = $openInvoices->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
 
+                // Balance - pending = wo amount jo invoices se match nahi hui (opening balance / unmatched)
                 $extraNotDue = bcsub(ltrim($balance, '-+'), $pendingBal, 2);
+                // Negative aaye to 0 kar do
                 if (bccomp($extraNotDue, '0', 2) < 0) {
                     $extraNotDue = '0';
                 }
 
+                // NOT DUE = (jo open invoices abhi due nahi hue) + (unmatched/opening amount)
+                $notDue = bcadd(
+                    $openInvoices->filter(fn($i) => $i['days'] <= 0)
+                        ->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0'),
+                    $extraNotDue,
+                    2
+                );
+
+                // Pichhle 6 mahino + aaj ke liye target rows banaye (overdue %, target collection, target balance)
                 $targetRows = $this->computeTargetRows($vouchers, $under, $creditPeriod, $ownerTargets, $nowForTarget, $extraNotDue);
 
-                $firstRow         = collect($targetRows)->reverse()->first(fn ($r) => $r['targetBal'] !== null);
-                $targetBalance    = $firstRow['targetBal'] ?? '0';
-                $targetCollection = $firstRow['targetCollection'] ?? '0';    
-    
+                // Rows ko ulta karke (latest se) pehli wo row li jisme targetBal null nahi hai
+                $firstRow         = collect($targetRows)->reverse()->first(fn($r) => $r['targetBal'] !== null);
+                $targetBalance    = $firstRow['targetBal'] ?? '0';          // Target Balance
+                $targetCollection = $firstRow['targetCollection'] ?? '0';   // Target Collection (kitna wasool karna hai)
+
+                // Ab is ledger ka final array return (yahi table ki ek row banegi)
                 return [
+                    'ledger_id'     => $ledger->id,
+                    // Is ledger ko assign hue collectors ki list
+                    'collector_ids' => $ledgerCollectorMap->get($ledger->id, []),
                     'unique_id' => $ledger->unique_ledger_id,
                     'name' => $ledger->ledger_name,
                     'under' => $under,
@@ -1241,6 +1347,7 @@ class OwnerController extends Controller
                     'receipts' => $receipts,
                     'payments' => $payments,
 
+                    // Interest wali values ledger table me pehle se saved hain, bas string me convert ki
                     'interest_cost' => (string) ($ledger->interest_cost ?? '0'),
                     'interest_received' => (string) ($ledger->interest_received ?? '0'),
                     'interest_paid' => (string) ($ledger->interest_paid ?? '0'),
@@ -1248,32 +1355,39 @@ class OwnerController extends Controller
                     'interest_waived' => (string) ($ledger->interest_waived ?? '0'),
 
                     'bad_debts' => (string) ($ledger->bad_debts ?? '0'),
+                    // Balance positive hai to Total Debtors me, negative hai to Total Creditors me (minus hata ke)
                     'total_debtors' => bccomp($balance, '0', 2) > 0 ? $balance : '0',
                     'total_creditors' => bccomp($balance, '0', 2) < 0 ? ltrim($balance, '-') : '0',
                     'march_closing_pending' => (string) ($ledger->march_closing_pending ?? '0'),
 
+                    // Ledger ke mark ko Bootstrap badge colour me badla: green->success, red->danger, baaki->secondary
                     'status' => match ($ledger->mark) {
                         'green' => 'success',
                         'red' => 'danger',
                         default => 'secondary',
                     },
 
+                    // overlimit DB me string/0/1 ho sakta hai, isko proper true/false boolean banaya
                     'overlimit' => filter_var($ledger->overlimit, FILTER_VALIDATE_BOOLEAN),
                     'rank' => $ledger->rank ?? null,
                 ];
             });
 
-            return view('owner.tally.tally.ledgers', compact('company', 'ledgers'));
+            // Blade view ko company naam, ledgers ki list aur collectors dropdown data bheja
+            return view('owner.tally.tally.ledgers', compact('company', 'ledgers', 'collectors'));
 
         } catch (\Exception $e) {
+            // Koi bhi error aaye to log me detail likho
             Log::error('Tally companyLedgers failed', [
                 'company' => $company,
                 'error' => $e->getMessage(),
             ]);
 
+            // User ko pichle page par bhej do error message ke saath
             return back()->with('error', 'Unable to fetch ledgers from Tally. Please try again.');
         }
     }
+
 
     public function updateCreditPeriod(Request $request)
     {
@@ -1333,28 +1447,43 @@ class OwnerController extends Controller
     public function ledgerDueVouchers(Request $request)
     {
         try {
+            // URL query se company aur ledger ka naam liya, (string) cast se null hone par bhi '' milega
             $company = (string) $request->query('company');
             $ledger = (string) $request->query('ledger');
+
+            // Logged-in owner
             $owner = Auth::guard('owner')->user();
+
+            // URL-encoded company naam (abhi aage use nahi hua, unused variable hai)
             $com = urlencode($company);
 
+            // Owner ki company dhundhi; nahi mili to exception (firstOrFail)
             $tallyCompany = TallyCompany::where('owner_id', $owner->id)
                 ->where('company_name', $company)
                 ->firstOrFail();
 
+            // Us company ka wo ledger dhundha; nahi mila to exception
             $ledgerModel = TallyLedger::where('owner_id', $owner->id)
                 ->where('tally_company_id', $tallyCompany->id)
                 ->where('ledger_name', $ledger)
                 ->firstOrFail();
 
+            // Debtor ya Creditor
             $under = $ledgerModel->parent;
+
+            // Ledger ka credit period (days), khali ho to 0
             $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+
+            // Aaj ki date, din ki shuruaat par
             $today = Carbon::now()->startOfDay();
 
+            // Voucher type -> mapped type (Sales/Purchase) ka dictionary
             $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
                 ->pluck('mapped_to', 'voucher_type')
                 ->toArray();
 
+            // Is ledger ke saare vouchers laaye aur har ek ko classify kiya (debit/credit/mapped type)
+            // saath me id, due_date, voucher_number aur credit period (aur uska source) bhi jodi
             $rows = TallyVoucher::where('owner_id', $owner->id)
                 ->where('tally_company_id', $tallyCompany->id)
                 ->where('ledger_id', $ledgerModel->id)
@@ -1367,21 +1496,33 @@ class OwnerController extends Controller
                     'credit_period_source' => $v->credit_period_source,
                 ]);
 
+            // Lookup maps: voucher_number -> uska credit period / uska source ('voucher' ya 'default' etc.)
             $creditPeriodByVoucherNumber = $rows->pluck('credit_period', 'voucher_number');
             $creditPeriodSourceByVoucherNumber = $rows->pluck('credit_period_source', 'voucher_number');
 
+            // Request Not Due ki hai ya Due ki
             $isNotDue = $request->query('type') === 'not_due';
+
+            // Open invoices (FIFO se receipts adjust karke), aaj ke hisaab se
             $openInvoices = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today);
 
+            // Kaunsi invoices dikhani hain:
             $selected = $isNotDue
+                // Not Due: days <= 0, 'days' ascending (jiski due date sabse door hai wo pehle)
                 ? $openInvoices->filter(fn($i) => $i['days'] <= 0)->sortBy('days')
+                // Due: days > 0, 'days' descending (sabse zyada overdue pehle)
                 : $openInvoices->filter(fn($i) => $i['days'] > 0)->sortByDesc('days');
 
+            // Selected invoices ko response ke format me badla
             $dueRows = $selected
                 ->map(function ($i) use ($creditPeriodByVoucherNumber, $creditPeriodSourceByVoucherNumber, $creditPeriod) {
+
+                    // Is invoice ka apna credit period aur uska source nikala
                     $voucherCP = $creditPeriodByVoucherNumber->get($i['voucher_number']);
                     $voucherSource = $creditPeriodSourceByVoucherNumber->get($i['voucher_number']);
 
+                    // Agar voucher par alag se credit period set kiya gaya hai (source = 'voucher') to wahi,
+                    // warna ledger ka credit period
                     $resolvedCP = ($voucherSource === 'voucher') ? $voucherCP : $creditPeriod;
 
                     return [
@@ -1390,47 +1531,67 @@ class OwnerController extends Controller
                         'due_date' => $i['due_date'],
                         'voucher_number' => $i['voucher_number'],
                         'days' => $i['days'],
-                        'amount' => $i['pending'],
-                        'original' => $i['original'],
-                        'credit_period' => (int) $resolvedCP,
+                        'amount' => $i['pending'],        // baaki bachi amount
+                        'original' => $i['original'],     // invoice ki poori amount
+                        'credit_period' => (int) $resolvedCP,   // "30 Days" jaisi string ko int 30 banata hai
                     ];
                 })->values();
 
+            // Total = dikhayi gayi rows ki pending amount ka sum
             $total = $dueRows->reduce(fn($t, $r) => bcadd($t, $r['amount'], 2), '0');
 
+            // ====== Yahan se sirf NOT DUE ke liye extra logic ======
             if ($isNotDue) {
+
+                // Ledger ka closing balance, sign hata ke
                 $balanceAbs = ltrim((string) ($ledgerModel->closing_balance ?? '0'), '-+');
+
+                // Overdue invoices ka total
                 $dueSum = $openInvoices->filter(fn($i) => $i['days'] > 0)
                     ->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
 
+                // Not Due total = balance - due (yahi companyLedgers wale not_due se match hona chahiye)
                 $notDueTotal = bcsub($balanceAbs, $dueSum, 2);
                 if (bccomp($notDueTotal, '0', 2) < 0) {
                     $notDueTotal = '0';
                 }
 
+                // Abhi jo rows dikhayi gayi unke baad kitna amount "explain" hona baaki hai
                 $remaining = bcsub($notDueTotal, $total, 2);
 
+                // Agar kuch amount rows se explain nahi hua (opening / unmatched balance)
                 if (bccomp($remaining, '0', 2) > 0) {
+
                     $isCreditor = $under === 'Sundry Creditors';
+
+                    // Jo voucher numbers pehle se open invoices me aa chuke hain unhe dobara nahi lena
                     $usedNumbers = $openInvoices->pluck('voucher_number')->all();
 
+                    // Candidate vouchers: jo abhi list me nahi hain aur jinki apni side ki amount > 0 hai
+                    // (Creditor me credit side, Debtor me debit side), sabse naye pehle
                     $candidates = $rows
                         ->filter(fn($r) => !in_array($r['voucher_number'], $usedNumbers, true)
                             && bccomp($isCreditor ? $r['credit'] : $r['debit'], '0', 2) > 0)
                         ->sortByDesc(fn($r) => Carbon::parse($r['date'])->timestamp)
                         ->values();
 
+                    // Naye voucher se shuru karke remaining amount ko voucher-wise bharte jao
                     foreach ($candidates as $r) {
+                        // Remaining 0 ho gaya to ruk jao
                         if (bccomp($remaining, '0', 2) <= 0) {
                             break;
                         }
 
+                        // Voucher ki amount
                         $amt = $isCreditor ? $r['credit'] : $r['debit'];
+
+                        // Itni lo jitni remaining hai (ya voucher ki poori, jo chhota ho)
                         $take = bccomp($remaining, $amt, 2) < 0 ? $remaining : $amt;
 
                         $voucherDate = Carbon::parse($r['date'])->startOfDay();
                         $dueDate = $this->resolveDueDate($r['due_date'] ?? null, $voucherDate, $creditPeriod);
 
+                        // List me nayi row (days aaj ke hisaab se)
                         $dueRows->push([
                             'id' => $r['id'] ?? null,
                             'date' => $voucherDate->toDateString(),
@@ -1442,9 +1603,12 @@ class OwnerController extends Controller
                             'credit_period' => $creditPeriod,
                         ]);
 
+                        // Remaining kam kiya
                         $remaining = bcsub($remaining, $take, 2);
                     }
 
+                    // Candidates khatam ho gaye par abhi bhi amount bachi hai
+                    // to ek alag row "Opening / Other adjustment" ke naam se
                     if (bccomp($remaining, '0', 2) > 0) {
                         $dueRows->push([
                             'id' => null,
@@ -1458,12 +1622,15 @@ class OwnerController extends Controller
                         ]);
                     }
 
+                    // Date ke hisaab se naye se purane sort (null date wali row last me)
                     $dueRows = $dueRows->sortByDesc('date')->values();
                 }
 
+                // Final total balance - due ke barabar rakha
                 $total = $notDueTotal;
             }
 
+            // JSON response: rows, total aur ledger ka credit period
             return response()->json([
                 'vouchers' => $dueRows,
                 'total' => $total,
@@ -1471,12 +1638,14 @@ class OwnerController extends Controller
             ]);
 
         } catch (\Throwable $e) {
+            // Koi bhi error to log me detail
             Log::error('Tally ledgerDueVouchers failed', [
                 'company' => $request->query('company'),
                 'ledger' => $request->query('ledger'),
                 'error' => $e->getMessage(),
             ]);
 
+            // Frontend ko 500 aur simple message
             return response()->json(['message' => 'Unable to fetch due vouchers.'], 500);
         }
     }
@@ -1484,41 +1653,64 @@ class OwnerController extends Controller
 
 
 
+    // $rows = classified vouchers, $under = Debtor/Creditor, $creditPeriod = ledger ke days
+    // $targets = [bucket_month => receivable_target %], $now = reference time, $extraNotDue = unmatched/opening amount
     private function computeTargetRows($rows, string $under, int $creditPeriod, $targets, ?Carbon $now = null, string $extraNotDue = '0'): array
     {
+        // $now nahi diya to abhi ka time
         $now = $now ?? now();
+
+        // Aaj ki date, din ki shuruaat par
         $today = $now->copy()->startOfDay();
 
+        // Closure: open invoices ki collection ka 'pending' total (bcmath string me)
         $sumPending = fn($c) => $c->reduce(fn($t, $p) => bcadd($t, $p['pending'], 2), '0');
 
-        // Balance Today = aaj ke open invoices + unmatched amount
+        // BALANCE TODAY = aaj ke open invoices ka pending + unmatched amount
         $openToday = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today);
         $balance = bcadd($sumPending($openToday), $extraNotDue, 2);
+
+        // Balance 0 se zyada hai ya nahi (neeche % nikalte waqt zero se divide na ho)
         $hasBalance = bccomp($balance, '0', 2) > 0;
 
+        // Output rows yahan jama hongi
         $out = [];
+
+        // Ab tak ke months me w1 ka sabse bada value (running maximum), shuru me koi nahi
         $runningMaxW1 = null;
 
+        // 6 se 0 tak loop: i = kitne mahine pehle (6 = sabse purana, 0 = aaj)
         for ($i = 6; $i >= 0; $i--) {
+
+            // i=0 to aaj; warna us mahine ka last din
+            // (pehle startOfMonth kiya phir subMonths, taaki 31 tarikh wale month overflow na karein)
             $monthEnd = $i === 0
                 ? $now->copy()
                 : $now->copy()->startOfMonth()->subMonths($i)->endOfMonth();
 
+            // Cutoff = us din ki shuruaat
             $cutoff = $monthEnd->copy()->startOfDay();
 
-            // ✅ Us month-end tak ke invoices + receipts se pending
+            // SNAPSHOT: us month-end tak ke invoices + receipts lekar us din ki pending sthiti
+            // ($asOf = $cutoff, isliye 'days' bhi us din ke hisaab se nikalega)
             $snap = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today, $cutoff);
 
-            $overdue = $sumPending($snap->filter(fn($p) => $p['days'] > 0));   // due_date < cutoff
+            // OVERDUE = us din jin invoices ki due date nikal chuki thi (days > 0), unka pending total
+            $overdue = $sumPending($snap->filter(fn($p) => $p['days'] > 0));
+
+            // NOT DUE = jo us din tak due nahi hue (days <= 0) + unmatched amount
             $notDue = bcadd($sumPending($snap->filter(fn($p) => $p['days'] <= 0)), $extraNotDue, 2);
 
+            // Is mahine ki row ka base structure
             $row = [
-                'month' => $monthEnd->format('M-y'),
+                'month' => $monthEnd->format('M-y'),   // e.g. "Sep-26"
                 'overdue' => $overdue,
                 'notDue' => $notDue,
-                'balance' => $balance,
+                'balance' => $balance,                 // NOTE: har row me aaj ka balance hi hai
+                // Overdue % = overdue / balance * 100 (6 decimal tak divide, phir 2 decimal me round)
                 'pctOverdue' => $hasBalance ? bcmul(bcdiv($overdue, $balance, 6), '100', 2) : '0',
                 'pctNotDue' => $hasBalance ? bcmul(bcdiv($notDue, $balance, 6), '100', 2) : '0',
+                // Neeche ke fields shuru me null, target milne par bharenge
                 'target' => null,
                 'w1' => null,
                 'w2' => null,
@@ -1526,80 +1718,128 @@ class OwnerController extends Controller
                 'targetBal' => null,
             ];
 
+            // Target sirf pichhle mahino ke liye (i > 0); aaj wali row (i=0) me target nahi hota
             if ($i > 0) {
+
+                // Owner ne is bucket (i mahine pehle) ka target % set kiya hai ya nahi
                 $t = $targets[$i] ?? null;
+
                 if ($t !== null) {
                     $t = (string) $t;
+
+                    // W1 = actual overdue - (balance ka target %)
+                    // yaani target % se kitna zyada overdue pada hai wo amount
                     $w1 = bcsub($overdue, bcdiv(bcmul($balance, $t, 6), '100', 2), 2);
+
+                    // Negative ho (target se andar hai) to 0
                     if (bccomp($w1, '0', 2) < 0) {
                         $w1 = '0.00';
                     }
+
+                    // Running max: ab tak ka sabse bada W1 yaad rakhte hain
                     if ($runningMaxW1 === null || bccomp($w1, $runningMaxW1, 2) > 0) {
                         $runningMaxW1 = $w1;
                     }
 
-                    $row['target'] = $t;
-                    $row['w1'] = $w1;
-                    $row['w2'] = $runningMaxW1;
-                    $row['targetCollection'] = $runningMaxW1;
-                    $row['targetBal'] = bcsub($balance, $w1, 2);
+                    $row['target'] = $t;                       // us mahine ka target %
+                    $row['w1'] = $w1;                          // is mahine ka extra overdue
+                    $row['w2'] = $runningMaxW1;                // ab tak ka max W1
+                    $row['targetCollection'] = $runningMaxW1;  // wasool karne wali amount (w2 jaisi hi)
+
+                    // TARGET BALANCE = aaj ka balance - target collection
+                    $targetBal = bcsub($balance, $runningMaxW1, 2);
+                    if (bccomp($targetBal, '0', 2) < 0) {
+                        $targetBal = '0.00';
+                    }
+                    $row['targetBal'] = $targetBal;
                 }
             }
 
+            // Row output me daali
             $out[] = $row;
         }
 
+        // 7 rows: purane se naye (6 mahine pehle ... aaj)
         return $out;
     }
+
 
     public function ledgerTargetData(Request $request)
     {
         try {
+            // Logged-in owner ki sirf id (owner guard se)
             $ownerId = Auth::guard('owner')->id();
 
+            // Request ke 3 fields zaroori hain, nahi to 422 validation error automatic chala jayega
             $request->validate([
                 'company' => 'required|string',
                 'ledger' => 'required|string',
-                'under' => 'required|string',
+                'under' => 'required|string',   // NOTE: validate to hota hai, par aage use nahi hota (neeche ledger ka parent hi use hota hai)
             ]);
 
+            // Owner ki company dhundhi; nahi mili to exception (firstOrFail)
             $tallyCompany = TallyCompany::where('owner_id', $ownerId)
                 ->where('company_name', $request->company)
                 ->firstOrFail();
 
+            // Is company ke overdue target % settings: [bucket_month => receivable_target]
+            // e.g. [1 => 10, 2 => 8, ...] (1 = 1 mahina pehle, 2 = 2 mahine pehle...)
             $targets = OverdueTargetSetting::where('owner_id', $ownerId)
                 ->where('company_id', $tallyCompany->id)
                 ->pluck('receivable_target', 'bucket_month');
 
+            // Us company ka wo ledger dhundha; nahi mila to exception
             $ledgerModel = TallyLedger::where('owner_id', $ownerId)
                 ->where('tally_company_id', $tallyCompany->id)
                 ->where('ledger_name', $request->ledger)
                 ->firstOrFail();
 
+            // Debtor ya Creditor (DB se, request wale 'under' se nahi)
             $under = $ledgerModel->parent;
+
+            // Ledger ka credit period (days), khali ho to 0
             $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+
+            // Is ledger ke saare classified voucher rows (helper function se)
             $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
 
+            // Aaj ke open invoices (FIFO se receipts adjust karke)
             $pending = $this->buildOpenInvoices($rows, $under, $creditPeriod, Carbon::now()->startOfDay());
+
+            // Closing balance, sign hata ke
             $balanceAbs = ltrim((string) ($ledgerModel->closing_balance ?? '0'), '-+');
+
+            // Saare open invoices ka pending total
             $pendingSum = $pending->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
+
+            // Balance - pending = wo amount jo kisi invoice se match nahi hui (opening / unmatched)
             $extraNotDue = bcsub($balanceAbs, $pendingSum, 2);
+
+            // Negative aaye to 0
             if (bccomp($extraNotDue, '0', 2) < 0) {
                 $extraNotDue = '0';
             }
 
+            // 7 rows ka target table JSON me bhej diya
+            // $now = null pass kiya, to computeTargetRows andar se now() le leta hai
             return response()->json([
                 'rows' => $this->computeTargetRows($rows, $under, $creditPeriod, $targets, null, $extraNotDue),
             ]);
 
-        } catch (\Illuminate\Validation\ValidationException $e) {
+        } catch (ValidationException $e) {
+            // Validation error ko dobara throw kiya, taaki Laravel use 422 + errors JSON ke roop me bheje
+            // (warna neeche wala generic catch use 500 bana deta)
             throw $e;
+
         } catch (\Throwable $e) {
+            // Baaki koi bhi error: log me detail
             Log::error('Tally ledgerTargetData failed', [
                 'company' => $request->company,
                 'ledger' => $request->ledger,
                 'error' => $e->getMessage(),
             ]);
+
+            // Frontend ko 500 aur simple message
             return response()->json(['message' => 'Unable to fetch target data.'], 500);
         }
     }
@@ -1608,48 +1848,60 @@ class OwnerController extends Controller
     public function ledgerInterestData(Request $request)
     {
         try {
+            // Logged-in owner ki id
             $ownerId = Auth::guard('owner')->id();
 
+            // Company aur ledger zaroori; 'under' optional hai (par aage use nahi hota, ledger ka parent hi use hota hai)
             $request->validate([
                 'company' => 'required|string',
                 'ledger'  => 'required|string',
                 'under'   => 'nullable|string',
             ]);
 
+            // Owner ki company dhundhi, nahi mili to exception
             $tallyCompany = TallyCompany::where('owner_id', $ownerId)
                 ->where('company_name', $request->company)
                 ->firstOrFail();
 
+            // Us company ka ledger dhundha, nahi mila to exception
             $ledgerModel = TallyLedger::where('owner_id', $ownerId)
                 ->where('tally_company_id', $tallyCompany->id)
                 ->where('ledger_name', $request->ledger)
                 ->firstOrFail();
 
-            $under        = $ledgerModel->parent;
-            $isCreditor   = $under === 'Sundry Creditors';
-            $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
-            $today        = Carbon::now()->startOfDay();
+            $under        = $ledgerModel->parent;                       // Debtor ya Creditor
+            $isCreditor   = $under === 'Sundry Creditors';              // true = Creditor
+            $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);   // ledger ke credit days
+            $today        = Carbon::now()->startOfDay();                // aaj ki date
 
-            $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per annum
-            // ✅ Ab ledger ka base_interest_rate; khali ho to config fallback
+            // Party ka interest rate (% per annum), string me (bcmath ke liye)
+            $partyRate = (string) ($ledgerModel->interest_rate ?? '0');
+
+            // Base rate: ledger me bhara ho to wahi, warna config('app.base_interest_rate'), wo bhi na ho to 12
             $baseRate  = !blank($ledgerModel->base_interest_rate)
                 ? (string) $ledgerModel->base_interest_rate
                 : (string) config('app.base_interest_rate', 12);
 
+            // Simple interest formula: amount * rate% * days / 365  =>  amt * rate * days / 36500
+            // days <= 0 ho to interest 0
             $interestYearly = fn($amt, $rate, $days) =>
                 $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '36500', 2) : '0.00';
 
+            // Interest on Interest: amt * rate * days / 3000  (yaani amt * (rate/100) * (days/30))
+            // Yahan $amt me aage "interest" hi pass hota hai, isliye interest par interest nikalta hai
             $interestOnInt = fn($amt, $rate, $days) =>
                 $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '3000', 2) : '0.00';
 
+            // Is ledger ke saare classified voucher rows (settlement fields ke saath)
             $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
 
-            // ===== PENDING invoices (overdue) =====
+            // ===== PENDING invoices (abhi overdue) =====
             $pending = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today)
-                ->filter(fn($i) => $i['days'] > 0)
-                ->sortByDesc('days')
+                ->filter(fn($i) => $i['days'] > 0)    // sirf overdue wale
+                ->sortByDesc('days')                  // sabse zyada overdue pehle
                 ->values()
                 ->map(function ($i) use ($interestYearly, $partyRate, $baseRate, $today) {
+                    // Due date se aaj tak overdue days (overdueDays helper se, negative ho to 0)
                     $days = $this->overdueDays($i['due_date'], $today);
 
                     return [
@@ -1658,32 +1910,31 @@ class OwnerController extends Controller
                         'due_date'       => $i['due_date'],
                         'inv_no'         => $i['voucher_number'],
                         'days'           => $days,
-                        'amount'         => $i['pending'],
+                        'amount'         => $i['pending'],   // baaki amount, isi par interest lagta hai
+                        // Party rate par interest
                         'interest_due'   => $interestYearly($i['pending'], $partyRate, $days),
+                        // Base rate par interest (_b = base)
                         'interest_due_b' => $interestYearly($i['pending'], $baseRate, $days),
                     ];
                 });
 
-            // ===== RECEIVED invoices (late paid) : FIFO allocation =====
+                        // ===== RECEIVED invoices (jo late paid hue): FIFO allocation =====
+
+            // Receipts (Debtor) / Payments (Creditor) ki list, purani date pehle
+            // Har receipt ke saath 'remaining' (abhi kitna use hona baaki hai)
             $receipts = $rows
                 ->filter(fn($r) => $isCreditor
                     ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
                     : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
                 ->sortBy(fn($r) => Carbon::parse($r['date'])->timestamp)
-                ->map(function ($r) use ($isCreditor) {
-                    $left = is_numeric($r['settlement_amount'] ?? null) ? (string) $r['settlement_amount'] : '0';
-                    return [
-                        'voucher_number'    => $r['voucher_number'],
-                        'date'              => Carbon::parse($r['date'])->startOfDay(),
-                        'remaining'         => $isCreditor ? $r['debit'] : $r['credit'],
-                        'settlement_status' => $r['settlement_status'] ?? null,
-                        'settlement_left'   => $left,    // party rate ke liye
-                        'settlement_left_b' => $left,    // ✅ base rate ke liye alag pool
-                    ];
-                })
+                ->map(fn($r) => [
+                    'date'      => Carbon::parse($r['date'])->startOfDay(),
+                    'remaining' => $isCreditor ? $r['debit'] : $r['credit'],
+                ])
                 ->values()
-                ->all();
+                ->all();   // plain array (taaki neeche $receipts[$ptr]['remaining'] edit ho sake)
 
+            // Invoices (Sales / Purchase), purani date pehle
             $invoices = $rows
                 ->filter(fn($r) => $isCreditor
                     ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
@@ -1691,72 +1942,89 @@ class OwnerController extends Controller
                 ->sortBy(fn($r) => Carbon::parse($r['date'])->timestamp)
                 ->values();
 
-            $received = collect();
-            $ptr = 0;
-            $settlementLeftById = [];
+            $received = collect();            // late paid rows yahan jama hongi
+            $ptr = 0;                         // receipts list me abhi kaunsi receipt chal rahi hai (pointer)
+            $settlementLeftById = [];         // (abhi kahin fill nahi hota, hamesha khali rehta hai)
 
+            // Har invoice par loop (purani se nayi)
             foreach ($invoices as $inv) {
-                $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
+                $need        = $isCreditor ? $inv['credit'] : $inv['debit'];   // invoice ko clear karne ke liye kitna chahiye
                 $voucherDate = Carbon::parse($inv['date'])->startOfDay();
                 $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
 
+                // Is invoice par settlement hui hai ya nahi (voucher me saved)
+                $invStatus    = strtolower((string) ($inv['settlement_status'] ?? ''));
+                $isSettledInv = ($invStatus === 'settled');
+
+                // Settlement ki amount (numeric ho to wahi, warna 0)
+                $leftP = is_numeric($inv['settlement_amount'] ?? null) ? (string) $inv['settlement_amount'] : '0';
+                $leftB = $leftP;   // Party aur Base dono ke liye alag alag "bacha hua settlement" track hota hai
+
+                // Jab tak invoice clear nahi hui aur receipts bachi hain
                 while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
+
+                    // Current receipt khatam ho chuki to agli receipt par jao
                     if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
                         $ptr++;
                         continue;
                     }
 
+                    // Is round me kitna adjust hoga: invoice ki need aur receipt ka remaining, dono me jo chhota
                     $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
                         ? $need : $receipts[$ptr]['remaining'];
 
+                    // Receipt aur invoice dono se wo amount ghata di
                     $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
                     $need = bcsub($need, $take, 2);
 
+                    // Is receipt ki date, aur due date ke baad kitne din late aayi
                     $recdDate  = $receipts[$ptr]['date'];
-                    $delayDays = (int) $dueDate->diffInDays($recdDate, false);
+                    $delayDays = (int) $dueDate->diffInDays($recdDate, false);   // positive = due date ke baad aayi
 
+                    // Sirf late payment par interest banta hai
                     if ($delayDays > 0) {
+                        // Receipt aaye hue aaj tak kitne din ho gaye
                         $daysSince = (int) $recdDate->diffInDays($today, false);
 
-                        // ---- Party rate ----
+                        // Party rate: simple interest, uske upar interest-on-interest, dono ka sum = Interest Due
                         $intPending  = $interestYearly($take, $partyRate, $delayDays);
                         $intOnInt    = $interestOnInt($intPending, $partyRate, $delayDays);
                         $interestDue = bcadd($intPending, $intOnInt, 2);
 
-                        // ---- Base rate ----
+                        // Wahi calculation Base rate par
                         $intPendingB  = $interestYearly($take, $baseRate, $delayDays);
                         $intOnIntB    = $interestOnInt($intPendingB, $baseRate, $delayDays);
                         $interestDueB = bcadd($intPendingB, $intOnIntB, 2);
 
-                        $rStatus        = strtolower((string) ($receipts[$ptr]['settlement_status'] ?? ''));
-                        $isSettledPiece = ($rStatus === 'settled');
 
-                        if ($isSettledPiece) {
-                            // party
-                            $rLeft         = $receipts[$ptr]['settlement_left'];
-                            $settlementAmt = bccomp($rLeft, $interestDue, 2) < 0 ? $rLeft : $interestDue;
-                            $receipts[$ptr]['settlement_left'] = bcsub($rLeft, $settlementAmt, 2);
-                            $interestWaived = bcsub($interestDue, $settlementAmt, 2);
-                            $settledRequest = $interestDue;
+                                            if ($isSettledInv) {
+                            // PARTY: settlement amount utni lo jitni bachi hai, par interest due se zyada nahi
+                            $settlementAmt  = bccomp($leftP, $interestDue, 2) < 0 ? $leftP : $interestDue;
+                            $leftP          = bcsub($leftP, $settlementAmt, 2);          // bacha hua settlement
+                            $interestWaived = bcsub($interestDue, $settlementAmt, 2);    // maaf hua interest = due - settlement
+                            $settledRequest = $interestDue;                              // settlement ke liye request hui amount
 
-                            // base
-                            $rLeftB         = $receipts[$ptr]['settlement_left_b'];
-                            $settlementAmtB = bccomp($rLeftB, $interestDueB, 2) < 0 ? $rLeftB : $interestDueB;
-                            $receipts[$ptr]['settlement_left_b'] = bcsub($rLeftB, $settlementAmtB, 2);
+                            // BASE: same logic base rate ke saath
+                            $settlementAmtB  = bccomp($leftB, $interestDueB, 2) < 0 ? $leftB : $interestDueB;
+                            $leftB           = bcsub($leftB, $settlementAmtB, 2);
                             $interestWaivedB = bcsub($interestDueB, $settlementAmtB, 2);
                             $settledRequestB = $interestDueB;
                         } else {
+                            // Settlement nahi hui to sab 0
                             $settlementAmt = $interestWaived = $settledRequest = '0.00';
                             $settlementAmtB = $interestWaivedB = $settledRequestB = '0.00';
                         }
 
+                        // Is chunk ki row jama ki
                         $received->push([
+                            'id'                => $inv['id'],          // invoice ka id
                             'inv_no'            => $inv['voucher_number'],
                             'recd_date'         => $recdDate->toDateString(),
                             'amount'            => $take,
                             'days'              => $delayDays,
                             'days_since'        => $daysSince,
 
+                            // Party rate ke numbers
                             'int_pending'       => $intPending,
                             'int_on_int'        => $intOnInt,
                             'interest_due'      => $interestDue,
@@ -1764,6 +2032,7 @@ class OwnerController extends Controller
                             'interest_waived'   => $interestWaived,
                             'settled_request'   => $settledRequest,
 
+                            // Base rate ke numbers (_b)
                             'int_pending_b'       => $intPendingB,
                             'int_on_int_b'        => $intOnIntB,
                             'interest_due_b'      => $interestDueB,
@@ -1771,22 +2040,24 @@ class OwnerController extends Controller
                             'interest_waived_b'   => $interestWaivedB,
                             'settled_request_b'   => $settledRequestB,
 
-                            'settlement_status' => $rStatus ?: null,
-                            'is_settled'        => $isSettledPiece,
+                            'settlement_status' => $invStatus ?: null,
+                            'is_settled'        => $isSettledInv,
                         ]);
                     }
                 }
             }
 
+            // Ek invoice kai receipts se bhar sakti hai (kai chunks). Unhe invoice number se group karke ek row banayi
             $received = $received
                 ->groupBy('inv_no')
                 ->map(function ($group) {
                     $first = $group->first();
+                    // Group me kisi column ka sum nikalne wala helper
                     $sum = fn($key) => $group->reduce(fn($t, $r) => bcadd($t, (string) $r[$key], 2), '0');
 
                     return array_merge($first, [
-                        'recd_date'           => $group->last()['recd_date'],
-                        'days'                => $group->max('days'),
+                        'recd_date'           => $group->last()['recd_date'],   // aakhri receipt ki date
+                        'days'                => $group->max('days'),           // sabse zyada delay
                         'amount'              => $sum('amount'),
 
                         'int_pending'         => $sum('int_pending'),
@@ -1803,26 +2074,32 @@ class OwnerController extends Controller
                         'interest_waived_b'   => $sum('interest_waived_b'),
                         'settled_request_b'   => $sum('settled_request_b'),
 
+                        // Koi bhi chunk settled hai to poori invoice settled
                         'is_settled'          => $group->contains('is_settled', true),
                         'settlement_status'   => $group->contains('is_settled', true) ? 'settled' : $first['settlement_status'],
                     ]);
                 })
                 ->values();
 
+            // id se voucher rows ka lookup (pending invoices ki settlement info nikalne ke liye)
             $rowsById = $rows->keyBy('id');
 
+            // PENDING rows me settlement info jodi
             $pending = $pending->map(function ($p) use ($rowsById, $settlementLeftById) {
-                $src    = $rowsById->get($p['id']);
+                $src    = $rowsById->get($p['id']);               // original voucher row
                 $status = $src['settlement_status'] ?? null;
 
+                // Settlement amount (settlementLeftById khali rehta hai, to voucher ki settlement_amount hi use hogi)
                 $left = $settlementLeftById[$p['id']]
                     ?? (is_numeric($src['settlement_amount'] ?? null) ? (string) $src['settlement_amount'] : '0');
 
                 $isSettled = strtolower((string) $status) === 'settled';
 
+                // Settled ho to settlement = min(left, interest due), warna 0 (party aur base dono ke liye)
                 $amt  = $isSettled ? (bccomp($left, $p['interest_due'], 2)   < 0 ? $left : $p['interest_due'])   : '0.00';
                 $amtB = $isSettled ? (bccomp($left, $p['interest_due_b'], 2) < 0 ? $left : $p['interest_due_b']) : '0.00';
 
+                // Purani row + naye settlement fields
                 return $p + [
                     'settlement_status'   => $status,
                     'settlement_amount'   => $amt,
@@ -1832,22 +2109,25 @@ class OwnerController extends Controller
                 ];
             })->values();
 
+            // Helper: row settled hai ya nahi
             $isSettledRow = fn($r) => strtolower((string) ($r['settlement_status'] ?? '')) === 'settled';
 
-            // ===== Totals: Party =====
-            $receivedTotal = $received->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-            $pendingTotal  = $pending->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
+            // ===== Totals: Party rate =====
+            $receivedTotal = $received->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');   // late paid ka total interest
+            $pendingTotal  = $pending->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');    // pending ka total interest
 
+            // Received ke settlement totals: request, mila, aur maaf hua (request - mila)
             $settlementRequestTotal  = $received->reduce(fn($t, $r) => bcadd($t, $r['settled_request'], 2), '0');
             $settlementReceivedTotal = $received->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
             $interestWaivedTotal     = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
 
+            // Pending me se sirf settled rows ke totals
             $pendingSettled = $pending->filter($isSettledRow);
             $pendingSettlementRequestTotal  = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
             $pendingSettlementReceivedTotal = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
             $pendingInterestWaivedTotal     = bcsub($pendingSettlementRequestTotal, $pendingSettlementReceivedTotal, 2);
 
-            // ===== Totals: Base =====
+            // ===== Totals: Base rate (upar jaisa hi, _b columns se) =====
             $receivedTotalB = $received->reduce(fn($t, $r) => bcadd($t, $r['interest_due_b'], 2), '0');
             $pendingTotalB  = $pending->reduce(fn($t, $r) => bcadd($t, $r['interest_due_b'], 2), '0');
 
@@ -1859,12 +2139,13 @@ class OwnerController extends Controller
             $pendingSettlementReceivedTotalB = $pendingSettled->reduce(fn($t, $r) => bcadd($t, $r['settlement_amount_b'], 2), '0');
             $pendingInterestWaivedTotalB     = bcsub($pendingSettlementRequestTotalB, $pendingSettlementReceivedTotalB, 2);
 
+            // JSON response: rates, saare totals (party + base), aur dono lists
             return response()->json([
                 'party_rate' => $partyRate,
                 'base_rate'  => $baseRate,
 
                 // party
-                'total'                             => bcadd($receivedTotal, $pendingTotal, 2),
+                'total'                             => bcadd($receivedTotal, $pendingTotal, 2),   // received + pending interest
                 'received_total'                    => $receivedTotal,
                 'pending_total'                     => $pendingTotal,
                 'settlement_request_total'          => $settlementRequestTotal,
@@ -1889,9 +2170,11 @@ class OwnerController extends Controller
                 'pending'  => $pending,
             ]);
 
-        } catch (\Illuminate\Validation\ValidationException $e) {
+        } catch (ValidationException $e) {
+            // Validation error ko wapas throw, taaki Laravel 422 bheje
             throw $e;
         } catch (\Throwable $e) {
+            // Baaki errors: log karke 500
             Log::error('Tally ledgerInterestData failed', [
                 'company' => $request->company,
                 'ledger'  => $request->ledger,
@@ -1900,6 +2183,7 @@ class OwnerController extends Controller
             return response()->json(['message' => 'Unable to fetch interest data.'], 500);
         }
     }
+    
 
 
     // public function ledgerInterestData(Request $request)
@@ -2112,181 +2396,351 @@ class OwnerController extends Controller
     // }
 
     // naya helper: raw classified rows
+    // $ownerId = owner ki id, $tallyCompany = TallyCompany model, $ledgerModel = TallyLedger model
     private function getLedgerVoucherRows(int $ownerId, $tallyCompany, $ledgerModel)
     {
+        // Voucher type -> mapped type ka dictionary, e.g. ["Sales GST" => "Sales"]
+        // classifyVoucherRow ko ye chahiye, taaki wo Sales/Purchase pehchan sake
         $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
             ->pluck('mapped_to', 'voucher_type')
             ->toArray();
 
-        return TallyVoucher::where('owner_id', $ownerId)
-            ->where('tally_company_id', $tallyCompany->id)
-            ->where('ledger_id', $ledgerModel->id)
-            ->get()
+        return TallyVoucher::where('owner_id', $ownerId)                  // sirf is owner ke vouchers
+            ->where('tally_company_id', $tallyCompany->id)               // sirf is company ke
+            ->where('ledger_id', $ledgerModel->id)                       // sirf is ledger ke
+            ->get()                                                      // saare vouchers collection me
             ->map(fn($v) => $this->classifyVoucherRow($v, $ledgerModel->parent, $voucherMappings) + [
-                'id' => $v->id,
-                'due_date' => $v->due_date ?? null,
-                'voucher_number' => $v->voucher_number,
-                'credit_period' => $v->credit_period,
-                'credit_period_source' => $v->credit_period_source,
-                'settlement_status'    => $v->settlement_status ?? null,   // ✅ NEW
-                'settlement_amount'    => (string) ($v->settlement_amount ?? '0'),   // ✅ NEW
+                // classifyVoucherRow se aaya array (date, debit, credit, mapped_type...) + neeche ki extra fields
+
+                'id' => $v->id,                                          // voucher ka DB id
+                'due_date' => $v->due_date ?? null,                      // voucher me saved due date, na ho to null
+                'voucher_number' => $v->voucher_number,                  // invoice/voucher number
+                'credit_period' => $v->credit_period,                    // voucher ka apna credit period (agar set hai)
+                'credit_period_source' => $v->credit_period_source,      // wo kahan se aaya: 'voucher' / 'tally' / etc.
+
+                // Settlement fields (interest me chhoot wali info)
+                'settlement_status'    => $v->settlement_status ?? null,             // 'settled' ya null
+                'settlement_amount'    => (string) ($v->settlement_amount ?? '0'),   // settlement amount string me, na ho to '0'
             ]);
     }
 
     // purana method ab helper use karega
+    // $ownerId = owner ki id, $tallyCompany = TallyCompany model, $ledger = ledger ka naam (string)
     private function getPendingInvoices(int $ownerId, $tallyCompany, string $ledger)
     {
+        // Naam se ledger dhundha (is owner + is company me)
+        // first() use hua hai, isliye na mile to null aayega (exception nahi)
         $ledgerModel = TallyLedger::where('owner_id', $ownerId)
             ->where('tally_company_id', $tallyCompany->id)
             ->where('ledger_name', $ledger)
             ->first();
 
+        // Ledger nahi mila to khali collection return, taaki caller par error na aaye
         if (!$ledgerModel) {
             return collect();
         }
 
+        // Is ledger ke saare classified voucher rows (settlement fields ke saath)
         $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
 
+        // Open invoices return:
         return $this->buildOpenInvoices(
-            $rows,
-            $ledgerModel->parent,
-            (int) ($ledgerModel->credit_period ?? 0),
-            Carbon::now()->startOfDay()
+            $rows,                                       // voucher rows
+            $ledgerModel->parent,                        // Debtor ya Creditor
+            (int) ($ledgerModel->credit_period ?? 0),    // ledger ka credit period (days), khali ho to 0
+            Carbon::now()->startOfDay()                  // aaj ki date, din ki shuruaat par
         );
     }
+
+    // $v = ek TallyVoucher model, $under = "Sundry Debtors"/"Sundry Creditors", $voucherMappings = [voucher_type => mapped_to]
     private function classifyVoucherRow($v, ?string $under, array $voucherMappings): array
     {
+        // static = ye arrays function ke har call par dobara nahi bante, ek baar hi memory me bante hain (thoda fast)
+
+        // Debtor ke liye ye voucher types CREDIT side me jayenge (party ne paisa/credit diya)
         static $creditSideTypesForDebtor = ['receipt', 'receipt note', 'credit note'];
+
+        // Creditor ke liye ye voucher types DEBIT side me jayenge (humne party ko paisa diya / debit note)
         static $debitSideTypesForCreditor = ['payment', 'debit note'];
 
+        // Amount se '-' ya '+' sign hata diya, taaki amount hamesha positive rahe
+        // (side debit/credit se decide hogi, sign se nahi)
         $amount = ltrim((string) $v->amount, '-+');
 
+        // Dono side shuru me '0' (string, bcmath ke liye)
         $debit = '0';
         $credit = '0';
 
+        // Voucher type ka naam, extra spaces hata ke
         $voucherType = trim((string) $v->voucher_type);
+
+        // Same naam lowercase me, comparison ke liye (case-insensitive match)
         $voucherTypeLow = strtolower($voucherType);
 
+        // Owner ne mapping screen me is voucher type ko kya map kiya hai (Sales/Purchase/...), na ho to null
         $rawMapped = $voucherMappings[$voucherType] ?? null;
 
         if ($rawMapped !== null && trim($rawMapped) !== '') {
+            // 1) Agar owner ne mapping set ki hai to wahi final (sabse high priority)
             $mappedType = trim($rawMapped);
+
         } elseif (str_contains($voucherTypeLow, 'sale')) {
+            // 2) Mapping nahi hai, par naam me "sale" aata hai (e.g. "Sales GST") to Sales maan lo
             $mappedType = 'Sales';
+
         } elseif (str_contains($voucherTypeLow, 'purchase')) {
+            // 3) Naam me "purchase" aata hai to Purchase maan lo
             $mappedType = 'Purchase';
+
         } else {
+            // 4) Kuch bhi match nahi hua to default bucket
             $mappedType = 'Other than Sales/Purchase';
         }
 
-
         if ($under === 'Sundry Creditors') {
+            // CREDITOR ledger ka case
             if (in_array($voucherTypeLow, $debitSideTypesForCreditor, true)) {
+                // Payment / Debit Note -> amount DEBIT me (liability kam hui)
                 $debit = $amount;
             } else {
+                // Baaki sab (purchase etc.) -> amount CREDIT me (liability badhi)
                 $credit = $amount;
             }
         } else {
+            // DEBTOR ledger ka case (Creditors ke alawa sab yahin aayenge)
             if (in_array($voucherTypeLow, $creditSideTypesForDebtor, true)) {
+                // Receipt / Receipt Note / Credit Note -> amount CREDIT me (receivable kam hua)
                 $credit = $amount;
             } else {
+                // Baaki sab (sales etc.) -> amount DEBIT me (receivable badha)
                 $debit = $amount;
             }
         }
 
+        // Classified row return, baaki functions isi array ko use karte hain
         return [
-            'date' => (string) $v->date,
-            'particulars' => trim((string) $v->party_ledger_name) ?: '',
-            'voucher_type' => $voucherType,
-            'voucher_type_low' => $voucherTypeLow,
-            'mapped_type' => $mappedType,
-            'mapped_type_low' => strtolower($mappedType),
-            'voucher_number' => (string) $v->voucher_number,
-            'debit' => $debit,
-            'credit' => $credit,
+            'date' => (string) $v->date,                                   // voucher ki date
+            'particulars' => trim((string) $v->party_ledger_name) ?: '',   // party ka naam (khali ho to '')
+            'voucher_type' => $voucherType,                                // original type, e.g. "Receipt"
+            'voucher_type_low' => $voucherTypeLow,                         // lowercase type, str_contains checks ke liye
+            'mapped_type' => $mappedType,                                  // Sales / Purchase / Other...
+            'mapped_type_low' => strtolower($mappedType),                  // lowercase mapped type, comparisons ke liye
+            'voucher_number' => (string) $v->voucher_number,               // invoice/voucher number
+            'debit' => $debit,                                             // debit side amount (string)
+            'credit' => $credit,                                           // credit side amount (string)
         ];
     }
 
 
+    // $rows = classified vouchers, $under = Debtor/Creditor, $creditPeriod = ledger ke days
+    private function buildReceiptAllocation($rows, ?string $under, int $creditPeriod): array
+    {
+        // Creditor hai ya nahi (nahi hai to Debtor maana jayega)
+        $isCreditor = $under === 'Sundry Creditors';
+
+        // RECEIPTS list: Creditor me "payment" (debit side), Debtor me "receipt" (credit side)
+        $receipts = $rows
+            ->filter(fn($r) => $isCreditor
+                ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
+                : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
+            // Purani receipt pehle (FIFO)
+            ->sortBy(fn($r) => Carbon::parse($r['date'])->timestamp)
+            ->values();
+
+        // INVOICES list: Creditor me purchase (credit side), Debtor me sales (debit side)
+        $invoices = $rows
+            ->filter(fn($r) => $isCreditor
+                ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
+                : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
+            // Purani invoice pehle
+            ->sortBy(fn($r) => Carbon::parse($r['date'])->timestamp)
+            ->values()
+            // Har invoice ko chhote array me badla
+            ->map(function ($r) use ($isCreditor, $creditPeriod) {
+                $voucherDate = Carbon::parse($r['date'])->startOfDay();
+                return [
+                    'number'    => $r['voucher_number'],
+                    // Due date: voucher me saved ho to wahi, warna voucher date + credit period
+                    'due_date'  => $this->resolveDueDate($r['due_date'] ?? null, $voucherDate, $creditPeriod)->toDateString(),
+                    'amount'    => $isCreditor ? $r['credit'] : $r['debit'],   // invoice ki poori amount
+                    'remaining' => $isCreditor ? $r['credit'] : $r['debit'],   // abhi kitni adjust honi baaki (shuru me poori)
+                ];
+            })
+            // Plain array banaya, taaki neeche $invoices[$ip]['remaining'] edit ho sake
+            ->all();
+
+        $out = [];   // output rows yahan jama hongi
+        $ip  = 0;    // invoices list me abhi kaunsi invoice chal rahi hai (pointer)
+
+        // Har receipt par loop (purani se nayi)
+        foreach ($receipts as $rc) {
+            // Is receipt ki amount (Creditor me debit, Debtor me credit); $left kam hota jayega
+            $left    = $isCreditor ? $rc['debit'] : $rc['credit'];
+            // Poori receipt amount alag se yaad rakhi (har output row me dikhane ke liye)
+            $recdAmt = $left;
+            // Receipt ki date (Y-m-d)
+            $date    = Carbon::parse($rc['date'])->toDateString();
+
+            // Jab tak receipt me paisa bacha hai aur invoices bachi hain
+            while (bccomp($left, '0', 2) > 0 && $ip < count($invoices)) {
+
+                // Current invoice poori clear ho chuki to agli invoice par jao
+                if (bccomp($invoices[$ip]['remaining'], '0', 2) <= 0) {
+                    $ip++;
+                    continue;
+                }
+
+                // Is round me kitna adjust hoga: receipt ka bacha hua aur invoice ka remaining, dono me jo chhota
+                $take = bccomp($left, $invoices[$ip]['remaining'], 2) < 0
+                    ? $left : $invoices[$ip]['remaining'];
+
+                // Invoice se aur receipt se wo amount ghata di
+                $invoices[$ip]['remaining'] = bcsub($invoices[$ip]['remaining'], $take, 2);
+                $left = bcsub($left, $take, 2);
+
+                // Output row: "ye receipt, is invoice me, itni lagi"
+                $out[] = [
+                    'recd_date'      => $date,                              // receipt ki date
+                    'recd_no'        => $rc['voucher_number'],              // receipt number
+                    'recd_amount'    => $recdAmt,                           // receipt ki poori amount
+                    'amount'         => $take,                              // is invoice me lagi hui amount
+                    'inv_no'         => $invoices[$ip]['number'],           // invoice number
+                    'inv_due_date'   => $invoices[$ip]['due_date'],         // invoice ki due date
+                    'invoice_amount' => $invoices[$ip]['amount'],           // invoice ki poori amount
+                ];
+            }
+
+            // Invoices khatam ho gayi par receipt me paisa bacha hai (advance / unmatched)
+            if (bccomp($left, '0', 2) > 0) {
+                $out[] = [
+                    'recd_date'      => $date,
+                    'recd_no'        => $rc['voucher_number'],
+                    'recd_amount'    => $recdAmt,
+                    'amount'         => $left,       // jo bacha wo amount
+                    'inv_no'         => null,        // koi invoice nahi
+                    'inv_due_date'   => null,
+                    'invoice_amount' => null,
+                ];
+            }
+        }
+
+        // Saari allocation rows return
+        return $out;
+    }
+
+
+    // $vouchers = classified vouchers (collection), $under = Debtor/Creditor
     private function buildBalanceBreakdown($vouchers, ?string $under): array
     {
+        // Creditor hai ya nahi (nahi hai to Debtor maana jayega)
         $isCreditor = ($under === 'Sundry Creditors');
 
+        // INVOICES list: Creditor me purchase (credit side), Debtor me sales (debit side)
         $invoices = $vouchers->filter(function ($v) use ($isCreditor) {
-            return $isCreditor ? ($v['credit'] > 0) : ($v['debit'] > 0);
+            return $isCreditor
+                ? ($v['mapped_type_low'] === 'purchase' && bccomp($v['credit'], '0', 2) > 0)
+                : ($v['mapped_type_low'] === 'sales' && bccomp($v['debit'], '0', 2) > 0);
         })
+            // Purani invoice pehle (date string 'Y-m-d' hai, to string sort bhi chal jata hai)
             ->sortBy(fn($v) => $v['date'])
             ->values();
 
+        // CLEARINGS list: Creditor me payments (debit side), Debtor me receipts (credit side)
         $clearings = $vouchers->filter(function ($v) use ($isCreditor) {
             $typeLow = $v['voucher_type_low'];
             return $isCreditor
-                ? (str_contains($typeLow, 'payment') && $v['debit'] > 0)
+                ? (str_contains($typeLow, 'payment') && $v['debit'] > 0)    // string > 0 PHP me numeric compare hota hai
                 : (str_contains($typeLow, 'receipt') && $v['credit'] > 0);
         })
+            // Purani clearing pehle
             ->sortBy(fn($v) => $v['date'])
             ->values()
+            // Har clearing ko chhote array me badla
             ->map(function ($v) use ($isCreditor) {
                 return [
                     'date' => $v['date'],
                     'voucher_number' => $v['voucher_number'],
-                    'amount' => $isCreditor ? $v['debit'] : $v['credit'],
-                    'remaining' => $isCreditor ? $v['debit'] : $v['credit'],
+                    'amount' => $isCreditor ? $v['debit'] : $v['credit'],      // poori amount
+                    'remaining' => $isCreditor ? $v['debit'] : $v['credit'],   // abhi kitni use hona baaki (shuru me poori)
                 ];
             })
+            // Plain array banaya, taaki neeche reference (&) se edit ho sake
             ->toArray();
 
+        // Abhi kaunsi clearing chal rahi hai (pointer)
         $clearingPointer = 0;
+
+        // Output rows yahan jama hongi
         $result = [];
 
+        // Har invoice par loop (purani se nayi)
         foreach ($invoices as $inv) {
+            // Invoice ki poori amount
             $original = $isCreditor ? $inv['credit'] : $inv['debit'];
+
+            // Kitna abhi clear hona baaki hai (shuru me poori)
             $remaining = $original;
+
+            // Is invoice ko kin clearings ne kitna clear kiya, uski list
             $matchedAgainst = [];
 
+            // Jab tak invoice me amount baaki hai aur clearings bachi hain
             while (bccomp($remaining, '0', 2) > 0 && $clearingPointer < count($clearings)) {
+
+                // & = reference, taaki $c me change karne se asli array $clearings me bhi change ho
                 $c = &$clearings[$clearingPointer];
 
+                // Current clearing poori use ho chuki to agli par jao
                 if (bccomp($c['remaining'], '0', 2) <= 0) {
                     $clearingPointer++;
                     continue;
                 }
 
+                // Is round me kitna adjust hoga: invoice ka remaining aur clearing ka remaining, dono me jo chhota
                 $take = bccomp($remaining, $c['remaining'], 2) < 0 ? $remaining : $c['remaining'];
 
+                // Dono se wo amount ghata di
                 $c['remaining'] = bcsub($c['remaining'], $take, 2);
                 $remaining = bcsub($remaining, $take, 2);
 
+                // Is invoice ke "cleared against" me ye clearing jodi
                 $matchedAgainst[] = [
                     'voucher_number' => $c['voucher_number'],
                     'date' => $c['date'],
                     'amount' => $take,
                 ];
 
+                // Is clearing ka paisa khatam to agli clearing par jao
                 if (bccomp($c['remaining'], '0', 2) <= 0) {
                     $clearingPointer++;
                 }
 
+                // Reference tod diya (bhoolne par agli iteration me galti se array badal sakta hai)
                 unset($c);
             }
 
+            // Cleared = original - jo baaki bacha; Pending = jo baaki bacha
             $cleared = bcsub($original, $remaining, 2);
             $pending = $remaining;
 
+            // Poori clear ho chuki invoice balance me nahi dikhani, skip
             if (bccomp($pending, '0', 2) <= 0) {
                 continue;
             }
 
+            // Status: kuch clear hua hai to Partially Paid/Received, warna Pending
             $status = bccomp($cleared, '0', 2) > 0
                 ? ($isCreditor ? 'Partially Paid' : 'Partially Received')
                 : 'Pending';
 
+            // Output row
             $result[] = [
                 'date' => $inv['date'],
                 'voucher_number' => $inv['voucher_number'],
                 'voucher_type' => $inv['voucher_type'],
                 'particulars' => $inv['particulars'],
                 'original' => $original,
+                // Key ka naam Creditor me 'paid', Debtor me 'received' (dynamic key)
                 $isCreditor ? 'paid' : 'received' => $cleared,
                 'pending' => $pending,
                 'status' => $status,
@@ -2298,34 +2752,50 @@ class OwnerController extends Controller
     }
 
 
+    // Route se aate hain: $company, $ledger, $under (URL-encoded). Query me ?field=... aata hai
     public function ledgerFieldVouchers(Request $request, $company, $ledger, $under)
     {
+        // Kaunse field par click hua (Balance / Sale / Purchase / Receipts / Payments / Other Debits / Other Credits)
         $field = $request->get('field');
+
+        // URL-encoded values ko normal text me badla
         $company = urldecode($company);
         $ledger = urldecode($ledger);
         $under = urldecode($under);
+
+        // Logged-in owner
         $owner = Auth::guard('owner')->user();
 
+        // Owner ki company dhundhi (first(), isliye na mile to null)
         $tallyCompany = TallyCompany::where('owner_id', $owner->id)
             ->where('company_name', $company)
             ->first();
 
+        // Us company ka ledger dhundha
+        // NOTE: $tallyCompany null ho to yahan ->id par error aayega
         $ledgerModel = TallyLedger::where('owner_id', $owner->id)
             ->where('tally_company_id', $tallyCompany->id)
             ->where('ledger_name', $ledger)
             ->first();
 
+        // Ledger nahi mila to khali list return, error nahi
         if (!$ledgerModel) {
             return response()->json(['vouchers' => []]);
         }
 
+        // Voucher type -> mapped type ka dictionary
         $voucherMappings = VoucherMapping::where('company', $company)
             ->pluck('mapped_to', 'voucher_type')
             ->toArray();
 
+        // Ledger ka credit period (days), khali ho to 0
         $ledgerCreditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+
+        // Aaj ki date, din ki shuruaat par
         $today = Carbon::now()->startOfDay();
 
+        // Is ledger ke saare vouchers, date ke hisaab se sorted
+        // Har ek ko classify kiya (debit/credit/mapped type) + id, due_date, credit period aur uska source jodi
         $vouchers = TallyVoucher::where('owner_id', $owner->id)
             ->where('tally_company_id', $tallyCompany->id)
             ->where('ledger_id', $ledgerModel->id)
@@ -2338,22 +2808,95 @@ class OwnerController extends Controller
                 'credit_period_source' => $v->credit_period_source,
             ]);
 
+        // ===== Field 1: Balance =====
+        // Balance popup: baaki invoices + kin receipts se kitna clear hua
         if ($field === 'Balance') {
             return response()->json([
                 'vouchers' => $this->buildBalanceBreakdown($vouchers, $under),
             ]);
         }
 
+        // ===== Field 2: Receipts (Debtor) / Payments (Creditor) =====
+        // Har receipt/payment kin invoices me lagi, uski allocation list
+        if (in_array($field, ['Receipts', 'Payments'], true)) {
+            return response()->json([
+                'vouchers' => $this->buildReceiptAllocation($vouchers, $under, $ledgerCreditPeriod),
+            ]);
+        }
+
+        // ===== Baaki fields (Sale, Purchase, Other Debits, Other Credits) =====
+        // Pehle field ke hisaab se vouchers filter (filterVouchersByField me match expression hai)
         $filtered = $this->filterVouchersByField($vouchers, $field, $under);
 
-        $rows = $filtered->map(function ($v) use ($ledgerCreditPeriod, $today) {
+        // Other Debits: sirf Debtors ke liye hota hai
+        if ($field === 'Other Debits') {
+            $filtered = ($under === 'Sundry Creditors')
+                ? collect()   // Creditor ke liye Other Debits nahi hota, khali
+                : $filtered
+                    // Sirf wo jinka debit > 0 aur credit bilkul 0 (credit side wale vouchers kabhi nahi)
+                    ->filter(fn ($v) => bccomp($v['debit'], '0', 2) > 0 && bccomp($v['credit'], '0', 2) === 0)
+                    // credit ko '0' string se pakka kiya
+                    ->map(fn ($v) => array_merge($v, ['credit' => '0']))
+                    ->values();
+        }
+
+        // Other Credits: sirf Creditors ke liye (upar jaisa hi, ulta)
+        if ($field === 'Other Credits') {
+            $filtered = ($under !== 'Sundry Creditors')
+                ? collect()   // Debtor ke liye Other Credits nahi hota, khali
+                : $filtered
+                    ->filter(fn ($v) => bccomp($v['credit'], '0', 2) > 0 && bccomp($v['debit'], '0', 2) === 0)
+                    ->map(fn ($v) => array_merge($v, ['debit' => '0']))
+                    ->values();
+        }
+
+        // ===== Sale/Purchase ke liye Status (Received / Overdue / Not Due) =====
+        $statusByVoucher = collect();                       // default khali
+        $creditPeriodForStatus = $ledgerCreditPeriod;
+
+        if (in_array($field, ['Sale', 'Purchase'], true)) {
+            // Open invoices nikale (FIFO se receipts adjust karke)
+            $openInvoices = $this->buildOpenInvoices($vouchers, $under, $creditPeriodForStatus, $today);
+
+            // voucher_number se lookup banaya: voucher_number => open invoice (days, pending...)
+            $statusByVoucher = $openInvoices->keyBy('voucher_number');
+        }
+
+        // ===== Final rows banao =====
+        $rows = $filtered->map(function ($v) use ($ledgerCreditPeriod, $today, $field, $statusByVoucher) {
+
+            // Credit period: voucher par alag se set ho (source = 'voucher') to wahi, warna ledger ka
             $resolvedCP = ($v['credit_period_source'] === 'voucher' && $v['credit_period'] !== null)
-                ? (int) $v['credit_period']
+                ? (int) $v['credit_period']     // "30 Days" jaisi string ko (int) se 30
                 : $ledgerCreditPeriod;
 
-            // purana
+            // Overdue days: voucher ki saved due_date se aaj tak (negative ho to 0)
             $days = $this->overdueDays($v['due_date'] ?? null, $today);
 
+            // Status aur pending sirf Sale/Purchase ke liye
+            $status = null;
+            $pending = null;
+
+            if (in_array($field, ['Sale', 'Purchase'], true)) {
+                // Is voucher number ki open invoice dhundhi
+                $open = $statusByVoucher->get($v['voucher_number']);
+
+                if (!$open) {
+                    // Open list me nahi hai => poori clear ho chuki
+                    $status = 'received';
+                    $pending = '0';
+                } elseif ($open['days'] > 0) {
+                    // Open hai aur due date nikal chuki
+                    $status = 'overdue';
+                    $pending = $open['pending'];
+                } else {
+                    // Open hai par abhi due nahi
+                    $status = 'not_due';
+                    $pending = $open['pending'];
+                }
+            }
+
+            // Popup ki ek row
             return [
                 'id' => $v['id'] ?? null,
                 'date' => $v['date'],
@@ -2365,63 +2908,113 @@ class OwnerController extends Controller
                 'due_date' => $v['due_date'] ?? null,
                 'credit_period' => $resolvedCP,
                 'days' => $days,
+                'status' => $status,     // received / overdue / not_due (sirf Sale/Purchase me, baaki me null)
+                'pending' => $pending,   // is invoice ki baaki amount (partial case ke liye)
             ];
         })->values();
 
+        // Rows JSON me
         return response()->json(['vouchers' => $rows]);
     }
 
+    // $vouchers = classified vouchers (collection), $field = kaunsa field, $under = Debtor/Creditor (is function me use nahi hota)
     private function filterVouchersByField($vouchers, string $field, ?string $under)
     {
+        // Chhota helper: amount 0 se bada hai ya nahi (string/number kuch bhi ho, bcmath se compare)
+        $pos = fn($x) => bccomp((string) $x, '0', 2) > 0;
+
+        // match: $field ki value ke hisaab se ek branch chalti hai aur uska result return hota hai
         return match ($field) {
-            'Sale' => $vouchers->filter(fn($v) => $v['mapped_type_low'] === 'sales' && $v['debit'] > 0),
-            'Purchase' => $vouchers->filter(fn($v) => $v['mapped_type_low'] === 'purchase' && $v['credit'] > 0),
-            'Other Debits' => $vouchers->filter(fn($v) => $v['mapped_type_low'] !== 'sales' && $v['debit'] > 0),
-            'Other Credits' => $vouchers->filter(fn($v) => $v['mapped_type_low'] !== 'purchase' && $v['credit'] > 0),
-            'Receipts' => $vouchers->filter(fn($v) => str_contains($v['voucher_type_low'], 'receipt') && $v['credit'] > 0),
-            'Payments' => $vouchers->filter(fn($v) => str_contains($v['voucher_type_low'], 'payment') && $v['debit'] > 0),
+
+            // SALE: mapped type "sales" ho aur debit side me amount ho
+            'Sale' => $vouchers->filter(fn($v) =>
+                $v['mapped_type_low'] === 'sales' && $pos($v['debit'])),
+
+            // PURCHASE: mapped type "purchase" ho aur credit side me amount ho
+            'Purchase' => $vouchers->filter(fn($v) =>
+                $v['mapped_type_low'] === 'purchase' && $pos($v['credit'])),
+
+            // OTHER DEBITS: sales ke alawa wo vouchers jinka debit hai,
+            // aur voucher type me "payment" nahi hona chahiye
+            'Other Debits' => $vouchers->filter(fn($v) =>
+                $v['mapped_type_low'] !== 'sales'
+                && $pos($v['debit'])
+                && !str_contains($v['voucher_type_low'], 'payment')),
+
+            // OTHER CREDITS: purchase ke alawa wo vouchers jinka credit hai
+            // (logic isOtherCredit() helper me hai)
+            'Other Credits' => $vouchers->filter(fn($v) => $this->isOtherCredit($v)),
+
+            // RECEIPTS: voucher type me "receipt" ho aur credit side me amount ho
+            'Receipts' => $vouchers->filter(fn($v) =>
+                str_contains($v['voucher_type_low'], 'receipt') && $pos($v['credit'])),
+
+            // PAYMENTS: voucher type me "payment" ho aur debit side me amount ho
+            'Payments' => $vouchers->filter(fn($v) =>
+                str_contains($v['voucher_type_low'], 'payment') && $pos($v['debit'])),
+
+            // Koi aur / unknown field ho to saare vouchers bina filter ke
             default => $vouchers,
         };
     }
 
 
+    // Route se: $company, $ledger, $under (sab URL-encoded). Query me ?fy=2025-2026 aa sakta hai
     public function ledgerVouchers(Request $request, $company, $ledger, $under = null)
     {
+        // Debtor/Creditor wala text decode. NOTE: ye try ke bahar hai; $under null ho to '' ban jata hai
         $under = urldecode($under);
 
         try {
             $owner = Auth::guard('owner')->user();
 
+            // Raw (undecoded) company naam alag rakha, neeche mapping me yahi use hua hai
             $com = $company;
+
+            // Decoded naam: company aur ledger dhundhne ke liye
             $company = urldecode($company);
             $ledger = urldecode($ledger);
 
+            // Voucher type -> mapped type dictionary
+            // NOTE: yahan $com (raw) use hua hai, jabki baaki functions decoded naam use karte hain
             $voucherMappings = VoucherMapping::where('company', $com)
                 ->pluck('mapped_to', 'voucher_type')
                 ->toArray();
 
+            // Company dhundhi
             $tallyCompany = TallyCompany::where('owner_id', $owner->id)
                 ->where('company_name', $company)
                 ->first();
 
+            // Ledger dhundha; company null ho to id 0 (kuch nahi milega)
             $tallyLedger = TallyLedger::where('owner_id', $owner->id)
                 ->where('tally_company_id', $tallyCompany->id ?? 0)
                 ->where('ledger_name', $ledger)
                 ->first();
 
+            // ===== DEBUG CODE (yahi page rok raha hai) =====
+            // Ledger ke saare vouchers laaye, print kiye aur die() se script band
+            // NOTE: $tallyLedger null ho to ->id par error
             $ledgerVoucher = TallyVoucher::where('owner_id', $owner->id)
                 ->where('ledger_id', $tallyLedger->id)
                 ->get();
 
             echo "<pre>";
             print_r($ledgerVoucher);
-            die;
-            $vouchers = [];
+            die;   // <-- iske baad ka code kabhi nahi chalta
 
+            // ===== Yahan se neeche ka code die() hatane par chalega =====
+
+            $vouchers = [];   // yahan processed vouchers jama honge
+
+            // Debtor ke ye voucher types CREDIT side me jayenge
             $creditSideTypesForDebtor = ['receipt', 'receipt note', 'credit note'];
+            // Creditor ke ye voucher types DEBIT side me jayenge
             $debitSideTypesForCreditor = ['payment', 'debit note'];
 
+            // Company aur ledger dono mile tabhi vouchers banao
             if ($tallyCompany && $tallyLedger) {
+                // Is ledger ke vouchers, date ke hisaab se sorted
                 $voucherRows = TallyVoucher::where('owner_id', $owner->id)
                     ->where('tally_company_id', $tallyCompany->id)
                     ->where('ledger_id', $tallyLedger->id)
@@ -2429,16 +3022,20 @@ class OwnerController extends Controller
                     ->get();
 
                 foreach ($voucherRows as $v) {
+                    // Amount ka sign hata ke positive float
                     $amount = abs((float) $v->amount);
 
                     $voucherType = trim((string) $v->voucher_type);
                     $voucherTypeLow = strtolower($voucherType);
 
+                    // Mapped type: sirf mapping table se, na mile to 'Other than Sales/Purchase'
+                    // (classifyVoucherRow ki tarah naam me "sale"/"purchase" dekhne wala fallback yahan nahi hai)
                     $mappedType = trim($voucherMappings[$voucherType] ?? 'Other than Sales/Purchase');
 
                     $debit = 0;
                     $credit = 0;
 
+                    // Debit ya credit side decide karna (classifyVoucherRow jaisa hi logic)
                     if ($under === 'Sundry Creditors') {
                         if (in_array($voucherTypeLow, $debitSideTypesForCreditor, true)) {
                             $debit = $amount;
@@ -2453,6 +3050,7 @@ class OwnerController extends Controller
                         }
                     }
 
+                    // Ek voucher ki row (yahan amounts float hain, string nahi)
                     $vouchers[] = [
                         'date' => (string) $v->date,
                         'particulars' => trim((string) $v->party_ledger_name) ?: '',
@@ -2461,41 +3059,52 @@ class OwnerController extends Controller
                         'voucher_number' => (string) $v->voucher_number,
                         'debit' => $debit,
                         'credit' => $credit,
-                        'master_id' => (string) $v->id,
+                        'master_id' => (string) $v->id,   // naam master_id hai par asli me voucher ka DB id hai
                     ];
                 }
             }
 
+                    // Ledger ka all-time opening balance (Tally se aaya, pehle FY se bhi pehle ka)
             $openingBalanceAllTime = (float) ($tallyLedger->opening_balance ?? 0);
 
             $today = Carbon::now();
+
+            // Current FY ka start year: April (4) ya uske baad to isi saal, warna pichhla saal
+            // e.g. Oct 2026 -> 2026 (FY 2026-2027); Feb 2026 -> 2025 (FY 2025-2026)
             $currentFyStartYear = $today->month >= 4 ? (int) $today->year : (int) $today->year - 1;
 
+            // Query me ?fy=2025-2026 aaya ho to wo, warna current FY
             $fyParam = $request->get('fy');
             $selectedFyStartYear = $currentFyStartYear;
 
+            // Format "YYYY-YYYY" ho aur dusra saal pehle se theek +1 ho, tabhi maano
             if ($fyParam && preg_match('/^(\d{4})-(\d{4})$/', $fyParam, $m)) {
                 if ((int) $m[2] === (int) $m[1] + 1) {
                     $selectedFyStartYear = (int) $m[1];
                 }
             }
 
+            // Labels: selected aur previous FY ke
             $selectedFyLabel = $selectedFyStartYear . '-' . ($selectedFyStartYear + 1);
             $previousFyStartYear = $selectedFyStartYear - 1;
             $previousFyLabel = $previousFyStartYear . '-' . ($previousFyStartYear + 1);
 
+            // Selected FY: 1 April se 31 March tak
             $selectedFyStart = Carbon::create($selectedFyStartYear, 4, 1)->startOfDay();
             $selectedFyEnd = Carbon::create($selectedFyStartYear + 1, 3, 31)->endOfDay();
 
+            // Previous FY: usse ek saal pehle ka
             $previousFyStart = Carbon::create($previousFyStartYear, 4, 1)->startOfDay();
             $previousFyEnd = Carbon::create($previousFyStartYear + 1, 3, 31)->endOfDay();
 
+            // Dropdown ke liye pichhle 5 FY ki list (current se peeche)
             $fyOptions = [];
             for ($i = 0; $i < 5; $i++) {
                 $y = $currentFyStartYear - $i;
                 $fyOptions[] = $y . '-' . ($y + 1);
             }
 
+            // Date parse karne wala helper: pehle 'Ymd' (20260401), na chale to normal parse, wo bhi fail to null
             $parseDate = function ($d) {
                 if (empty($d))
                     return null;
@@ -2510,73 +3119,94 @@ class OwnerController extends Controller
                 }
             };
 
+            // Vouchers ki copy, date ke hisaab se purane se naye (string compare)
             $vouchersAsc = $vouchers;
             usort($vouchersAsc, fn($a, $b) => strcmp($a['date'], $b['date']));
 
-            $netBeforeSelectedFy = 0;
-            $netWithinSelectedFy = 0;
+            $netBeforeSelectedFy = 0;   // selected FY se pehle ka net (debit - credit)
+            $netWithinSelectedFy = 0;   // selected FY ke andar ka net
 
             foreach ($vouchersAsc as $v) {
                 $d = $parseDate($v['date']);
                 if (!$d)
-                    continue;
-                $net = $v['debit'] - $v['credit'];
+                    continue;                       // date samajh nahi aayi to skip
+
+                $net = $v['debit'] - $v['credit'];  // debit positive, credit negative
 
                 if ($d->lt($selectedFyStart)) {
                     $netBeforeSelectedFy += $net;
                 } elseif ($d->between($selectedFyStart, $selectedFyEnd)) {
                     $netWithinSelectedFy += $net;
                 }
+                // selected FY ke baad ke vouchers dono me nahi gine jate
             }
 
+            // Selected FY ka opening = all-time opening + FY se pehle ka net
             $openingBalance = $openingBalanceAllTime + $netBeforeSelectedFy;
+            // Closing = opening + FY ke andar ka net
             $closingBalance = $openingBalance + $netWithinSelectedFy;
 
+            // Selected FY ke vouchers
             $currentFyVouchers = array_values(array_filter($vouchers, function ($v) use ($parseDate, $selectedFyStart, $selectedFyEnd) {
                 $d = $parseDate($v['date']);
                 return $d && $d->between($selectedFyStart, $selectedFyEnd);
             }));
 
+            // Previous FY ke vouchers
             $previousFyVouchers = array_values(array_filter($vouchers, function ($v) use ($parseDate, $previousFyStart, $previousFyEnd) {
                 $d = $parseDate($v['date']);
                 return $d && $d->between($previousFyStart, $previousFyEnd);
             }));
 
+            // Previous FY ke Sales vouchers (naye pehle), view ko jayenge
             $salesVouchers = collect($previousFyVouchers)
                 ->filter(fn($item) => strtolower(trim($item['mapped_type'])) === 'sales')
                 ->sortByDesc('date')->values()->toArray();
 
+            // Previous FY ke wo vouchers jinka type bilkul "receipt" hai
             $receiptVouchers = collect($previousFyVouchers)
                 ->filter(fn($item) => strtolower(trim($item['voucher_type'])) === 'receipt')
                 ->sortByDesc('date')->values()->toArray();
 
+
+                        // Ek voucher set ko 3 bucket + summary me baantne wala closure
             $buildBuckets = function (array $voucherSet, ?string $under) {
+
                 if ($under === "Sundry Debtors") {
+                    // Primary = Sales (debit > 0), naye pehle
                     $primaryVouchers = collect($voucherSet)
                         ->filter(fn($item) => strtolower(trim($item['mapped_type'])) === 'sales' && ($item['debit'] ?? 0) > 0)
                         ->sortByDesc('date')->values()->toArray();
 
+                    // Secondary = saare credit wale (receipts, credit notes)
                     $secondaryVouchers = collect($voucherSet)
                         ->filter(fn($item) => ($item['credit'] ?? 0) > 0)
                         ->sortByDesc('date')->values()->toArray();
 
+                    // Journal = sales ke alawa baaki debit wale
                     $journalVouchers = collect($voucherSet)
                         ->filter(fn($item) => strtolower(trim($item['mapped_type'])) !== 'sales' && ($item['debit'] ?? 0) > 0)
                         ->sortByDesc('date')->values()->toArray();
 
+                    // Totals
                     $totalSales = collect($primaryVouchers)->sum('debit');
                     $totalOthers = collect($journalVouchers)->sum('debit');
                     $totalCredit = collect($secondaryVouchers)->sum('credit');
 
                     return [
+                        // Primary aur journal ko wapas purane se naye (asc) kiya
                         'primaryVouchers' => collect($primaryVouchers)->sortBy('date')->values()->toArray(),
                         'secondaryVouchers' => $secondaryVouchers,
                         'journalVouchers' => collect($journalVouchers)->sortBy('date')->values()->toArray(),
                         'primaryLabel' => 'Total Debit',
                         'secondaryLabel' => 'Total Credit',
+                        // 'sale' = sab debit (sale + other debits), 'receipts' = sab credit
                         'summary' => ['sale' => $totalSales + $totalOthers, 'receipts' => $totalCredit],
                     ];
+
                 } elseif ($under === "Sundry Creditors") {
+                    // Bilkul upar jaisa, bas sides ulti:
+                    // primary = purchase (credit), secondary = saare debit, journal = purchase ke alawa credit
                     $primaryVouchers = collect($voucherSet)
                         ->filter(fn($item) => strtolower(trim($item['mapped_type'])) === 'purchase' && ($item['credit'] ?? 0) > 0)
                         ->sortByDesc('date')->values()->toArray();
@@ -2603,6 +3233,7 @@ class OwnerController extends Controller
                     ];
                 }
 
+                // Debtor/Creditor ke alawa kuch ho to khali
                 return [
                     'primaryVouchers' => [],
                     'secondaryVouchers' => [],
@@ -2613,9 +3244,11 @@ class OwnerController extends Controller
                 ];
             };
 
-
+                    // Ek voucher set me se "kitna abhi tak pending hai" nikalne wala closure
             $buildPendingSnapshot = function (array $voucherSet, ?string $under) {
+
                 if ($under === 'Sundry Debtors') {
+                    // Primary = sales invoices; har ek ka pending shuru me poora debit
                     $primary = collect($voucherSet)
                         ->filter(fn($v) => strtolower(trim($v['mapped_type'])) === 'sales' && ($v['debit'] ?? 0) > 0)
                         ->sortBy('date')->values()
@@ -2623,6 +3256,7 @@ class OwnerController extends Controller
                             $v['pending'] = $v['debit'];
                             return $v; })->all();
 
+                    // Others = sales ke alawa debit wale (journal wagairah), pending shuru me poora
                     $others = collect($voucherSet)
                         ->filter(fn($v) => strtolower(trim($v['mapped_type'])) !== 'sales' && ($v['debit'] ?? 0) > 0)
                         ->sortBy('date')->values()
@@ -2630,13 +3264,15 @@ class OwnerController extends Controller
                             $v['pending'] = $v['debit'];
                             return $v; })->all();
 
+                    // Receipts = saare credit wale, purane pehle
                     $receipts = collect($voucherSet)
                         ->filter(fn($v) => ($v['credit'] ?? 0) > 0)
                         ->sortBy('date')->values()->all();
 
                     foreach ($receipts as $receipt) {
-                        $amount = $receipt['credit'];
+                        $amount = $receipt['credit'];   // is receipt me kitna paisa bacha hai
 
+                        // PEHLE "others" ko clear karo
                         foreach ($others as $i => $o) {
                             if ($amount <= 0)
                                 break;
@@ -2646,6 +3282,8 @@ class OwnerController extends Controller
                             $others[$i]['pending'] -= $adjust;
                             $amount -= $adjust;
                         }
+
+                        // PHIR bacha hua paisa sales invoices me
                         foreach ($primary as $i => $p) {
                             if ($amount <= 0)
                                 break;
@@ -2657,6 +3295,7 @@ class OwnerController extends Controller
                         }
                     }
 
+                    // Jinka pending 0.01 se zyada hai wo jodkar date se sort
                     $pendingVouchers = collect(array_merge($primary, $others))
                         ->filter(fn($v) => ($v['pending'] ?? 0) > 0.01)
                         ->sortBy('date')->values()->toArray();
@@ -2664,6 +3303,8 @@ class OwnerController extends Controller
                     return ['pendingAmount' => array_sum(array_column($pendingVouchers, 'pending')), 'pendingVouchers' => $pendingVouchers];
 
                 } elseif ($under === 'Sundry Creditors') {
+                    // Bilkul upar jaisa: primary = purchase (credit), others = purchase ke alawa credit,
+                    // payments = saare debit wale. Payments pehle others, phir purchase ko clear karte hain.
                     $primary = collect($voucherSet)
                         ->filter(fn($v) => strtolower(trim($v['mapped_type'])) === 'purchase' && ($v['credit'] ?? 0) > 0)
                         ->sortBy('date')->values()
@@ -2715,6 +3356,7 @@ class OwnerController extends Controller
                 return ['pendingAmount' => 0, 'pendingVouchers' => []];
             };
 
+            // Kisi cutoff date tak ke vouchers (cutoff ke din tak, barabar bhi)
             $vouchersUpTo = function (array $allVouchersAsc, Carbon $cutoff) use ($parseDate) {
                 return array_values(array_filter($allVouchersAsc, function ($v) use ($parseDate, $cutoff) {
                     $d = $parseDate($v['date']);
@@ -2722,63 +3364,58 @@ class OwnerController extends Controller
                 }));
             };
 
+            // Previous FY ke end (31 March) tak ki pending => "opening pending"
             $vouchersUpToPreviousFyEnd = $vouchersUpTo($vouchersAsc, $previousFyEnd);
             $pendingSnapshot = $buildPendingSnapshot($vouchersUpToPreviousFyEnd, $under);
 
+            // Selected FY ke end tak ki pending => "closing pending"
             $vouchersUpToSelectedFyEnd = $vouchersUpTo($vouchersAsc, $selectedFyEnd);
             $closingSnapshot = $buildPendingSnapshot($vouchersUpToSelectedFyEnd, $under);
 
+            // Dono FY ke buckets alag alag
             $currentFyOnlyBuckets = $buildBuckets($currentFyVouchers, $under);
             $previousFyOnlyBuckets = $buildBuckets($previousFyVouchers, $under);
 
+            // Upar ke summary cards: sale/receipts selected FY ke, pending previous FY end ka
             $summary = [
                 'sale' => $currentFyOnlyBuckets['summary']['sale'],
                 'receipts' => $currentFyOnlyBuckets['summary']['receipts'],
                 'pending' => $pendingSnapshot['pendingAmount'],
             ];
 
+            // Tables ke liye lists: PREVIOUS FY ke buckets se
             $primaryVouchers = $previousFyOnlyBuckets['primaryVouchers'];
             $secondaryVouchers = $previousFyOnlyBuckets['secondaryVouchers'];
             $journalVouchers = $previousFyOnlyBuckets['journalVouchers'];
             $primaryLabel = $previousFyOnlyBuckets['primaryLabel'];
             $secondaryLabel = $previousFyOnlyBuckets['secondaryLabel'];
 
+            // Pending lists: opening wali (previous FY end) aur closing wali (selected FY end)
             $pendingVouchers = $pendingSnapshot['pendingVouchers'];
             $closingBalanceVouchers = $closingSnapshot['pendingVouchers'];
 
+            // Sab kuch Blade view ko
             return view('owner.tally.tally.ledger-vouchers', compact(
-                'company',
-                'ledger',
-                'vouchers',
-                'summary',
-                'openingBalance',
-                'closingBalance',
-                'salesVouchers',
-                'receiptVouchers',
-                'journalVouchers',
-                'under',
-                'primaryVouchers',
-                'secondaryVouchers',
-                'primaryLabel',
-                'secondaryLabel',
-                'fyOptions',
-                'selectedFyLabel',
-                'previousFyLabel',
-                'pendingVouchers',
-                'closingBalanceVouchers'
+                'company', 'ledger', 'vouchers', 'summary',
+                'openingBalance', 'closingBalance',
+                'salesVouchers', 'receiptVouchers', 'journalVouchers', 'under',
+                'primaryVouchers', 'secondaryVouchers', 'primaryLabel', 'secondaryLabel',
+                'fyOptions', 'selectedFyLabel', 'previousFyLabel',
+                'pendingVouchers', 'closingBalanceVouchers'
             ));
 
         } catch (\Throwable $e) {
+            // Error ki detail log me
             Log::error('Ledger Voucher Error', [
                 'message' => $e->getMessage(),
                 'line' => $e->getLine(),
                 'file' => $e->getFile(),
             ]);
 
+            // Pichhle page par error message ke saath
             return back()->with('error', $e->getMessage());
         }
     }
-
 
     public function ledgerFollowUp(Request $request, $company, $ledger, $under = null)
     {
@@ -3698,299 +4335,379 @@ class OwnerController extends Controller
         return back()->with('success', 'Voucher Mapping Saved Successfully.');
     }
 
-    public function asignLedgers($company)
+
+    public function assignLedgers($company)
     {
-        try {
+        $company = urldecode($company);
+        $owner   = Auth::guard('owner')->user();
 
-            $company = urldecode($company);
-            $xml = $this->tally->getLedgers($company);
-            $xml = preg_replace('/&#x?0*4;?/i', '', $xml);
-            $xml = preg_replace('/&#[0-8];|&#1[0-9];|&#2[0-9];|&#3[0-1];/', '', $xml);
-            $xml = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $xml);
-            libxml_use_internal_errors(true);
-            $xmlObj = simplexml_load_string($xml);
-            if ($xmlObj === false) {
-                foreach (libxml_get_errors() as $error) {
-                    dump($error->message);
-                }
-            }
-            $xmlObj = simplexml_load_string($xml);
-            $ledgers = [];
+        $tallyCompany = TallyCompany::where('owner_id', $owner->id)
+            ->where('company_name', $company)
+            ->firstOrFail();
 
-            if ($xmlObj) {
-                $nodes = $xmlObj->xpath("//*[local-name()='LEDGER']");
-                if ($nodes) {
-                    foreach ($nodes as $ledger) {
-                        $name = (string) ($ledger['NAME'] ?? '');
-                        $under = (string) ($ledger->PARENT ?? '');
-                        if (
-                            in_array(
-                                trim($under),
-                                ['Sundry Debtors', 'Sundry Creditors']
-                            )
-                        ) {
-                            $ledgers[] = [
-                                'name' => $name,
-                                'under' => $under,
-                            ];
-                        }
-                    }
-                }
-            }
+        // sirf is owner ke accountants ke collectors
+        $accountantIds = Accountant::where('owner_id', $owner->id)->pluck('id');
 
-            $assignedLedgers = LedgerCollector::leftJoin('rms_collectors', 'rms_collectors.id', '=', 'rms_ledger_collectors.collector_id')
-                ->where('rms_ledger_collectors.company', $company)
-                ->select(
-                    'rms_ledger_collectors.ledger_name',
-                    'rms_ledger_collectors.collector_id',
-                    'rms_collectors.name as collector_name'
-                )
-                ->get()
-                ->keyBy('ledger_name');
+        $collectors = Collector::whereIn('accountant_id', $accountantIds)
+            ->where('status', 'active')
+            ->orderBy('name')
+            ->get(['id', 'name', 'accountant_id']);
 
-            return view(
-                'owner.tally.tally.ledgers-assign',
-                compact('company', 'ledgers', 'assignedLedgers')
-            );
+        $collectorNames = $collectors->pluck('name', 'id');
 
-        } catch (\Exception $e) {
-            dd($e->getMessage());
-        }
+        // ledger_id => [collector_id, ...]
+        $assignMap = DB::table('rms_ledger_collectors')
+            ->where('owner_id', $owner->id)
+            ->where('company_id', $tallyCompany->id)
+            ->get()
+            ->groupBy('ledger_id')
+            ->map(fn($rows) => $rows->pluck('collector_id')->unique()->values()->all());
+
+        $ledgers = TallyLedger::where('owner_id', $owner->id)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->orderBy('ledger_name')
+            ->get(['id', 'ledger_name', 'parent', 'unique_ledger_id', 'ledger_mobile_number'])
+            ->map(function ($l) use ($assignMap, $collectorNames) {
+                $ids = $assignMap->get($l->id, []);
+                return [
+                    'id'              => $l->id,
+                    'name'            => $l->ledger_name,
+                    'under'           => $l->parent,
+                    'unique_id'       => $l->unique_ledger_id,
+                    'mobile'          => $l->ledger_mobile_number,
+                    'collector_ids'   => $ids,
+                    'collector_names' => collect($ids)->map(fn($id) => $collectorNames[$id] ?? ('#' . $id))->all(),
+                ];
+            });
+
+        return view('owner.tally.tally.ledgers-assign', [
+            'company'      => $company,
+            'tallyCompany' => $tallyCompany,
+            'collectors'   => $collectors,
+            'ledgers'      => $ledgers,
+        ]);
     }
 
 
-    public function assignLedgers(Request $request)
+    public function saveLedgerCollectors(Request $request)
     {
-        $request->validate([
-            'collector_id' => 'required',
-            'ledgers' => 'required|array'
+        $owner = Auth::guard('owner')->user();
+
+        $data = $request->validate([
+            'company_id'   => 'required|integer',
+            'collector_id' => 'required|integer',
+            'ledger_ids'   => 'required|array|min:1',
+            'ledger_ids.*' => 'integer',
         ]);
 
-        foreach ($request->ledgers as $item) {
-            $ledger = json_decode($item, true);
-            LedgerCollector::updateOrCreate(
-                [
-                    'company' => $request->company,
-                    'ledger_name' => $ledger['name'],
-                ],
-                [
-                    'ledger_under' => $ledger['under'],
-                    'collector_id' => $request->collector_id,
-                ]
-            );
+        $tallyCompany = TallyCompany::where('id', $data['company_id'])
+            ->where('owner_id', $owner->id)
+            ->firstOrFail();
+
+        $collector = Collector::where('id', $data['collector_id'])
+            ->whereIn('accountant_id', Accountant::where('owner_id', $owner->id)->pluck('id'))
+            ->first();
+
+        if (!$collector) {
+            return response()->json(['success' => false, 'message' => 'Collector not found.'], 404);
         }
 
-        return back()->with('success', 'Collector assigned successfully.');
+        $ledgers = TallyLedger::where('owner_id', $owner->id)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->whereIn('parent', ['Sundry Debtors', 'Sundry Creditors'])
+            ->whereIn('id', $data['ledger_ids'])
+            ->get(['id', 'parent']);
+
+        if ($ledgers->isEmpty()) {
+            return response()->json(['success' => false, 'message' => 'No valid ledgers selected.'], 422);
+        }
+
+        $now = now();
+
+        DB::transaction(function () use ($ledgers, $collector, $tallyCompany, $owner, $now) {
+            // in ledgers ke purane saare collectors hata do (1 ledger = 1 collector)
+            DB::table('rms_ledger_collectors')
+                ->where('company_id', $tallyCompany->id)
+                ->whereIn('ledger_id', $ledgers->pluck('id'))
+                ->delete();
+
+            $rows = $ledgers->map(fn($l) => [
+                'company_id'    => $tallyCompany->id,
+                'ledger_id'     => $l->id,
+                'ledger_under'  => $l->parent,
+                'owner_id'      => $owner->id,
+                'accountant_id' => $collector->accountant_id,
+                'collector_id'  => $collector->id,
+                'created_at'    => $now,
+                'updated_at'    => $now,
+            ])->all();
+
+            DB::table('rms_ledger_collectors')->insert($rows);
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => $ledgers->count() . " ledger(s) assigned to {$collector->name}.",
+        ]);
     }
 
+
+    public function removeLedgerCollectors(Request $request)
+    {
+        $owner = Auth::guard('owner')->user();
+
+        $data = $request->validate([
+            'company_id'   => 'required|integer',
+            'collector_id' => 'required|integer',
+            'ledger_ids'   => 'required|array|min:1',
+            'ledger_ids.*' => 'integer',
+        ]);
+
+        $deleted = DB::table('rms_ledger_collectors')
+            ->where('owner_id', $owner->id)
+            ->where('company_id', $data['company_id'])
+            ->where('collector_id', $data['collector_id'])
+            ->whereIn('ledger_id', $data['ledger_ids'])
+            ->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$deleted} ledger(s) removed from this collector.",
+        ]);
+    }
     
-public function telecaller(Request $request, $company = null)
-{
-    $owner = Auth::guard('owner')->user();
- 
-    $companies = TallyCompany::where('owner_id', $owner->id)
-        ->when($company, fn($q) => $q->where('company_name', urldecode($company)))
-        ->get();
- 
-    $companyIds = $companies->pluck('id');
- 
-    // Follow Up Hub se jo action "tele call" ke liye assign hue
-    $assigned = Followup::query()
-        ->from('rms_followups')
-        ->join('rms_tally_ledgers', 'rms_tally_ledgers.id', '=', 'rms_followups.ledger_id')
-        ->whereIn('rms_followups.company_id', $companyIds)
-        ->where('rms_tally_ledgers.owner_id', $owner->id)
-        ->where(function ($q) {                                   // Hub me Clear kiye hue rows na dikhen
-            $q->whereNull('rms_followups.clearStatus')->orWhere('rms_followups.clearStatus', 0);
-        })
-        ->where('rms_followups.action', 'allocate_tele_call')     // Hub ke dropdown ki exact value
-        ->select(
-            'rms_followups.id as followup_id',
-            'rms_followups.company_id',
-            'rms_followups.ledger_id',
-            'rms_followups.type',
-            'rms_followups.status',
-            'rms_followups.clearStatus',
-            'rms_followups.frequency',
-            'rms_followups.allocation_date',
-            'rms_tally_ledgers.ledger_name as name',
-            'rms_tally_ledgers.ledger_mobile_number as mobile',
-            'rms_tally_ledgers.parent as under',
-            'rms_tally_ledgers.credit_period',
-            'rms_tally_ledgers.closing_balance',
-            'rms_tally_ledgers.interest_rate',
-            'rms_tally_ledgers.balance_limit'
-        )
-        ->orderByDesc('rms_followups.allocation_date')
-        ->get();
- 
-    // DB me type kaise bhi save ho (label ya key), ye blade key me convert karega
-    $resolveType = function (?string $raw): ?string {
-        $t = strtolower(preg_replace('/\s+/', '', (string) $raw));   // spaces hata do
- 
-        if ($t === '') return null;
-        if (str_contains($t, 'overlimit'))                              return 'overlimits';
-        if (str_contains($t, 'notdue') || str_contains($t, 'not_due'))  return 'not_due';
-        if (str_contains($t, '10-20-30') || str_contains($t, '10_20_30')) return 'days_10_20_30';
-        if (str_contains($t, 'agewise'))                                return 'days_agewise';
-        if (str_contains($t, 'months'))                                 return 'targets_months';
-        if (str_contains($t, '%targets') || str_contains($t, 'pct_targets')) return 'pct_targets';
-        if (str_contains($t, 'due'))                                    return 'due';
-        if (str_contains($t, 'balance'))                                return 'balances';
- 
-        return null;
-    };
- 
-    $today        = Carbon::now()->startOfDay();
-    $nowForTarget = now();
-    $teleCallData = [];
- 
-    foreach ($assigned->groupBy('company_id') as $companyId => $items) {
-        $tallyCompany = $companies->firstWhere('id', $companyId);
- 
-        $vouchersByLedger = TallyVoucher::where('owner_id', $owner->id)
-            ->where('tally_company_id', $companyId)
-            ->whereIn('ledger_id', $items->pluck('ledger_id'))
-            ->get()
-            ->groupBy('ledger_id');
- 
-        $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
-            ->pluck('mapped_to', 'voucher_type')->toArray();
- 
-        $ownerTargets = OverdueTargetSetting::where('owner_id', $owner->id)
-            ->where('company_id', $companyId)
-            ->pluck('receivable_target', 'bucket_month');
- 
-        foreach ($items as $item) {
-            $under        = $item->under;
-            $creditPeriod = (int) ($item->credit_period ?? 0);
-            $balanceAbs   = ltrim((string) ($item->closing_balance ?? '0'), '-+');
-            $balanceF     = (float) $balanceAbs;
- 
-            $vouchers = $vouchersByLedger->get($item->ledger_id, collect())
-                ->map(fn($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
-                    'id'             => $v->id,
-                    'due_date'       => $v->due_date ?? null,
-                    'voucher_number' => $v->voucher_number,
-                ]);
- 
-            $open = $this->buildOpenInvoices($vouchers, $under, $creditPeriod, $today);
- 
-            $dueInvoices    = $open->filter(fn($i) => $i['days'] > 0)->sortByDesc('days')->values();
-            $notDueInvoices = $open->filter(fn($i) => $i['days'] <= 0)->sortBy('days')->values();
- 
-            // Fallback: agar us category ka invoice na mile to koi bhi open invoice / last voucher
-            $anyInvoice = $open->sortByDesc('days')->first();
-            $lastVoucher = $vouchers->sortByDesc(fn($v) => Carbon::parse($v['date'])->timestamp)->first();
- 
-            $dueInv    = $dueInvoices->first()    ?? $anyInvoice;
-            $notDueInv = $notDueInvoices->first() ?? $anyInvoice;
- 
-            // Target (same logic as ledgers page)
-            $pendingSum  = $open->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
-            $extraNotDue = bcsub($balanceAbs, $pendingSum, 2);
-            if (bccomp($extraNotDue, '0', 2) < 0) {
-                $extraNotDue = '0';
-            }
- 
-            $targetRows = $this->computeTargetRows($vouchers, $under, $creditPeriod, $ownerTargets, $nowForTarget, $extraNotDue);
-            $firstRow   = collect($targetRows)->reverse()->first(fn($r) => $r['targetBal'] !== null);
-            $target     = (float) ($firstRow['targetBal'] ?? 0);
-            $targetPct  = $target > 0 ? round(($balanceF / $target) * 100, 2) : 0;
- 
-            // Overlimit: target = balance limit, % = balance limit ke upar kitna
-            $limit        = (float) ($item->balance_limit ?? 0);
-            $overlimitPct = $limit > 0 ? round(($balanceF / $limit) * 100, 2) : 0;
- 
-            // Interest due (overdue invoice par)
-            $dueDays     = (int) ($dueInv['days'] ?? 0);
-            $interestDue = 0;
-            if ($dueInv && $dueDays > 0 && (float) $item->interest_rate > 0) {
-                $interestDue = round(((float) $dueInv['pending'] * (float) $item->interest_rate * $dueDays) / 36500, 2);
-            }
- 
-            $key = $resolveType($item->type);
- 
-            $row = [
-                'id'            => $item->followup_id,
-                'followup_id'   => $item->followup_id,
-                'ledger_id'     => $item->ledger_id,
-                'type'          => $key,
-                'name'          => $item->name,
-                'mobile'        => $item->mobile,
-                'balance'       => $balanceF,
-                'assigned_date' => $item->allocation_date,
-                'frequency'     => $item->frequency,
-                'status'        => ucfirst(strtolower((string) $item->status)),
-            ];
- 
-            // Hub ke chips ke hisaab se saare fields
-            $dueAmount    = (float) ($dueInv['pending'] ?? 0);
-            $notDueAmount = (float) ($notDueInv['pending'] ?? 0);
- 
-            switch ($key) {
-                case 'due':
-                    $row += [
-                        'date'         => $dueInv['date']           ?? ($lastVoucher['date'] ?? null),
-                        'due_date'     => $dueInv['due_date']       ?? null,
-                        'inv_no'       => $dueInv['voucher_number'] ?? ($lastVoucher['voucher_number'] ?? null),
-                        'days'         => max(0, $dueDays),
-                        'due'          => $dueAmount,
-                        'interest_due' => $interestDue,
-                    ];
-                    break;
- 
-                case 'not_due':
-                    $row += [
-                        'date'         => $notDueInv['date']           ?? ($lastVoucher['date'] ?? null),
-                        'due_date'     => $notDueInv['due_date']       ?? null,
-                        'inv_no'       => $notDueInv['voucher_number'] ?? ($lastVoucher['voucher_number'] ?? null),
-                        'days_pending' => $notDueInv ? max(0, -1 * (int) $notDueInv['days']) : 0,
-                        'not_due'      => $notDueAmount,
-                    ];
-                    break;
- 
-                case 'pct_targets':
-                    $row += [
-                        'target'     => $target,
-                        'target_pct' => $targetPct,
-                    ];
-                    break;
- 
-                case 'targets_months':
-                    $row += [
-                        'target'       => $target,
-                        'target_pct'   => $targetPct,
-                        'target_month' => now()->subMonth()->format('Y-m'),
-                    ];
-                    break;
- 
-                case 'days_agewise':
-                    $row['days'] = max(0, $dueDays);
-                    break;
- 
-                case 'days_10_20_30':
-                    $row += [
-                        'date'         => $dueInv['date']           ?? ($lastVoucher['date'] ?? null),
-                        'due_date'     => $dueInv['due_date']       ?? null,
-                        'inv_no'       => $dueInv['voucher_number'] ?? ($lastVoucher['voucher_number'] ?? null),
-                        'days'         => max(0, $dueDays),
-                        'interest_due' => $interestDue,
-                    ];
-                    break;
- 
-                case 'overlimits':
-                case 'balances':
-                    // sirf Balance chip, wo blade me balance se aa jata h
-                    break;
-            }
- 
-            $teleCallData[] = $row;
+
+    private function interestDataForVouchers(array $ids, int $ownerId): array
+    {
+        $ledgerIds = TallyVoucher::where('owner_id', $ownerId)
+            ->whereIn('id', $ids)
+            ->pluck('ledger_id')
+            ->unique();
+
+        $out = ['received' => [], 'pending' => []];
+
+        foreach (TallyLedger::where('owner_id', $ownerId)->whereIn('id', $ledgerIds)->get() as $ledger) {
+            $company = TallyCompany::find($ledger->tally_company_id);
+
+            $res = $this->ledgerInterestData(new Request([
+                'company' => $company->company_name,
+                'ledger'  => $ledger->ledger_name,
+            ]))->getData(true);
+
+            $out['received'] = array_merge($out['received'], $res['received'] ?? []);
+            $out['pending']  = array_merge($out['pending'],  $res['pending']  ?? []);
         }
+
+        return $out;
     }
- 
-    return view('owner.tally.tally.followup-action.telecaller', compact('teleCallData', 'company'));
-}
+
+    public function telecaller(Request $request, $company = null)
+    {
+        $owner = Auth::guard('owner')->user();
+    
+        $companies = TallyCompany::where('owner_id', $owner->id)
+            ->when($company, fn($q) => $q->where('company_name', urldecode($company)))
+            ->get();
+    
+        $companyIds = $companies->pluck('id');
+    
+        // Follow Up Hub se jo action "tele call" ke liye assign hue
+        $assigned = Followup::query()
+            ->from('rms_followups')
+            ->join('rms_tally_ledgers', 'rms_tally_ledgers.id', '=', 'rms_followups.ledger_id')
+            ->whereIn('rms_followups.company_id', $companyIds)
+            ->where('rms_tally_ledgers.owner_id', $owner->id)
+            ->where(function ($q) {                                   // Hub me Clear kiye hue rows na dikhen
+                $q->whereNull('rms_followups.clearStatus')->orWhere('rms_followups.clearStatus', 0);
+            })
+            ->where('rms_followups.action', 'allocate_tele_call')     // Hub ke dropdown ki exact value
+            ->select(
+                'rms_followups.id as followup_id',
+                'rms_followups.company_id',
+                'rms_followups.ledger_id',
+                'rms_followups.type',
+                'rms_followups.status',
+                'rms_followups.clearStatus',
+                'rms_followups.frequency',
+                'rms_followups.allocation_date',
+                'rms_tally_ledgers.ledger_name as name',
+                'rms_tally_ledgers.ledger_mobile_number as mobile',
+                'rms_tally_ledgers.parent as under',
+                'rms_tally_ledgers.credit_period',
+                'rms_tally_ledgers.closing_balance',
+                'rms_tally_ledgers.interest_rate',
+                'rms_tally_ledgers.balance_limit'
+            )
+            ->orderByDesc('rms_followups.allocation_date')
+            ->get();
+    
+        // DB me type kaise bhi save ho (label ya key), ye blade key me convert karega
+        $resolveType = function (?string $raw): ?string {
+            $t = strtolower(preg_replace('/\s+/', '', (string) $raw));   // spaces hata do
+    
+            if ($t === '') return null;
+            if (str_contains($t, 'overlimit'))                              return 'overlimits';
+            if (str_contains($t, 'notdue') || str_contains($t, 'not_due'))  return 'not_due';
+            if (str_contains($t, '10-20-30') || str_contains($t, '10_20_30')) return 'days_10_20_30';
+            if (str_contains($t, 'agewise'))                                return 'days_agewise';
+            if (str_contains($t, 'months'))                                 return 'targets_months';
+            if (str_contains($t, '%targets') || str_contains($t, 'pct_targets')) return 'pct_targets';
+            if (str_contains($t, 'due'))                                    return 'due';
+            if (str_contains($t, 'balance'))                                return 'balances';
+    
+            return null;
+        };
+    
+        $today        = Carbon::now()->startOfDay();
+        $nowForTarget = now();
+        $teleCallData = [];
+    
+        foreach ($assigned->groupBy('company_id') as $companyId => $items) {
+            $tallyCompany = $companies->firstWhere('id', $companyId);
+    
+            $vouchersByLedger = TallyVoucher::where('owner_id', $owner->id)
+                ->where('tally_company_id', $companyId)
+                ->whereIn('ledger_id', $items->pluck('ledger_id'))
+                ->get()
+                ->groupBy('ledger_id');
+    
+            $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
+                ->pluck('mapped_to', 'voucher_type')->toArray();
+    
+            $ownerTargets = OverdueTargetSetting::where('owner_id', $owner->id)
+                ->where('company_id', $companyId)
+                ->pluck('receivable_target', 'bucket_month');
+    
+            foreach ($items as $item) {
+                $under        = $item->under;
+                $creditPeriod = (int) ($item->credit_period ?? 0);
+                $balanceAbs   = ltrim((string) ($item->closing_balance ?? '0'), '-+');
+                $balanceF     = (float) $balanceAbs;
+    
+                $vouchers = $vouchersByLedger->get($item->ledger_id, collect())
+                    ->map(fn($v) => $this->classifyVoucherRow($v, $under, $voucherMappings) + [
+                        'id'             => $v->id,
+                        'due_date'       => $v->due_date ?? null,
+                        'voucher_number' => $v->voucher_number,
+                    ]);
+    
+                $open = $this->buildOpenInvoices($vouchers, $under, $creditPeriod, $today);
+    
+                $dueInvoices    = $open->filter(fn($i) => $i['days'] > 0)->sortByDesc('days')->values();
+                $notDueInvoices = $open->filter(fn($i) => $i['days'] <= 0)->sortBy('days')->values();
+    
+                // Fallback: agar us category ka invoice na mile to koi bhi open invoice / last voucher
+                $anyInvoice = $open->sortByDesc('days')->first();
+                $lastVoucher = $vouchers->sortByDesc(fn($v) => Carbon::parse($v['date'])->timestamp)->first();
+    
+                $dueInv    = $dueInvoices->first()    ?? $anyInvoice;
+                $notDueInv = $notDueInvoices->first() ?? $anyInvoice;
+    
+                // Target (same logic as ledgers page)
+                $pendingSum  = $open->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
+                $extraNotDue = bcsub($balanceAbs, $pendingSum, 2);
+                if (bccomp($extraNotDue, '0', 2) < 0) {
+                    $extraNotDue = '0';
+                }
+    
+                $targetRows = $this->computeTargetRows($vouchers, $under, $creditPeriod, $ownerTargets, $nowForTarget, $extraNotDue);
+                $firstRow   = collect($targetRows)->reverse()->first(fn($r) => $r['targetBal'] !== null);
+                $target     = (float) ($firstRow['targetBal'] ?? 0);
+                $targetPct  = $target > 0 ? round(($balanceF / $target) * 100, 2) : 0;
+    
+                // Overlimit: target = balance limit, % = balance limit ke upar kitna
+                $limit        = (float) ($item->balance_limit ?? 0);
+                $overlimitPct = $limit > 0 ? round(($balanceF / $limit) * 100, 2) : 0;
+    
+                // Interest due (overdue invoice par)
+                $dueDays     = (int) ($dueInv['days'] ?? 0);
+                $interestDue = 0;
+                if ($dueInv && $dueDays > 0 && (float) $item->interest_rate > 0) {
+                    $interestDue = round(((float) $dueInv['pending'] * (float) $item->interest_rate * $dueDays) / 36500, 2);
+                }
+    
+                $key = $resolveType($item->type);
+    
+                $row = [
+                    'id'            => $item->followup_id,
+                    'followup_id'   => $item->followup_id,
+                    'ledger_id'     => $item->ledger_id,
+                    'type'          => $key,
+                    'name'          => $item->name,
+                    'mobile'        => $item->mobile,
+                    'balance'       => $balanceF,
+                    'assigned_date' => $item->allocation_date,
+                    'frequency'     => $item->frequency,
+                    'status'        => ucfirst(strtolower((string) $item->status)),
+                ];
+    
+                // Hub ke chips ke hisaab se saare fields
+                $dueAmount    = (float) ($dueInv['pending'] ?? 0);
+                $notDueAmount = (float) ($notDueInv['pending'] ?? 0);
+    
+                switch ($key) {
+                    case 'due':
+                        $row += [
+                            'date'         => $dueInv['date']           ?? ($lastVoucher['date'] ?? null),
+                            'due_date'     => $dueInv['due_date']       ?? null,
+                            'inv_no'       => $dueInv['voucher_number'] ?? ($lastVoucher['voucher_number'] ?? null),
+                            'days'         => max(0, $dueDays),
+                            'due'          => $dueAmount,
+                            'interest_due' => $interestDue,
+                        ];
+                        break;
+    
+                    case 'not_due':
+                        $row += [
+                            'date'         => $notDueInv['date']           ?? ($lastVoucher['date'] ?? null),
+                            'due_date'     => $notDueInv['due_date']       ?? null,
+                            'inv_no'       => $notDueInv['voucher_number'] ?? ($lastVoucher['voucher_number'] ?? null),
+                            'days_pending' => $notDueInv ? max(0, -1 * (int) $notDueInv['days']) : 0,
+                            'not_due'      => $notDueAmount,
+                        ];
+                        break;
+    
+                    case 'pct_targets':
+                        $row += [
+                            'target'     => $target,
+                            'target_pct' => $targetPct,
+                        ];
+                        break;
+    
+                    case 'targets_months':
+                        $row += [
+                            'target'       => $target,
+                            'target_pct'   => $targetPct,
+                            'target_month' => now()->subMonth()->format('Y-m'),
+                        ];
+                        break;
+    
+                    case 'days_agewise':
+                        $row['days'] = max(0, $dueDays);
+                        break;
+    
+                    case 'days_10_20_30':
+                        $row += [
+                            'date'         => $dueInv['date']           ?? ($lastVoucher['date'] ?? null),
+                            'due_date'     => $dueInv['due_date']       ?? null,
+                            'inv_no'       => $dueInv['voucher_number'] ?? ($lastVoucher['voucher_number'] ?? null),
+                            'days'         => max(0, $dueDays),
+                            'interest_due' => $interestDue,
+                        ];
+                        break;
+    
+                    case 'overlimits':
+                    case 'balances':
+                        // sirf Balance chip, wo blade me balance se aa jata h
+                        break;
+                }
+    
+                $teleCallData[] = $row;
+            }
+        }
+    
+        return view('owner.tally.tally.followup-action.telecaller', compact('teleCallData', 'company'));
+    }
 
     public function call()
     {
