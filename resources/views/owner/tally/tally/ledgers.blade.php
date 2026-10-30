@@ -675,12 +675,12 @@
                                         <table class="table table-bordered table-hover align-middle mb-0" id="ledgerReceiptTable">
                                             <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
                                                 <tr>
-                                                    <th>Recd Date</th>
-                                                    <th>Voucher No.</th>
-                                                    <th class="text-end">Amount</th>
                                                     <th>Adj agst Inv No.</th>
-                                                    <th>Inv Due Date</th>
                                                     <th class="text-end">Invoice Amount</th>
+                                                    <th>Recd Date</th>
+                                                    <th class="text-end">Amount</th>
+                                                    <th>Voucher No.</th>
+                                                    <th>Inv Due Date</th>
                                                 </tr>
                                             </thead>
                                             <tbody id="ledgerReceiptBody">
@@ -1897,8 +1897,10 @@
                             const c = colDefs[k];
                             let value;
                             if (k === 'select') {
+                                const isSettled = r.settlement_status === 'settled';
                                 value = `<input type="checkbox" class="${type}-invoice-checkbox"
-                                            value="${escHtml(r.id ?? '')}" data-inv-no="${escHtml(r.inv_no ?? '')}">`;
+                                            value="${escHtml(r.id ?? '')}" data-inv-no="${escHtml(r.inv_no ?? '')}"
+                                            ${isSettled ? 'disabled title="Already settled"' : ''}>`;
                             } else {
                                 value = c.v(r, index);
                             }
@@ -2044,7 +2046,7 @@
                     $('#ledgerVoucherSearch').val('');
 
                     $('#ledgerBalanceClearedHeader').text(isCreditor ? 'Paid' : 'Received');
-                    $('#ledgerReceiptTable thead th').eq(0).text(isCreditor ? 'Paid Date' : 'Recd Date');
+                    $('#ledgerReceiptTable thead th').eq(2).text(isCreditor ? 'Paid Date' : 'Recd Date');
                     $('#ledgerDueHeadRow').html(isNotDue
                         ? '<th>Date</th><th>Due Date</th><th>Voucher No.</th><th class="text-end" id="ledgerDueAmountHeader">Amount</th>'
                         : '<th>Date</th><th>Voucher No.</th><th class="text-center">Days</th><th class="text-end" id="ledgerDueAmountHeader">Pending Amount</th>');
@@ -2172,12 +2174,12 @@
                                         ? `<div class="text-muted small">of ₹ ${fmtAmt(v.recd_amount)}</div>` : '';
 
                                     rows += `<tr>
-                                        <td>${fmtDate(v.recd_date)}</td>
-                                        <td>${escHtml(v.recd_no ?? '-')}</td>
-                                        <td class="text-end">₹ ${fmtAmt(v.amount)}${of}</td>
                                         <td>${v.inv_no ? escHtml(v.inv_no) : '<span class="text-muted">Unadjusted</span>'}</td>
-                                        <td>${v.inv_due_date ? fmtDate(v.inv_due_date) : '-'}</td>
                                         <td class="text-end">${v.invoice_amount ? '₹ ' + fmtAmt(v.invoice_amount) : '-'}</td>
+                                        <td>${fmtDate(v.recd_date)}</td>
+                                        <td class="text-end">₹ ${fmtAmt(v.amount)}${of}</td>
+                                        <td>${escHtml(v.recd_no ?? '-')}</td>
+                                        <td>${v.inv_due_date ? fmtDate(v.inv_due_date) : '-'}</td>
                                     </tr>`;
                                 });
                                 $('#ledgerReceiptBody').html(rows);
@@ -2829,8 +2831,8 @@
                     const inputId = type === 'received' ? 'receivedSettlementAmount' : 'pendingSettlementAmount';
 
                     const selector = type === 'received'
-                        ? '#intReceivedBody .received-invoice-checkbox:checked'
-                        : '#intPendingBody .pending-invoice-checkbox:checked';
+                        ? '#intReceivedBody .received-invoice-checkbox:not(:disabled):checked'
+                        : '#intPendingBody .pending-invoice-checkbox:not(:disabled):checked';
 
                     if ($(selector).length === 0) {
                         alert('Please select at least one invoice.');
@@ -2845,8 +2847,7 @@
                 $('#receivedSettlementForm').on('submit', function (e) {
                     e.preventDefault();
                     const amount = $('#receivedSettlementAmount').val();
-                    const invoiceIds = $('#intReceivedBody .received-invoice-checkbox:checked')
-                        .map(function () { return $(this).val(); }).get();
+                    const invoiceIds = $('#intReceivedBody .received-invoice-checkbox:not(:disabled):checked').map(function () { return $(this).val(); }).get();
 
                     saveBulkSettlementAmount(amount, invoiceIds, 'received', $(this));
                 });
@@ -2854,8 +2855,7 @@
                 $('#pendingSettlementForm').on('submit', function (e) {
                     e.preventDefault();
                     const amount = $('#pendingSettlementAmount').val();
-                    const invoiceIds = $('#intPendingBody .pending-invoice-checkbox:checked')
-                        .map(function () { return $(this).val(); }).get();
+                    const invoiceIds = $('#intPendingBody .pending-invoice-checkbox:not(:disabled):checked').map(function () { return $(this).val(); }).get();
 
                     saveBulkSettlementAmount(amount, invoiceIds, 'pending', $(this));
                 });
@@ -2905,35 +2905,72 @@
                     });
                 }
 
-                // ===== Select-all / individual checkbox sync =====
+                // ===== Select-all / individual checkbox sync (disabled/settled ko chhodkar) =====
                 $(document).on('change', '#selectAllReceivedInvoices', function () {
-                    $('#intReceivedBody .received-invoice-checkbox').prop('checked', this.checked);
+                    $('#intReceivedBody .received-invoice-checkbox:not(:disabled)').prop('checked', this.checked);
                 });
                 $(document).on('change', '.received-invoice-checkbox', function () {
-                    const total = $('#intReceivedBody .received-invoice-checkbox').length;
-                    const sel   = $('#intReceivedBody .received-invoice-checkbox:checked').length;
+                    const total = $('#intReceivedBody .received-invoice-checkbox:not(:disabled)').length;
+                    const sel   = $('#intReceivedBody .received-invoice-checkbox:not(:disabled):checked').length;
                     $('#selectAllReceivedInvoices').prop('checked', total > 0 && total === sel);
                 });
 
                 $(document).on('change', '#selectAllPendingInvoices', function () {
-                    $('#intPendingBody .pending-invoice-checkbox').prop('checked', this.checked);
+                    $('#intPendingBody .pending-invoice-checkbox:not(:disabled)').prop('checked', this.checked);
                 });
                 $(document).on('change', '.pending-invoice-checkbox', function () {
-                    const total = $('#intPendingBody .pending-invoice-checkbox').length;
-                    const sel   = $('#intPendingBody .pending-invoice-checkbox:checked').length;
+                    const total = $('#intPendingBody .pending-invoice-checkbox:not(:disabled)').length;
+                    const sel   = $('#intPendingBody .pending-invoice-checkbox:not(:disabled):checked').length;
                     $('#selectAllPendingInvoices').prop('checked', total > 0 && total === sel);
                 });
                 // Settlement modals ko voucher modal ke upar rakho
+                // ===== Stacked modal fix: settlement modals ko voucher modal ke upar rakho + input focus chalao =====
+
+                // 1) Bootstrap ka focus trap bypass: parent modal ke focus enforce ko rok do
+                if (bootstrap.Modal && bootstrap.Modal.prototype._initializeFocusTrap) {
+                    const origInit = bootstrap.Modal.prototype._initializeFocusTrap;
+                    bootstrap.Modal.prototype._initializeFocusTrap = function () {
+                        // Stacked settlement modals ke liye trap mat lagao
+                        if (this._element && (this._element.id === 'receivedSettlementModal' || this._element.id === 'pendingSettlementModal')) {
+                            return { activate() {}, deactivate() {} };
+                        }
+                        return origInit.apply(this, arguments);
+                    };
+                }
+
+
+                // Settlement modal khule to voucher modal chhupao, band ho to wapas dikhao
                 $('#receivedSettlementModal, #pendingSettlementModal')
-                    .appendTo('body')
                     .on('show.bs.modal', function () {
-                        $(this).css('z-index', 1065);
-                        setTimeout(() => $('.modal-backdrop').last().css('z-index', 1060), 0);
+                        const parentEl = document.getElementById('ledgerVoucherModal');
+                        bootstrap.Modal.getOrCreateInstance(parentEl).hide();
+                    })
+                    .on('shown.bs.modal', function () {
+                        $(this).find('input[type="number"]').trigger('focus');
                     })
                     .on('hidden.bs.modal', function () {
-                        if ($('#ledgerVoucherModal').hasClass('show')) {
-                            $('body').addClass('modal-open');
-                        }
+                        const parentEl = document.getElementById('ledgerVoucherModal');
+                        const parent = bootstrap.Modal.getOrCreateInstance(parentEl);
+                        parentEl.addEventListener('shown.bs.modal', function () {
+                            refreshInterestLists();
+                        }, { once: true });
+                        parent.show();
+                    });
+
+
+                // 2) Parent modal ka enforceFocus (Bootstrap 4 style) bhi disable
+                // Settlement modal khule to voucher modal chhupao, band ho to wapas dikhao
+                $('#receivedSettlementModal, #pendingSettlementModal')
+                    .on('show.bs.modal', function () {
+                        const parentEl = document.getElementById('ledgerVoucherModal');
+                        bootstrap.Modal.getOrCreateInstance(parentEl).hide();
+                    })
+                    .on('shown.bs.modal', function () {
+                        $(this).find('input[type="number"]').trigger('focus');
+                    })
+                    .on('hidden.bs.modal', function () {
+                        const parentEl = document.getElementById('ledgerVoucherModal');
+                        bootstrap.Modal.getOrCreateInstance(parentEl).show();
                     });
             </script>
         </div>

@@ -42,6 +42,11 @@ return new class extends Migration
                 ['owner_id', 'tally_company_id', 'party_ledger_name'],
                 'party_ledger_idx'
             );
+
+            // 👇 NEW
+            $table->unique(['owner_id', 'tally_company_id', 'master_id'], 
+                'vouchers_sync_unique'
+            );
         });
     }
 

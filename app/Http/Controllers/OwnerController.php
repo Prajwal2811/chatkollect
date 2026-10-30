@@ -1165,8 +1165,13 @@ class OwnerController extends Controller
 
     private function isOtherCredit(array $v): bool
     {
-        return $v['mapped_type_low'] !== 'purchase'
-            && bccomp($v['credit'], '0', 2) > 0;
+        $t = $v['voucher_type_low'];
+
+        return bccomp($v['credit'], '0', 2) > 0
+            && !str_contains($t, 'purchase')
+            && !str_contains($t, 'sale')
+            && !str_contains($t, 'receipt')
+            && !str_contains($t, 'credit note');
     }
 
     public function companyLedgers($company)
@@ -2183,218 +2188,193 @@ class OwnerController extends Controller
             return response()->json(['message' => 'Unable to fetch interest data.'], 500);
         }
     }
+
+
+
+
+    public function saveLedgerSettlement(Request $request)
+    {
+        $validated = $request->validate([
+            'voucher_id'        => 'required|integer',
+            'inv_no'            => 'nullable|string',
+            'settlement_status' => 'required|in:settled',
+            'settlement_amount' => 'required|numeric|min:0',
+        ]);
+
+
+        $owner = auth('owner')->user();   // apna owner guard
+        if (!$owner) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Owner not found.',
+            ], 401);
+        }
+
+
+        return DB::transaction(function () use ($validated, $owner) {
+
+
+            $voucher = TallyVoucher::where('owner_id', $owner->id)
+                ->where('id', $validated['voucher_id'])
+                ->lockForUpdate()
+                ->first();
+
+
+            if (!$voucher) {
+                throw ValidationException::withMessages([
+                    'voucher_id' => ['The selected voucher does not exist.'],
+                ]);
+            }
+
+
+            $voucher->settlement_status = $validated['settlement_status'];
+            $voucher->settlement_amount = $validated['settlement_amount'];
+            $voucher->save();
+
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Settlement saved successfully.',
+                'data' => [
+                    'id'                => $voucher->id,
+                    'voucher_number'    => $voucher->voucher_number,
+                    'settlement_status' => $voucher->settlement_status,
+                    'settlement_amount' => (float) $voucher->settlement_amount,
+                ],
+            ]);
+        });
+    }
+
+
+
+    public function saveBulkLedgerSettlement(Request $request)
+    {
+        $validated = $request->validate([
+            'settlement_status' => 'required|in:settled',
+            'settlement_amount' => 'required|numeric|gt:0',
+            'invoice_ids'       => 'required|array|min:1',
+            'invoice_ids.*'     => 'required|integer|distinct|exists:rms_tally_vouchers,id',
+            'type'              => 'required|in:received,pending',
+        ]);
+
+
+        $owner = auth('owner')->user();
+        if (!$owner) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Owner not found.',
+            ], 401);
+        }
+        $ownerId = $owner->id;
+
+
+        // Sirf is owner ke vouchers allowed
+        $ownedCount = TallyVoucher::where('owner_id', $ownerId)
+            ->whereIn('id', $validated['invoice_ids'])
+            ->count();
+
+
+        if ($ownedCount !== count($validated['invoice_ids'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid vouchers selected.',
+            ], 403);
+        }
+
+
+        return DB::transaction(function () use ($validated, $ownerId) {
+
+
+            $data = $this->interestDataForVouchers($validated['invoice_ids'], $ownerId);
+
+
+            $list = $validated['type'] === 'received'
+                ? collect($data['received'] ?? [])
+                : collect($data['pending'] ?? []);
+
+
+            $filtered = $list
+                ->whereIn('id', $validated['invoice_ids'])
+                ->values()
+                ->all();
+
+
+            if (empty($filtered)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No interest records found for the selected invoices.',
+                ], 422);
+            }
+
+
+            $interestTotal = collect($filtered)->reduce(
+                fn ($t, $r) => bcadd($t, (string) $r['interest_due'], 2),
+                '0'
+            );
+            $receivedTotal = (string) $validated['settlement_amount'];
+
+
+            // Optional: settlement amount selected invoices ke interest se zyada na ho
+            if (bccomp($receivedTotal, $interestTotal, 2) > 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Settlement amount cannot exceed total interest due (' . $interestTotal . ').',
+                ], 422);
+            }
+
+
+            // Proportional split
+            $allocations = [];
+            $allocated   = '0';
+
+
+            foreach ($filtered as $record) {
+                $collected = bccomp($interestTotal, '0', 2) > 0
+                    ? bcmul(bcdiv((string) $record['interest_due'], $interestTotal, 8), $receivedTotal, 2)
+                    : '0.00';
+
+
+                $allocations[$record['id']] = bcadd($allocations[$record['id']] ?? '0', $collected, 2);
+                $allocated = bcadd($allocated, $collected, 2);
+            }
+
+
+            // Rounding ka farq (paise) last invoice mein adjust
+            $diff = bcsub($receivedTotal, $allocated, 2);
+            if (bccomp($diff, '0', 2) !== 0) {
+                $lastId = array_key_last($allocations);
+                $allocations[$lastId] = bcadd($allocations[$lastId], $diff, 2);
+            }
+
+
+            foreach ($allocations as $id => $amount) {
+                TallyVoucher::where('owner_id', $ownerId)
+                    ->where('id', $id)
+                    ->update([
+                        'settlement_amount' => $amount,
+                        'settlement_status' => 'settled',
+                    ]);
+            }
+
+
+            return response()->json([
+                'success'       => true,
+                'message'       => 'Settlement saved successfully.',
+                'updated_count' => count($allocations),
+                'data'          => collect($filtered)->map(fn ($v) => [
+                    'id'                => $v['id'],
+                    'voucher_number'    => $v['inv_no'],
+                    'settlement_status' => 'settled',
+                    'settlement_amount' => $allocations[$v['id']] ?? '0.00',
+                ])->values(),
+            ]);
+        });
+    }
+
     
 
 
-    // public function ledgerInterestData(Request $request)
-    // {
-    //     try {
-    //         $ownerId = Auth::guard('owner')->id();
-
-    //         $request->validate([
-    //             'company' => 'required|string',
-    //             'ledger'  => 'required|string',
-    //             'under'   => 'nullable|string',
-    //         ]);
-
-    //         $tallyCompany = TallyCompany::where('owner_id', $ownerId)
-    //             ->where('company_name', $request->company)
-    //             ->firstOrFail();
-
-    //         $ledgerModel = TallyLedger::where('owner_id', $ownerId)
-    //             ->where('tally_company_id', $tallyCompany->id)
-    //             ->where('ledger_name', $request->ledger)
-    //             ->firstOrFail();
-
-    //         $under        = $ledgerModel->parent;
-    //         $isCreditor   = $under === 'Sundry Creditors';
-    //         $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
-    //         $today        = Carbon::now()->startOfDay();
-
-    //         $partyRate = (string) ($ledgerModel->interest_rate ?? '0');   // % per annum
-    //         $baseRate  = (string) config('app.base_interest_rate', 12);   // % per annum
-
-    //         // Int Pending: amount * rate% * days / 365  => /36500
-    //         $interestYearly = fn ($amt, $rate, $days) =>
-    //             $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '36500', 2) : '0.00';
-
-    //         // Int on Int: amount * (rate/100) * (days/30)  => /3000
-    //         $interestOnInt = fn ($amt, $rate, $days) =>
-    //             $days > 0 ? bcdiv(bcmul(bcmul($amt, $rate, 6), (string) $days, 6), '3000', 2) : '0.00';
-
-    //         $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
-
-    //         // ===== PENDING invoices (overdue) =====
-    //         $pending = $this->buildOpenInvoices($rows, $under, $creditPeriod, $today)
-    //             ->filter(fn ($i) => $i['days'] > 0)
-    //             ->sortByDesc('days')
-    //             ->values()
-    //             ->map(function ($i) use ($interestYearly, $partyRate, $baseRate, $today) {
-    //                 $days = $this->overdueDays($i['due_date'], $today);
-
-    //                 return [
-    //                     'date'           => $i['date'],
-    //                     'due_date'       => $i['due_date'],
-    //                     'inv_no'         => $i['voucher_number'],
-    //                     'days'           => $days,
-    //                     'amount'         => $i['pending'],
-    //                     'interest_due'   => $interestYearly($i['pending'], $partyRate, $days),
-    //                     'interest_due_b' => $interestYearly($i['pending'], $baseRate, $days),
-    //                 ];
-    //             });
-
-    //         // ===== RECEIVED invoices (late paid) : FIFO allocation =====
-    //         $receipts = $rows
-    //             ->filter(fn ($r) => $isCreditor
-    //                 ? (str_contains($r['voucher_type_low'], 'payment') && bccomp($r['debit'], '0', 2) > 0)
-    //                 : (str_contains($r['voucher_type_low'], 'receipt') && bccomp($r['credit'], '0', 2) > 0))
-    //             ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
-    //             ->map(fn ($r) => [
-    //                 'date'      => Carbon::parse($r['date'])->startOfDay(),
-    //                 'remaining' => $isCreditor ? $r['debit'] : $r['credit'],
-    //             ])
-    //             ->values()
-    //             ->all();
-
-    //         $invoices = $rows
-    //             ->filter(fn ($r) => $isCreditor
-    //                 ? ($r['mapped_type_low'] === 'purchase' && bccomp($r['credit'], '0', 2) > 0)
-    //                 : ($r['mapped_type_low'] === 'sales' && bccomp($r['debit'], '0', 2) > 0))
-    //             ->sortBy(fn ($r) => Carbon::parse($r['date'])->timestamp)
-    //             ->values();
-
-    //         $received = collect();
-    //         $ptr = 0;
-
-    //             foreach ($invoices as $inv) {
-    //                 $need        = $isCreditor ? $inv['credit'] : $inv['debit'];
-    //                 $voucherDate = Carbon::parse($inv['date'])->startOfDay();
-    //                 $dueDate     = $this->resolveDueDate($inv['due_date'] ?? null, $voucherDate, $creditPeriod);
-
-    //                 // Invoice ka settlement (ek hi baar, rows mein allocate hoga)
-    //                 $settlementStatus = $inv['settlement_status'] ?? null;
-    //                 $settlementLeft   = is_numeric($inv['settlement_amount'] ?? null)
-    //                     ? (string) $inv['settlement_amount']
-    //                     : '0';
-    //                 $hasSettlement = !empty($settlementStatus) || bccomp($settlementLeft, '0', 2) > 0;
-
-    //                 while (bccomp($need, '0', 2) > 0 && $ptr < count($receipts)) {
-    //                     if (bccomp($receipts[$ptr]['remaining'], '0', 2) <= 0) {
-    //                         $ptr++;
-    //                         continue;
-    //                     }
-
-    //                     $take = bccomp($need, $receipts[$ptr]['remaining'], 2) < 0
-    //                         ? $need : $receipts[$ptr]['remaining'];
-
-    //                     $receipts[$ptr]['remaining'] = bcsub($receipts[$ptr]['remaining'], $take, 2);
-    //                     $need = bcsub($need, $take, 2);
-
-    //                     $recdDate  = $receipts[$ptr]['date'];
-    //                     $delayDays = (int) $dueDate->diffInDays($recdDate, false);
-
-    //                     if ($delayDays > 0) {
-    //                         $daysSince = (int) $recdDate->diffInDays($today, false);
-
-    //                         $intPending = $interestYearly($take, $partyRate, $delayDays);
-    //                         $intOnInt   = $interestOnInt($intPending, $partyRate, $delayDays);
-    //                         $interestDue = bcadd($intPending, $intOnInt, 2);   // ✅ Interest Due
-
-    //                         $intPendingB = $interestYearly($take, $baseRate, $delayDays);
-    //                         $intOnIntB   = $interestOnInt($intPendingB, $baseRate, $delayDays);
-
-    //                         // ✅ Settlement ko Interest Due se jodo
-    //                         if ($hasSettlement) {
-    //                             // is row ka settlement: bacha hua settlement, par Interest Due se zyada nahi
-    //                             $settlementAmt  = bccomp($settlementLeft, $interestDue, 2) < 0 ? $settlementLeft : $interestDue;
-    //                             $settlementLeft = bcsub($settlementLeft, $settlementAmt, 2);
-    //                             $interestWaived = bcsub($interestDue, $settlementAmt, 2);   // Interest Due - Settlement
-    //                         } else {
-    //                             $settlementAmt  = '0.00';
-    //                             $interestWaived = '0.00';
-    //                         }
-
-    //                         $received->push([
-    //                             'inv_no'            => $inv['voucher_number'],
-    //                             'recd_date'         => $recdDate->toDateString(),
-    //                             'amount'            => $take,
-    //                             'int_pending'       => $intPending,
-    //                             'days'              => $delayDays,
-    //                             'days_since'        => $daysSince,
-    //                             'int_on_int'        => $intOnInt,
-    //                             'interest_due'      => $interestDue,
-    //                             'settlement_status' => $settlementStatus,
-    //                             'settlement_amount' => $settlementAmt,
-    //                             'interest_waived'   => $interestWaived,
-    //                             'int_pending_b'     => $intPendingB,
-    //                             'int_on_int_b'      => $intOnIntB,
-    //                             'interest_due_b'    => bcadd($intPendingB, $intOnIntB, 2),
-    //                             'is_settled' => strtolower((string) $settlementStatus) === 'settled',   // ✅ NEW
-    //                         ]);
-    //                     }
-    //                 }
-    //             }
-
-    //             $received = $received
-    //             ->groupBy('inv_no')
-    //             ->map(function ($group) {
-    //                 $first = $group->first();
-    //                 $sum = fn ($key) => $group->reduce(fn ($t, $r) => bcadd($t, (string) $r[$key], 2), '0');
-
-    //                 return array_merge($first, [
-    //                     'recd_date'         => $group->last()['recd_date'],
-    //                     'days'              => $group->max('days'),
-    //                     'amount'            => $sum('amount'),
-    //                     'int_pending'       => $sum('int_pending'),
-    //                     'int_on_int'        => $sum('int_on_int'),
-    //                     'interest_due'      => $sum('interest_due'),
-    //                     'settlement_amount' => $sum('settlement_amount'),
-    //                     'interest_waived'   => $sum('interest_waived'),
-    //                     'int_pending_b'     => $sum('int_pending_b'),
-    //                     'int_on_int_b'      => $sum('int_on_int_b'),
-    //                     'interest_due_b'    => $sum('interest_due_b'),
-    //                 ]);
-    //             })
-    //             ->values();
-                
-    //         $receivedTotal = $received->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-    //         $pendingTotal  = $pending->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-
-    //         $settledRows = $received->filter(fn ($r) => $r['is_settled']);
-
-    //         $settlementRequestTotal = $settledRows
-    //             ->reduce(fn ($t, $r) => bcadd($t, $r['interest_due'], 2), '0');
-
-    //         $settlementReceivedTotal = $settledRows
-    //             ->reduce(fn ($t, $r) => bcadd($t, $r['settlement_amount'], 2), '0');
-
-    //         $interestWaivedTotal = bcsub($settlementRequestTotal, $settlementReceivedTotal, 2);
-
-    //         return response()->json([
-    //             'party_rate'                => $partyRate,
-    //             'base_rate'                 => $baseRate,
-    //             'total'                     => bcadd($receivedTotal, $pendingTotal, 2),
-    //             'received_total'            => $receivedTotal,
-    //             'pending_total'             => $pendingTotal,
-    //             'settlement_request_total'  => $settlementRequestTotal,    // ✅ NEW
-    //             'settlement_received_total' => $settlementReceivedTotal,   // ✅ NEW
-    //             'interest_waived_total'     => $interestWaivedTotal,       // ✅ NEW
-    //             'received'                  => $received->values(),
-    //             'pending'                   => $pending,
-    //         ]);
-
-    //     } catch (\Illuminate\Validation\ValidationException $e) {
-    //         throw $e;
-    //     } catch (\Throwable $e) {
-    //         Log::error('Tally ledgerInterestData failed', [
-    //             'company' => $request->company,
-    //             'ledger'  => $request->ledger,
-    //             'error'   => $e->getMessage(),
-    //         ]);
-    //         return response()->json(['message' => 'Unable to fetch interest data.'], 500);
-    //     }
-    // }
-
+    
     // naya helper: raw classified rows
     // $ownerId = owner ki id, $tallyCompany = TallyCompany model, $ledgerModel = TallyLedger model
     private function getLedgerVoucherRows(int $ownerId, $tallyCompany, $ledgerModel)
@@ -2999,9 +2979,9 @@ class OwnerController extends Controller
                 ->where('ledger_id', $tallyLedger->id)
                 ->get();
 
-            echo "<pre>";
-            print_r($ledgerVoucher);
-            die;   // <-- iske baad ka code kabhi nahi chalta
+            // echo "<pre>";
+            // print_r($ledgerVoucher);
+            // die;   // <-- iske baad ka code kabhi nahi chalta
 
             // ===== Yahan se neeche ka code die() hatane par chalega =====
 

@@ -40,7 +40,9 @@ return new class extends Migration
             $table->enum('mark', ['red', 'green', 'unmarked'])->default('unmarked');
             $table->string('red_reason')->nullable();
             $table->timestamps();
-            $table->index(['owner_id', 'tally_company_id', 'parent']);
+            // 👇 NEW
+            $table->unique(['owner_id', 'tally_company_id', 'master_id'], 'ledgers_sync_unique');
+            $table->index(['owner_id', 'tally_company_id', 'ledger_name'], 'ledgers_name_idx');
         });
     }
 
