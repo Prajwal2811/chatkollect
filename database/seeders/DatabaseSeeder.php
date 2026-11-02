@@ -20,6 +20,7 @@ class DatabaseSeeder extends Seeder
             // OwnerBankDetailsSeeder::class,
             AccountantSeeder::class,
             CollectorSeeder::class,
+            OverdueTargetSettingsSeeder::class,
         ]);
     }
 }

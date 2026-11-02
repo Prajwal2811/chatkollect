@@ -201,9 +201,9 @@
                                                         $chips    = [];
 
                                                         // safe values: key na ho to closing_balance, phir 0
-                                                        $bal       = abs($row['balance'] ?? $row['closing_balance'] ?? 0);
-                                                        $tgt       = $row['target'] ?? $row['targetBalance'] ?? 0;
-                                                        $tgtPct    = $row['target_pct'] ?? ($tgt > 0 ? round(($bal / $tgt) * 100, 2) : 0);
+                                                        $bal       = abs((float) ($row['closing_balance'] ?? $row['balance'] ?? 0));
+                                                        $tgt       = (float) ($row['targetBalance'] ?? $row['target'] ?? 0);
+                                                        $tgtPct    = $bal > 0 ? round(($tgt / $bal) * 100, 2) : 0;
                                                         $fmtDate   = fn($d) => !empty($d) ? \Carbon\Carbon::parse($d)->format('d-M-Y') : '-';
 
                                                         if ($rowType === 'Follow Up-Balances/%Targets') {
@@ -268,7 +268,16 @@
                                                         data-mobile="{{ $row['mobile'] }}"
                                                         data-balance="{{ $row['closing_balance'] ?? 0 }}"
                                                         data-target="{{ $row['targetBalance'] ?? 0 }}"
-                                                        data-followup-type="{{ $rowType }}">
+                                                        data-followup-type="{{ $rowType }}"
+                                                        data-followup-type="{{ $rowType }}"
+                                                        data-status="{{ $row['clearStatus'] == 0 ? ($row['status'] ?: 'Not Assign Yet') : 'Not Assign Yet' }}"
+                                                        data-action="{{ $row['action'] ?? '' }}"
+                                                        data-frequency="{{ $row['frequency'] ?? '' }}"
+                                                        data-allocation-date="{{ $row['allocation_date'] ?? '' }}"
+                                                        data-response-date="{{ $row['response_date'] ?? '' }}"
+                                                        data-response="{{ $row['response'] ?? '' }}"
+                                                        data-solution="{{ $row['solution'] ?? '' }}"
+                                                        data-admin-solution="{{ $row['admin_solution'] ?? '' }}">
                                                         <td>{{ $row['id'] }}</td>
                                                         <td>{{ $row['name'] }}</td>
                                                         <td>{{ $row['mobile'] }}</td>
@@ -477,13 +486,17 @@
                                                             <tbody>
                                                                 @foreach($followUps as $row)
                                                                     @php
-                                                                        $pct = ($row['targetBalance'] ?? 0) > 0
-                                                                            ? round((abs((float) $row['closing_balance']) / (float) $row['targetBalance']) * 100, 2) : 0;
+                                                                        $absBal = abs((float) ($row['closing_balance'] ?? 0));
+                                                                            $pct = $absBal > 0
+                                                                                ? round(((float) ($row['targetBalance'] ?? 0) / $absBal) * 100, 2) : 0;
 
                                                                         $rowDays = $key === '10_20_30_notdue'
                                                                             ? ($row['days_pending'] ?? 0)
                                                                             : ($row['days'] ?? 0);
-                                                                        $badgeClass = match($row['status']) {
+
+                                                                        // is tab ke type ka status; us type me assign nahi hai to "Not Assign Yet"
+                                                                        $tabStatus  = $row['status_by_type'][$label] ?? 'Not Assign Yet';
+                                                                        $badgeClass = match($tabStatus) {
                                                                             'Already Assigned' => 'bg-primary',
                                                                             'Pending'          => 'bg-warning',
                                                                             'Responded'        => 'bg-success',
@@ -514,7 +527,7 @@
 
                                                                         <td>
                                                                             <span class="badge accountant-status-badge {{ $badgeClass }}">
-                                                                                {{ $row['status'] }}
+                                                                                {{ $tabStatus }}
                                                                             </span>
                                                                         </td>
                                                                     </tr>
@@ -823,6 +836,37 @@
         </div>
         {{-- ================= END FOLLOW UP ALLOCATE MODAL ================= --}}
 
+
+        {{-- ================= PENDING INFO MODAL ================= --}}
+        <div class="modal fade" id="followupPendingModal" tabindex="-1" aria-labelledby="followupPendingModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="followupPendingModalLabel">
+                            <i class="fa fa-clock-o text-warning me-2"></i>Response Pending
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                       <div class="alert alert-warning mb-3">
+                            No response has been received from the accountant yet.
+                        </div>
+                        <table class="table table-sm table-borderless mb-0">
+                            <tr><th style="width:40%">Ledger</th><td id="pendingName">-</td></tr>
+                            <tr><th>Mobile</th><td id="pendingMobile">-</td></tr>
+                            <tr><th>Follow Up Type</th><td id="pendingType">-</td></tr>
+                            <tr><th>Action</th><td id="pendingAction">-</td></tr>
+                            <tr><th>Frequency</th><td id="pendingFrequency">-</td></tr>
+                            <tr><th>Allocation Date</th><td id="pendingAllocDate">-</td></tr>
+                        </table>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         {{-- ================= VIEW LOG MODAL ================= --}}
         <div class="modal fade" id="followupLogModal" tabindex="-1" aria-labelledby="followupLogModalLabel" aria-hidden="true">
             <div class="modal-dialog modal-xl modal-dialog-scrollable">
@@ -1088,7 +1132,7 @@
                             'Accept': 'application/json',
                             'X-CSRF-TOKEN': '{{ csrf_token() }}'
                         },
-                        body: JSON.stringify({ company: @json($company) })
+                        body: JSON.stringify({ company: @json($company), type: @json($type) })
                     })
                     .then(function (response) {
                         if (!response.ok) throw new Error('Request failed');
@@ -1237,6 +1281,23 @@
 
                         const logModal = new bootstrap.Modal(document.getElementById('followupLogModal'));
                         logModal.show();
+                        return;
+                    }
+
+
+                    // ---- Pending rows open the Pending Info Modal ----
+                    const isPending = statusBadge && statusBadge.classList.contains('bg-warning');
+
+                    if (isPending) {
+                        document.getElementById('pendingName').textContent = row.getAttribute('data-name') || '-';
+                        document.getElementById('pendingMobile').textContent = row.getAttribute('data-mobile') || '-';
+                        document.getElementById('pendingType').textContent = row.getAttribute('data-followup-type') || '-';
+                        document.getElementById('pendingAction').textContent = row.getAttribute('data-action') || '-';
+                        document.getElementById('pendingFrequency').textContent = row.getAttribute('data-frequency') || '-';
+                        document.getElementById('pendingAllocDate').textContent = formatDate(row.getAttribute('data-allocation-date'));
+
+                        const pendingModal = new bootstrap.Modal(document.getElementById('followupPendingModal'));
+                        pendingModal.show();
                         return;
                     }
 
@@ -1425,7 +1486,8 @@
                     logs.forEach(function (log, index) {
                         const balance = Number(log.balance || 0);
                         const target = Number(log.target || 0);
-                        const pct = target > 0 ? ((Math.abs(balance) / target) * 100).toFixed(2) : '0.00';
+                        const absBalance = Math.abs(balance);
+                        const pct = absBalance > 0 ? ((target / absBalance) * 100).toFixed(2) : '0.00';
 
                         const tr = document.createElement('tr');
                         tr.innerHTML = `

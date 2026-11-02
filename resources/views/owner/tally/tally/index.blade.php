@@ -705,6 +705,10 @@
 									<label class="form-label">Balance Limit</label>
 									<input type="number" min="0" step="0.01" class="form-control" id="debtor_balance_limit" placeholder="e.g. 50000">
 								</div>
+								<div class="mb-3">
+									<label class="form-label">Base Interest Rate (% p.a.)</label>
+									<input type="number" min="0" step="0.01" class="form-control" id="debtor_base_interest_rate" placeholder="e.g. 12">
+								</div>
 							</div>
 
 							<div class="col-md-6">
@@ -725,6 +729,10 @@
 								<div class="mb-3">
 									<label class="form-label">Balance Limit</label>
 									<input type="number" min="0" step="0.01" class="form-control" id="creditor_balance_limit" placeholder="e.g. 50000">
+								</div>
+								<div class="mb-3">
+									<label class="form-label">Base Interest Rate (% p.a.)</label>
+									<input type="number" min="0" step="0.01" class="form-control" id="debtor_base_interest_rate" placeholder="e.g. 12">
 								</div>
 							</div>
 						</div>
@@ -1119,8 +1127,7 @@
 								// Doosri/teesri baar sync karne par ye seedha reload ho jaayega.
 								if (response.show_defaults_prompt) {
 									$('#syncDefaultsMessage').html('');
-									$('#default_credit_period').val('');
-									$('#default_interest_rate').val('');
+									$('#syncDefaultsModal input').val('');
 									showModalEl($syncDefaultsModal, {
 										backdrop: 'static',
 										keyboard: false
@@ -1181,17 +1188,19 @@
 					let applyBtn = $(this);
 
 					let debtor = {
-						mobile_number:  $('#debtor_mobile_number').val(),
-						credit_period:  $('#debtor_credit_period').val(),
-						interest_rate:  $('#debtor_interest_rate').val(),
-						balance_limit:  $('#debtor_balance_limit').val(),
+						mobile_number:      $('#debtor_mobile_number').val(),
+						credit_period:      $('#debtor_credit_period').val(),
+						interest_rate:      $('#debtor_interest_rate').val(),
+						base_interest_rate: $('#debtor_base_interest_rate').val(),
+						balance_limit:      $('#debtor_balance_limit').val(),
 					};
 
 					let creditor = {
-						mobile_number:  $('#creditor_mobile_number').val(),
-						credit_period:  $('#creditor_credit_period').val(),
-						interest_rate:  $('#creditor_interest_rate').val(),
-						balance_limit:  $('#creditor_balance_limit').val(),
+						mobile_number:      $('#creditor_mobile_number').val(),
+						credit_period:      $('#creditor_credit_period').val(),
+						interest_rate:      $('#creditor_interest_rate').val(),
+						base_interest_rate: $('#creditor_base_interest_rate').val(),
+						balance_limit:      $('#creditor_balance_limit').val(),
 					};
 
 					let hasAnyValue = Object.values(debtor).some(v => v !== '') ||
