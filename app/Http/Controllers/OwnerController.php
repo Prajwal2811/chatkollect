@@ -2741,7 +2741,7 @@ class OwnerController extends Controller
                 'particulars' => $inv['particulars'],
                 'original' => $original,
                 // Key ka naam Creditor me 'paid', Debtor me 'received' (dynamic key)
-                $isCreditor ? 'paid' : 'received' => $cleared,
+                $isCreditor ? 'paid' : 'received' => $h,
                 'pending' => $pending,
                 'status' => $status,
                 'cleared_against' => $matchedAgainst,
@@ -2999,9 +2999,9 @@ class OwnerController extends Controller
                 ->where('ledger_id', $tallyLedger->id)
                 ->get();
 
-            echo "<pre>";
-            print_r($ledgerVoucher);
-            die;   // <-- iske baad ka code kabhi nahi chalta
+            // echo "<pre>";
+            // print_r($ledgerVoucher);
+            // die;   // <-- iske baad ka code kabhi nahi chalta
 
             // ===== Yahan se neeche ka code die() hatane par chalega =====
 

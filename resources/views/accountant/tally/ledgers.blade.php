@@ -805,6 +805,9 @@
                                                         <div class="modal-body">
                                                             <label for="receivedSettlementAmount" class="form-label">
                                                                 Settlement Amount
+                                                                <span class="ms-2 badge bg-primary" id="receivedSelectedTotalWrap" style="display:none;">
+                                                                    Selected Total: ₹ <span id="receivedSelectedTotal">0.00</span>
+                                                                </span>
                                                             </label>
                                                             <input type="number" class="form-control"
                                                                 id="receivedSettlementAmount"
@@ -847,6 +850,9 @@
                                                         <div class="modal-body">
                                                             <label for="pendingSettlementAmount" class="form-label">
                                                                 Settlement Amount
+                                                                <span class="ms-2 badge bg-warning text-dark" id="pendingSelectedTotalWrap" style="display:none;">
+                                                                    Selected Total: ₹ <span id="pendingSelectedTotal">0.00</span>
+                                                                </span>
                                                             </label>
                                                             <input type="number" class="form-control"
                                                                 id="pendingSettlementAmount"
@@ -1459,7 +1465,13 @@
             @include('accountant.components.footer')
 
             <script>
-                // ✅ HTML escape helper (XSS + broken attribute se bachne ke liye)
+                // ============================================================
+                //  Ledger List page - ALL JavaScript in one place
+                //  (Blade expressions like  route()  and json are kept,
+                //   so keep this file as a .blade.php partial)
+                // ============================================================
+
+                // ✅ HTML escape helper (prevents XSS and broken attributes)
                 function escHtml(s) {
                     return String(s ?? '')
                         .replace(/&/g, '&amp;')
@@ -1469,7 +1481,7 @@
                         .replace(/'/g, '&#039;');
                 }
 
-                // ✅ Bina round kiye amount dikhata hai (Indian grouping). DB ki value jaisi hai waisi hi.
+                // ✅ Shows the amount without rounding (Indian grouping). The value stays exactly as stored in the DB.
                 function fmtExact(n) {
                     if (n === null || n === undefined || n === '') return '0';
                     let s = String(n).replace(/,/g, '');
@@ -1500,13 +1512,18 @@
                 const totalsDataCreditor    = @json($totalsCreditor);
                 const currentCompanyName    = @json($company);
 
-                // ✅ Voucher modal ke ajax race condition se bachne ke liye token
+                // ✅ Token to avoid ajax race conditions in the voucher modal
                 let voucherReqToken = 0;
 
-                // ===== Interest Cost Breakdown (sab ledgers ka total + har ledger ki row) =====
+                // ✅ Context of the interest modal that is currently open (used to refresh the lists after a settlement)
+                let currentInterestCtx = null;
+
+                // ============================================================
+                //  Interest Cost Breakdown (total of all ledgers + one row per ledger)
+                // ============================================================
                 const BD_INT_KEYS = ['received','dueParty','dueBase','waivedParty','waivedBase','costParty','costBase','premium'];
                 const BD_INT_BASE_KEYS = ['dueBase','waivedBase','costBase','premium'];
-                let bdIntToken = 0;   // modal dobara khule to purane ajax ignore karne ke liye
+                let bdIntToken = 0;   // ignore old ajax responses when the modal is reopened
 
                 function bdInterestVals(res) {
                     const n = v => parseFloat(String(v ?? 0).replace(/,/g, '')) || 0;
@@ -1537,7 +1554,7 @@
 
                     $('.bd-int-cleared-label').text(isCreditor ? 'Paid' : 'Received');
 
-                    // Pehle saari rows "..." ke saath banao
+                    // First build all rows with "..." placeholders
                     let html = '';
                     items.forEach(function (item, i) {
                         html += `<tr data-i="${i}">
@@ -1617,7 +1634,7 @@
                     $('#ledgerBreakdownTitle').text(label + ' Breakdown (' + typeLabel + ')');
                     $('#ledgerBreakdownSearch').val('');
 
-                    // ===== Interest Cost: naya 8-column UI =====
+                    // ===== Interest Cost: new 8-column UI =====
                     if (label === 'Interest Cost') {
                         $('#ledgerBreakdownNormalWrap').addClass('d-none');
                         $('#ledgerBreakdownInterestWrap').removeClass('d-none');
@@ -1625,8 +1642,8 @@
                         return;
                     }
 
-                    // ===== Baaki sab labels: pehle jaisa =====
-                    bdIntToken++;   // chal rahe interest ajax band
+                    // ===== All other labels: same as before =====
+                    bdIntToken++;   // stop any running interest ajax calls
                     $('#ledgerBreakdownInterestWrap').addClass('d-none');
                     $('#ledgerBreakdownNormalWrap').removeClass('d-none');
 
@@ -1644,11 +1661,13 @@
                     }
 
                     $('#ledgerBreakdownBody').html(html);
-                    // Total PHP se aaya hua exact value (JS me float sum nahi)
+                    // Exact total coming from PHP (no float sum in JS)
                     $('#ledgerBreakdownTotal').text('₹ ' + fmtExact(totals[label] ?? 0));
                 }
 
-                // ===== TARGET modal: DB se data =====
+                // ============================================================
+                //  TARGET modal: data from the DB
+                // ============================================================
                 function renderTargetData(ledger, under, token) {
                     const amt = n => (n === null || n === undefined) ? '' : fmtExact(n);
                     const pct = n => (n === null || n === undefined) ? '' : fmtExact(n) + '%';
@@ -1687,8 +1706,9 @@
                     });
                 }
 
-
-                // ===== Interest summary (single table) =====
+                // ============================================================
+                //  Interest summary (single table)
+                // ============================================================
                 function fillInterestSummary(res, isCreditor) {
                     const rs   = v => '₹ ' + fmtExact(v.toFixed(2));
                     const vals = bdInterestVals(res);
@@ -1697,8 +1717,90 @@
                     $('.int-cleared-label').text(isCreditor ? 'Paid' : 'Received');
                 }
 
-                // ===== INTEREST modal: field ke hisaab se columns (Party + Base[grey]) =====
+                // ============================================================
+                //  Invoice selection (Received + Pending) - shared logic
+                //  - select-all affects only VISIBLE rows (not rows hidden by the search)
+                //  - selected total badge + header checkbox (indeterminate)
+                // ============================================================
+                const SEL_CFG = {
+                    received: {
+                        body:  '#intReceivedBody',
+                        cb:    '.received-invoice-checkbox',
+                        all:   '#selectAllReceivedInvoices',
+                        wrap:  '#receivedSelectedTotalWrap',
+                        total: '#receivedSelectedTotal',
+                        input: '#receivedSettlementAmount'
+                    },
+                    pending: {
+                        body:  '#intPendingBody',
+                        cb:    '.pending-invoice-checkbox',
+                        all:   '#selectAllPendingInvoices',
+                        wrap:  '#pendingSelectedTotalWrap',
+                        total: '#pendingSelectedTotal',
+                        input: '#pendingSettlementAmount'
+                    }
+                };
+
+                // Rows that are not hidden by the modal search
+                function visibleInvoiceBoxes(type) {
+                    const c = SEL_CFG[type];
+                    return $(c.body + ' ' + c.cb).filter(function () {
+                        return $(this).closest('tr')[0].style.display !== 'none';
+                    });
+                }
+
+                // Checked AND visible (this is what should be submitted)
+                function selectedInvoiceBoxes(type) {
+                    return visibleInvoiceBoxes(type).filter(':checked');
+                }
+
+                // Recalculate the total + sync the header checkbox
+                function updateSelectedTotal(type) {
+                    const c = SEL_CFG[type];
+                    const $vis     = visibleInvoiceBoxes(type);
+                    const $checked = $vis.filter(':checked');
+
+                    // sum in paise to avoid floating point drift
+                    let paise = 0;
+                    $checked.each(function () {
+                        paise += Math.round((parseFloat($(this).attr('data-amount')) || 0) * 100);
+                    });
+                    const total = paise / 100;
+
+                    $(c.total).text(fmtExact(total.toFixed(2)));
+                    $(c.wrap).toggle($checked.length > 0);
+
+                    $(c.all)
+                        .prop('checked', $vis.length > 0 && $checked.length === $vis.length)
+                        .prop('indeterminate', $checked.length > 0 && $checked.length < $vis.length);
+
+                    return total;
+                }
+
+                // Event wiring - same logic for both tabs
+                ['received', 'pending'].forEach(function (type) {
+                    const c = SEL_CFG[type];
+
+                    $(document)
+                        .off('change.sel' + type)
+                        // header select-all: visible rows only
+                        .on('change.sel' + type, c.all, function () {
+                            visibleInvoiceBoxes(type).prop('checked', this.checked);
+                            updateSelectedTotal(type);
+                        })
+                        // single row
+                        .on('change.sel' + type, c.body + ' ' + c.cb, function () {
+                            updateSelectedTotal(type);
+                        });
+                });
+
+                // ============================================================
+                //  INTEREST modal: columns depend on the field (Party + Base [grey])
+                // ============================================================
                 function renderInterestData(ledger, under, field = 'Interest Cost', token) {
+                    // remember the context (to refresh after a bulk settlement)
+                    currentInterestCtx = { ledger: ledger, under: under, field: field };
+
                     const amt = n => (n === null || n === undefined || n === '') ? '-' : fmtExact(n);
                     const rs  = n => '₹ ' + amt(n);
                     const num = v => parseFloat(String(v ?? 0).replace(/,/g, '')) || 0;
@@ -1712,21 +1814,11 @@
                     const settleWord = isCreditor ? 'Interest Paid' : 'Interest Received';
 
                     const btnWrap = document.getElementById('pendingBtnWrap');
-
-                    btnWrap.style.setProperty(
-                        'display',
-                        field === 'Interest Cost' ? 'flex' : 'none',
-                        'important'
-                    );
+                    btnWrap.style.setProperty('display', field === 'Interest Cost' ? 'flex' : 'none', 'important');
 
                     const btnWrap1 = document.getElementById('receivedBtnWrap');
+                    btnWrap1.style.setProperty('display', field === 'Interest Cost' ? 'flex' : 'none', 'important');
 
-                    btnWrap1.style.setProperty(
-                        'display',
-                        field === 'Interest Cost' ? 'flex' : 'none',
-                        'important'
-                    );
-                    
                     const rowFilters = {
                         'Interest Cost':     r => true,
                         'Interest Received': r => num(r.settlement_amount) > 0 || num(r.settlement_amount_b) > 0,
@@ -1737,7 +1829,7 @@
                     };
                     const keep = rowFilters[field] || (() => true);
 
-                    // [party, base] totals — received tab & pending tab
+                    // [party, base] totals - received tab & pending tab
                     const footerTotals = (res) => {
                         switch (field) {
                             case 'Interest Received':
@@ -1759,17 +1851,12 @@
                         }
                     };
 
-                    const badge = r => r.settlement_status
-                        ? `<span class="badge ${r.settlement_status === 'settled' ? 'bg-success' : 'bg-warning text-dark'}">
-                                ${escHtml(r.settlement_status.charAt(0).toUpperCase() + r.settlement_status.slice(1))}
-                           </span>`
-                        : '-';
                     const remaining  = r => num(r.interest_due)   - num(r.settlement_amount)   - num(r.interest_waived);
                     const remainingB = r => num(r.interest_due_b) - num(r.settlement_amount_b) - num(r.interest_waived_b);
 
                     // grey:true => base rate column
                     const colDefs = {
-                        select: {h: '<input type="checkbox" id="selectAllReceivedInvoices">', cls: 'text-center',    v: r => `<input type="checkbox" class="received-invoice-checkbox" value="${r.id}" data-inv-no="${r.inv_no ?? ''}">`},
+                        select: { h: '<input type="checkbox" id="selectAllReceivedInvoices">', cls: 'text-center', v: r => '' },
                         inv:        { h: 'INV No',              cls: 'text-start', v: r => escHtml(r.inv_no ?? '-') },
                         recdDate:   { h: `Inv ${clr} Date`,     v: r => fmtD(r.recd_date) },
                         date:       { h: 'Date',                cls: 'text-start', v: r => fmtD(r.date) },
@@ -1801,7 +1888,7 @@
                                     `;
                             }
                         },
-                        settle:     { h: `${settleWord} Amount`,cls:'settlement-amount-cell', v: r => rs(r.settlementAmount) },
+                        settle:     { h: `${settleWord} Amount`, cls: 'settlement-amount-cell', v: r => rs(r.settlementAmount) },
                         settleShort:{ h: `Interest ${clr}`,      v: r => rs(r.settlement_amount) },
                         waived:     { h: 'Interest Waived',     cls: 'fw-bold', v: r => rs((r.interest_due - r.settlementAmount).toFixed(2)) },
                         remaining:  { h: 'Remaining Due',       cls: 'fw-bold text-danger', v: r => rs(Math.max(remaining(r), 0).toFixed(2)) },
@@ -1819,29 +1906,29 @@
                     const layouts = {
                         'Interest Cost': {
                             received: ['select','inv','recdDate','intPending','days','intOnInt','due','status','settle','waived',
-                                       'intPendingB','intOnIntB','dueB','settleB','waivedB'],
+                                    'intPendingB','intOnIntB','dueB','settleB','waivedB'],
                             pending:  ['select','date','dueDate','inv','days','amount','due','status','settle','waived',
-                                       'dueB','settleB','waivedB'],
+                                    'dueB','settleB','waivedB'],
                             label: 'Interest Due',
                             rTotal: 'due', rTotalB: 'dueB', pTotal: 'due', pTotalB: 'dueB'
                         },
                         'Interest Received': {
                             received: ['inv','recdDate','intPending','days','intOnInt','due','settleShort','waived',
-                                       'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
+                                    'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
                             pending:  ['date','inv','days','due','status','settle','dueB','settleB'],
                             label: settleWord,
                             rTotal: 'settleShort', rTotalB: 'settleShortB', pTotal: 'settle', pTotalB: 'settleB'
                         },
                         'Interest Due': {
                             received: ['inv','recdDate','intPending','days','intOnInt','due','remaining',
-                                       'intPendingB','intOnIntB','dueB','remainingB'],
+                                    'intPendingB','intOnIntB','dueB','remainingB'],
                             pending:  ['date','dueDate','inv','days','amount','due','remaining','dueB','remainingB'],
                             label: 'Interest Due',
                             rTotal: 'due', rTotalB: 'dueB', pTotal: 'due', pTotalB: 'dueB'
                         },
                         'Interest Waived': {
                             received: ['inv','recdDate','intPending','days','intOnInt','due','settleShort','waived',
-                                       'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
+                                    'intPendingB','intOnIntB','dueB','settleShortB','waivedB'],
                             pending:  ['date','inv','days','due','status','waived','dueB','waivedB'],
                             label: 'Interest Waived',
                             rTotal: 'waived', rTotalB: 'waivedB', pTotal: 'waived', pTotalB: 'waivedB'
@@ -1871,24 +1958,34 @@
                             let value;
 
                             if (k === 'select') {
-                                const rowId = escHtml(r.id ?? index);
-                                const invoiceId = escHtml(r.id ?? '');
-                                const invNo = escHtml(r.inv_no ?? '');
+                                // settled invoice: do not show the checkbox (the cell stays empty)
+                                const isSettled = (r.settlementStatus === 'settled' || r.settlement_status === 'settled');
 
-                                value = `<input type="checkbox"
-                                    id="interestCost${type === 'received' ? 'Received' : 'Pending'}Invoice-${rowId}"
-                                    class="${type}-invoice-checkbox"
-                                    value="${invoiceId}"
-                                    data-inv-no="${invNo}">`;
+                                if (isSettled) {
+                                    value = '';
+                                } else {
+                                    const rowId     = escHtml(r.id ?? index);
+                                    const invoiceId = escHtml(r.id ?? '');
+                                    const invNo     = escHtml(r.inv_no ?? '');
+                                    // used for the selected total in the modal (this invoice's Interest Due)
+                                    const amount    = num(r.interest_due);
+
+                                    value = `<input type="checkbox"
+                                        id="interestCost${type === 'received' ? 'Received' : 'Pending'}Invoice-${rowId}"
+                                        class="${type}-invoice-checkbox"
+                                        value="${invoiceId}"
+                                        data-inv-no="${invNo}"
+                                        data-amount="${amount}">`;
+                                }
                             } else {
-                                value = c.v(r);
+                                value = c.v(r, index);
                             }
 
                             return `<td class="${c.cls ?? ''} ${c.grey ? 'int-grey' : ''}">${value}</td>`;
                         }).join('') + '</tr>'
                     ).join('');
 
-                    // Footer: label ek total column tak, phir party total + base total apni-apni column ke neeche
+                    // Footer: the label spans up to the first total column, then the party total and base total sit under their own columns
                     const buildFoot = (keys, label, partyKey, partyId, baseKey, baseId) => {
                         const first = Math.min(keys.indexOf(partyKey), keys.indexOf(baseKey));
                         let html = `<tr><th colspan="${first}" class="text-end">${label}</th>`;
@@ -1915,7 +2012,7 @@
                         isCostOrDue ? 'Interest Due Invoices Pending' : `${layout.label} (Invoices Pending)`,
                         layout.pTotal, 'intPendingTotal', layout.pTotalB, 'intPendingTotalB'));
 
-                    // Summary table me kaunsi value highlight karni hai
+                    // Which value to highlight in the summary table
                     const highlightKeys = {
                         'Interest Cost':     ['costParty', 'costBase'],
                         'Interest Due':      ['dueParty', 'dueBase'],
@@ -1939,6 +2036,8 @@
                     $('#intReceivedBody').html(emptyRow(rKeys.length));
                     $('#intPendingBody').html(emptyRow(pKeys.length));
                     $('#intReceivedCount, #intPendingCount').text('0');
+                    updateSelectedTotal('received');
+                    updateSelectedTotal('pending');
                     bootstrap.Tab.getOrCreateInstance(document.getElementById('intTabReceivedBtn')).show();
 
                     $('#ledgerVoucherLoading').removeClass('d-none');
@@ -1977,9 +2076,13 @@
 
                             $('#intPendingBody').html(
                                 pending.length ? buildRows(pKeys, pending, 'pending')
-                                               : `<tr><td colspan="${pKeys.length}" class="text-center text-muted">No data found</td></tr>`
+                                            : `<tr><td colspan="${pKeys.length}" class="text-center text-muted">No data found</td></tr>`
                             );
                             $('#intPendingCount').text(pending.length);
+
+                            // the table was rebuilt, so reset the total + header checkbox
+                            updateSelectedTotal('received');
+                            updateSelectedTotal('pending');
                         },
                         error: function () {
                             if (token !== voucherReqToken) return;
@@ -1989,13 +2092,15 @@
                     });
                 }
 
-                // ===== Per-ledger, per-field (Balance / Balance Overdue / Target / Sale / ...) voucher modal =====
+                // ============================================================
+                //  Per-ledger, per-field (Balance / Balance Overdue / Target / Sale / ...) voucher modal
+                // ============================================================
                 function showLedgerVoucherDetail(ledger, under, field) {
                     const token = ++voucherReqToken;
 
                     let isBalance  = (field === 'Balance');
                     let isNotDue   = (field === 'Not Due');
-                    let isDue      = (field === 'Balance Overdue') || isNotDue;   // Not Due bhi Due wali table use karta hai
+                    let isDue      = (field === 'Balance Overdue') || isNotDue;   // Not Due also uses the Due table
                     let isTarget   = (field === 'Balance Target');
                     let isSale     = (field === 'Sale');
                     let isCreditor = (under === 'Sundry Creditors');
@@ -2036,7 +2141,7 @@
                     $('#ledgerVoucherTable .col-debit').toggle(!hideDebit);
                     $('#ledgerVoucherTable .col-credit').toggle(!hideCredit);
 
-                    // Sale ke liye Credit Period columns dikhao
+                    // Show the Credit Period columns for Sale
                     $('#ledgerVoucherTable .col-duedate').toggleClass('d-none', !isSale);
                     $('#ledgerVoucherTable .col-creditperiod').toggleClass('d-none', !isSale);
                     $('#ledgerVoucherTable .col-days').toggleClass('d-none', !isSale);
@@ -2048,7 +2153,7 @@
                         .replace(':under', encodeURIComponent(under));
                     $('#ledgerVoucherViewAllLink').attr('href', fullPageUrl);
 
-                    // ===== TARGET: DB se data =====
+                    // ===== TARGET: data from the DB =====
                     if (isTarget) {
                         renderTargetData(ledger, under, token);
                         return;
@@ -2067,7 +2172,7 @@
 
                     let dueAjaxUrl = "{{ route('accountant.tally.ledger.due-vouchers') }}";
 
-                    // ✅ Round nahi, DB jaisa exact amount
+                    // ✅ No rounding, exact amount as in the DB
                     let fmtAmt = function (n) {
                         return fmtExact(n);
                     };
@@ -2105,7 +2210,7 @@
                                 return;
                             }
 
-                            // ===== BALANCE DUE (sirf Days + Amount) =====
+                            // ===== BALANCE DUE (only Days + Amount) =====
                             if (isDue) {
                                 let rows = '';
                                 vouchers.forEach(function (v) {
@@ -2131,7 +2236,7 @@
                                     </tr>`;
                                 });
                                 $('#ledgerDueBody').html(rows);
-                                // Total controller se aata hai (exact). JS me float sum nahi karte.
+                                // The total comes from the controller (exact). We do not sum floats in JS.
                                 $('#ledgerDueTotal').text('₹ ' + fmtAmt(res.total ?? 0));
                                 return;
                             }
@@ -2153,7 +2258,7 @@
                                 return;
                             }
 
-                            // ===== NORMAL fields (Sale yahin, Due Date + Credit Period yahin editable) =====
+                            // ===== NORMAL fields (Sale is handled here; Due Date + Credit Period are editable here) =====
                             let rows = '';
                             vouchers.forEach(function (v) {
                                 let dueDateCell = '';
@@ -2205,7 +2310,9 @@
                     });
                 }
 
-                // ===== Credit Period alert helper (manual dismiss, DOM se delete nahi hota) =====
+                // ============================================================
+                //  Credit Period alert helper (manual dismiss, never removed from the DOM)
+                // ============================================================
                 let creditPeriodAlertTimer = null;
                 function showCreditPeriodAlert(type, message) {
                     const $alert = $('#creditPeriodSaveAlert');
@@ -2224,7 +2331,7 @@
                     $('#creditPeriodSaveAlert').addClass('d-none');
                 });
 
-                // ===== Per-voucher editable Credit Period -> Save button se update =====
+                // ===== Per-voucher editable Credit Period -> updated via the Save button =====
                 $(document).on('click', '.credit-period-save-btn', function () {
                     let $btn   = $(this);
                     let $input = $btn.closest('td').find('.credit-period-input');
@@ -2247,7 +2354,7 @@
                         data: {
                             _token: "{{ csrf_token() }}",
                             company: currentCompanyName,
-                            // .attr() taaki ledger naam / id string hi rahe (.data() type convert kar deta hai)
+                            // use .attr() so the ledger name / id stays a string (.data() converts types)
                             ledger: $input.attr('data-ledger'),
                             under: $input.attr('data-under'),
                             voucher_id: $input.attr('data-voucher-id'),
@@ -2267,7 +2374,7 @@
 
                             showCreditPeriodAlert('success', 'Credit period updated successfully.');
 
-                            // Row ko ek pal ke liye highlight, visual confirmation ke liye
+                            // Briefly highlight the row as visual confirmation
                             $row.addClass('table-success');
                             setTimeout(() => $row.removeClass('table-success'), 1200);
                         },
@@ -2280,7 +2387,9 @@
                     });
                 });
 
-                // ===== Tab-wise Summary Cards =====
+                // ============================================================
+                //  Tab-wise Summary Cards
+                // ============================================================
                 let summaryVisible = false;
 
                 function getActiveLedgerScope() {
@@ -2317,6 +2426,9 @@
                     }
                 });
 
+                // ============================================================
+                //  Follow Up
+                // ============================================================
                 $(document).on("click", ".openFollowupModal", function () {
                     $("#followupCompany").val($(this).data("company"));
                     $("#followupLedger").val('');
@@ -2344,7 +2456,9 @@
                     window.open(url, "_blank");
                 });
 
-                // ===== Bad Debts / Family A/c assignment feature (separate for Debtors & Creditors) =====
+                // ============================================================
+                //  Bad Debts / Family A/c assignment (separate for Debtors & Creditors)
+                // ============================================================
                 $('.bad-debt-toggle-btn').on('click', function () {
                     let $btn = $(this);
                     let type = $btn.data('type');
@@ -2381,7 +2495,7 @@
                     let selected = [];
                     $('.bad-debt-checkbox[data-type="' + type + '"]:checked').each(function () {
                         selected.push({
-                            ledger: $(this).attr('data-ledger'),   // .attr() taaki naam string hi rahe (jQuery .data() type convert kar deta hai)
+                            ledger: $(this).attr('data-ledger'),   // use .attr() so the name stays a string (jQuery .data() converts types)
                             under: $(this).attr('data-under')
                         });
                     });
@@ -2438,7 +2552,9 @@
                     });
                 });
 
-                // ===== Search + Status / Rank / Overlimit Filters (per tab) =====
+                // ============================================================
+                //  Search + Status / Rank / Overlimit Filters (per tab)
+                // ============================================================
                 function applyLedgerFilters(scope) {
                     const $bar       = $('.ledger-filter-bar[data-scope="' + scope + '"]');
                     const q          = ($bar.find('.filter-search').val() || '').toLowerCase().trim();
@@ -2466,8 +2582,8 @@
 
                         if (q) {
                             matches = name.indexOf(q) !== -1
-                                   || (qId && uid.indexOf(qId) !== -1)
-                                   || (qDigits && mobile.indexOf(qDigits) !== -1);
+                                || (qId && uid.indexOf(qId) !== -1)
+                                || (qDigits && mobile.indexOf(qDigits) !== -1);
                         }
                         if (matches && statusVal) {
                             matches = (status === statusVal);
@@ -2484,7 +2600,7 @@
                         if (matches) {
                             visibleCount++;
                         } else {
-                            // hidden ledger ka bad-debt checkbox uncheck, taaki galti se assign na ho
+                            // uncheck the bad-debt checkbox of a hidden ledger so it is not assigned by mistake
                             $item.find('.bad-debt-checkbox:checked').prop('checked', false).trigger('change');
                         }
                     });
@@ -2516,13 +2632,15 @@
                     applyLedgerFilters($bar.data('scope'));
                 });
 
-                // Page load pe count dikhao
+                // Show the counts on page load
                 $(function () {
                     applyLedgerFilters('debtor');
                     applyLedgerFilters('creditor');
                 });
 
-                // ===== Manual, single-source accordion open/close =====
+                // ============================================================
+                //  Manual, single-source accordion open/close
+                // ============================================================
                 $(document).off('click.ledgerAccordion').on('click.ledgerAccordion', '.js-accordion-btn', function (e) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -2557,8 +2675,9 @@
                     }
                 });
 
-                
-                // ===== Search inside modals (Breakdown + Voucher) =====
+                // ============================================================
+                //  Search inside modals (Breakdown + Voucher)
+                // ============================================================
                 function filterModalTableRows(inputId, tbodyId) {
                     let val = ($('#' + inputId).val() || '').toLowerCase().trim();
                     let $rows = $('#' + tbodyId + ' tr');
@@ -2587,17 +2706,20 @@
                     }
                 }
 
-                // Live search - Breakdown Modal (Interest Cost ho to bdIntBody, warna normal table)
+                // Live search - Breakdown Modal (bdIntBody for Interest Cost, otherwise the normal table)
                 $(document).on('input', '#ledgerBreakdownSearch', function () {
                     const tbodyId = $('#ledgerBreakdownInterestWrap').hasClass('d-none') ? 'ledgerBreakdownBody' : 'bdIntBody';
                     filterModalTableRows('ledgerBreakdownSearch', tbodyId);
                 });
 
-                // Live search - Voucher Modal (Normal / Balance / Balance Overdue / Target, jo table visible ho usi me)
+                // Live search - Voucher Modal (Normal / Balance / Balance Overdue / Target / Interest)
                 $(document).on('input', '#ledgerVoucherSearch', function () {
                     if (!$('#ledgerVoucherInterestWrap').hasClass('d-none')) {
                         filterModalTableRows('ledgerVoucherSearch', 'intReceivedBody');
                         filterModalTableRows('ledgerVoucherSearch', 'intPendingBody');
+                        // recalculate the total + header checkbox based on the hidden rows
+                        updateSelectedTotal('received');
+                        updateSelectedTotal('pending');
                         return;
                     }
                     let tbodyId = 'ledgerVoucherBody';
@@ -2611,19 +2733,21 @@
                     filterModalTableRows('ledgerVoucherSearch', tbodyId);
                 });
 
-                // Modal band hone par search box reset + chal rahe requests band
+                // On modal close: reset the search box + cancel running requests
                 $('#ledgerBreakdownModal').on('hidden.bs.modal', function () {
                     $('#ledgerBreakdownSearch').val('');
                     bdIntToken++;
                 });
                 $('#ledgerVoucherModal').on('hidden.bs.modal', function () {
-                    voucherReqToken++;   // pending voucher/target/interest ajax ignore
+                    voucherReqToken++;   // ignore pending voucher/target/interest ajax responses
                     $('#ledgerVoucherSearch').val('');
                     clearTimeout(creditPeriodAlertTimer);
                     $('#creditPeriodSaveAlert').addClass('d-none').removeClass('alert-success alert-danger');
                 });
 
-                // ===== Debtor Ranking modal: live search =====
+                // ============================================================
+                //  Debtor Ranking modal: live search
+                // ============================================================
                 $(document).on('input', '#debtorRankingSearch', function () {
                     let val = $(this).val().toLowerCase().trim();
                     $('#debtorRankingTable tbody tr').each(function () {
@@ -2634,6 +2758,9 @@
                     $('#debtorRankingSearch').val('').trigger('input');
                 });
 
+                // ============================================================
+                //  Lazy-load the Interest values when an accordion opens
+                // ============================================================
                 $(document).on('shown.bs.collapse', '.accordion-collapse', function () {
                     const $item = $(this).closest('.accordion-item[data-ledger]');
                     if (!$item.length || $item.data('intLoaded')) return;
@@ -2676,285 +2803,223 @@
                     });
                 });
 
-$(document).on('change', '.settlement-status', function () {
-    const $select = $(this);
-    const status = $select.val();
-    const $row = $select.closest('tr');
-    const $amountCell = $row.find('.settlement-amount-cell');
+                // ============================================================
+                //  Single invoice settlement (status dropdown -> amount input -> save)
+                // ============================================================
+                $(document).on('change', '.settlement-status', function () {
+                    const $select = $(this);
+                    const status = $select.val();
+                    const $row = $select.closest('tr');
+                    const $amountCell = $row.find('.settlement-amount-cell');
 
-    if (status === 'settled') {
-        $amountCell.html(`
-            <div class="d-flex align-items-center gap-2">
-                <input type="number"
-                    class="form-control form-control-sm settlement-amount-input"
-                    placeholder="Enter amount"
-                    min="0"
-                    step="0.01"
-                    style="min-width:80px;">
+                    if (status === 'settled') {
+                        $amountCell.html(`
+                            <div class="d-flex align-items-center gap-2">
+                                <input type="number"
+                                    class="form-control form-control-sm settlement-amount-input"
+                                    placeholder="Enter amount"
+                                    min="0"
+                                    step="0.01"
+                                    style="min-width:80px;">
 
-                    
-                            <button type="button" class="btn btn-sm btn-outline-primary save-settlement" title="Save">
-                                <i class="fa fa-save"></i>
-                            </button>
-                
-            </div>
-        `);
-    } else {
-        $amountCell.html(`
-            <span class="fw-bold settlement-amount-label">-</span>
-        `);
-    }
-});
+                                <button type="button" class="btn btn-sm btn-outline-primary save-settlement" title="Save">
+                                    <i class="fa fa-save"></i>
+                                </button>
+                            </div>
+                        `);
+                    } else {
+                        $amountCell.html(`
+                            <span class="fw-bold settlement-amount-label">-</span>
+                        `);
+                    }
+                });
 
-                
+                $(document).on('click', '.save-settlement', function () {
+                    const $btn = $(this);
+                    const $row = $btn.closest('tr');
+                    const $select = $row.find('.settlement-status');
+                    const amount = $row.find('.settlement-amount-input').val();
 
-function showBulkSettlementForm(type) {
-    const modalId = type === 'received'
-        ? 'receivedSettlementModal'
-        : 'pendingSettlementModal';
+                    if (amount === '' || !Number.isFinite(Number(amount)) || Number(amount) < 0) {
+                        alert('Please enter a valid settlement amount.');
+                        return;
+                    }
 
-    const inputId = type === 'received'
-        ? 'receivedSettlementAmount'
-        : 'pendingSettlementAmount';
+                    $.ajax({
+                        url: "{{ route('accountant.tally.ledger.save-settlement') }}",
+                        method: "POST",
+                        dataType: "json",
+                        data: {
+                            _token: "{{ csrf_token() }}",
+                            voucher_id: $select.data('voucher-id'),
+                            inv_no: $select.data('inv-no'),
+                            settlement_status: 'settled',
+                            settlement_amount: amount
+                        },
+                        success: function (res) {
+                            if (res.success) {
+                                // Update the amount displayed in the row
+                                $row.find('.settlement-amount-cell').html(
+                                    $('<span>', {
+                                        class: 'fw-bold',
+                                        text: amount
+                                    })
+                                );
 
-    document.getElementById(inputId).value = '';
+                                // Replace the status dropdown
+                                $select.replaceWith(
+                                    '<span class="badge bg-success">Settled</span>'
+                                );
 
-    bootstrap.Modal.getOrCreateInstance(
-        document.getElementById(modalId)
-    ).show();
-}
+                                // Now settled: remove the row's checkbox and recalculate the totals
+                                $row.find('.received-invoice-checkbox, .pending-invoice-checkbox').remove();
+                                updateSelectedTotal('received');
+                                updateSelectedTotal('pending');
 
+                                // Hide the Save button
+                                $btn.hide();
+                            } else {
+                                alert(res.message || 'Could not save settlement.');
+                            }
+                        },
+                        error: function (xhr) {
+                            console.error('AJAX error:', xhr.responseText);
+                            alert('Could not save settlement. Please try again.');
+                        }
+                    });
+                });
 
-// Received settlement form
-$('#receivedSettlementForm').on('submit', function (e) {
-    e.preventDefault();
+                // ============================================================
+                //  Bulk settlement (Received + Pending)
+                // ============================================================
+                function showBulkSettlementForm(type) {
+                    const modalId = type === 'received' ? 'receivedSettlementModal' : 'pendingSettlementModal';
+                    const c = SEL_CFG[type];
 
-    const amount = $('#receivedSettlementAmount').val();
-    const invoiceIds = $('#intReceivedPendingBody .received-invoice-checkbox:checked')
-        .map(function () {
-            return $(this).val();
-        })
-        .get();
-    if (amount <= 0) {
-        alert('Please enter a valid settlement amount.');
-        return;
-    }
+                    // get the total of the selected invoices and prefill the input (the user can edit it)
+                    const total = updateSelectedTotal(type);
+                    document.querySelector(c.input).value = total > 0 ? total.toFixed(2) : '';
 
-    if (invoiceIds.length === 0) {
-        alert('Please select at least one invoice.');
-        return;
-    }
+                    bootstrap.Modal.getOrCreateInstance(document.getElementById(modalId)).show();
+                }
 
-    saveBulkSettlemtAmount(amount,invoiceIds, 'received', $(this));
-});
+                // Received settlement form
+                $('#receivedSettlementForm').on('submit', function (e) {
+                    e.preventDefault();
 
+                    const amount = $('#receivedSettlementAmount').val();
+                    // only checked + visible rows (not rows hidden by the search)
+                    const invoiceIds = selectedInvoiceBoxes('received')
+                        .map(function () { return $(this).val(); })
+                        .get();
 
-// Pending settlement form
-$('#pendingSettlementForm').on('submit', function (e) {
-    e.preventDefault();
+                    if (!amount || Number(amount) <= 0) {
+                        alert('Please enter a valid settlement amount.');
+                        return;
+                    }
 
-    const amount = $('#pendingSettlementAmount').val();
+                    if (invoiceIds.length === 0) {
+                        alert('Please select at least one invoice.');
+                        return;
+                    }
 
-    const invoiceIds = $('#intReceivedPendingBody2 .pending-invoice-checkbox:checked')
-        .map(function () {
-            return $(this).val();
-        })
-        .get();
-    if (amount <= 0) {
-        alert('Please enter a valid settlement amount.');
-        return;
-    }
+                    saveBulkSettlemtAmount(amount, invoiceIds, 'received', $(this));
+                });
 
-    if (invoiceIds.length === 0) {
-        alert('Please select at least one invoice.');
-        return;
-    }
-    
-    saveBulkSettlemtAmount(amount, invoiceIds,'pending', $(this));
-});
+                // Pending settlement form
+                $('#pendingSettlementForm').on('submit', function (e) {
+                    e.preventDefault();
 
+                    const amount = $('#pendingSettlementAmount').val();
+                    const invoiceIds = selectedInvoiceBoxes('pending')
+                        .map(function () { return $(this).val(); })
+                        .get();
 
-// Save bulk settlement using AJAX
-function saveBulkSettlemtAmount(amount,invoiceIds, type, form) {
+                    if (!amount || Number(amount) <= 0) {
+                        alert('Please enter a valid settlement amount.');
+                        return;
+                    }
 
-    if (!amount || !Number.isFinite(Number(amount)) ||
-        Number(amount) <= 0) {
-        alert('Please enter a valid settlement amount.');
-        return;
-    }
+                    if (invoiceIds.length === 0) {
+                        alert('Please select at least one invoice.');
+                        return;
+                    }
 
-    const submitBtn = form.find('button[type="submit"]');
-    const originalText = submitBtn.text();
+                    saveBulkSettlemtAmount(amount, invoiceIds, 'pending', $(this));
+                });
 
-    $.ajax({
-        url: "{{ route('accountant.tally.ledger.save-bulk-settlement') }}",
-        type: "POST",
-        data: {
-            settlement_amount: amount,
-            type: type,
-            invoice_ids: invoiceIds,
-            settlement_status: 'settled',
-             _token: "{{ csrf_token() }}",
-        },
+                // Save bulk settlement using AJAX
+                function saveBulkSettlemtAmount(amount, invoiceIds, type, form) {
 
-        beforeSend: function () {
-            submitBtn.prop('disabled', true)
-                .text('Saving...');
-        },
+                    if (!amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+                        alert('Please enter a valid settlement amount.');
+                        return;
+                    }
 
-        success: function (response) {
+                    const submitBtn = form.find('button[type="submit"]');
+                    const originalText = submitBtn.text();
 
-            if (response.success) {
+                    $.ajax({
+                        url: "{{ route('accountant.tally.ledger.save-bulk-settlement') }}",
+                        type: "POST",
+                        data: {
+                            settlement_amount: amount,
+                            type: type,
+                            invoice_ids: invoiceIds,
+                            settlement_status: 'settled',
+                            _token: "{{ csrf_token() }}",
+                        },
 
-                // Close the relevant modal
-                const modalId = type === 'received'
-                    ? 'receivedSettlementModal'
-                    : 'pendingSettlementModal';
+                        beforeSend: function () {
+                            submitBtn.prop('disabled', true).text('Saving...');
+                        },
 
-                const modalElement  = document.getElementById(modalId);
-                const modalInstance = bootstrap.Modal.getOrCreateInstance(modalElement);
+                        success: function (response) {
+                            if (response.success) {
 
-                modalInstance.hide();
+                                // Close the relevant modal
+                                const modalId = type === 'received' ? 'receivedSettlementModal' : 'pendingSettlementModal';
+                                bootstrap.Modal.getOrCreateInstance(document.getElementById(modalId)).hide();
 
-                // Refresh both invoice lists
-                refreshReceivedInvoiceList();
-                refreshPendingInvoiceList();
+                                // Refresh the invoice lists (same ledger / same field)
+                                refreshInterestInvoiceLists();
 
-                // Show success message
-                if (typeof toastr !== 'undefined') {
-                    toastr.success(
-                        response.message || 'Settlement saved successfully.'
-                    );
-                } else {
-                    alert(
-                        response.message || 'Settlement saved successfully.'
+                                if (typeof toastr !== 'undefined') {
+                                    toastr.success(response.message || 'Settlement saved successfully.');
+                                } else {
+                                    alert(response.message || 'Settlement saved successfully.');
+                                }
+
+                            } else {
+                                alert(response.message || 'Unable to save settlement.');
+                            }
+                        },
+
+                        error: function (xhr) {
+                            const message = xhr.responseJSON?.message
+                                || 'An error occurred while saving the settlement.';
+                            alert(message);
+                        },
+
+                        complete: function () {
+                            submitBtn.prop('disabled', false).text(originalText);
+                        }
+                    });
+                }
+
+                // ✅ Reload both the Received and Pending tables in one call (for the currently open ledger)
+                function refreshInterestInvoiceLists() {
+                    if (!currentInterestCtx) return;
+                    renderInterestData(
+                        currentInterestCtx.ledger,
+                        currentInterestCtx.under,
+                        currentInterestCtx.field,
+                        ++voucherReqToken
                     );
                 }
 
-            } else {
-                alert(response.message || 'Unable to save settlement.');
-            }
-        },
-
-        error: function (xhr) {
-            const message = xhr.responseJSON?.message
-                || 'An error occurred while saving the settlement.';
-
-            alert(message);
-        },
-
-        complete: function () {
-            submitBtn.prop('disabled', false).text(originalText);
-        }
-    });
-}
-
-
-// Refresh Received invoice list
-function refreshReceivedInvoiceList() {
-    // Replace with your existing function that loads Received invoices.
-    if (typeof renderInterestData === 'function') {
-        renderInterestData("GURULAXMI CREATION","under=Sundry Debtors");
-    }
-}
-
-
-// Refresh Pending invoice list
-function refreshPendingInvoiceList() {
-    // Replace with your existing function that loads Pending invoices.
-    if (typeof renderInterestData === 'function') {
-        renderInterestData("GURULAXMI CREATION","under=Sundry Creditors");
-    }
-}
-
-$(document).on('change', '#selectAllReceivedInvoices', function () {
-    const checked = this.checked;
-
-    $('#intReceivedBody .received-invoice-checkbox')
-        .prop('checked', checked);
-});
-
-$(document).on('change', '.received-invoice-checkbox', function () {
-    const total = $('#intReceivedBody .received-invoice-checkbox').length;
-    const selected = $('#intReceivedBody .received-invoice-checkbox:checked').length;
-
-    $('#selectAllReceivedInvoices').prop(
-        'checked',
-        total > 0 && total === selected
-    );
-});
-
-$(document).on('change', '#selectAllPendingInvoices', function () {
-    const checked = this.checked;
-
-    $('#intPendingBody .pending-invoice-checkbox')
-        .prop('checked', checked);
-});
-
-
-$(document).on('change', '.pending-invoice-checkbox', function () {
-    const total = $('#intPendingBody .pending-invoice-checkbox').length;
-    const selected = $('#intPendingBody .pending-invoice-checkbox:checked').length;
-
-    $('#selectAllPendingInvoices').prop(
-        'checked',
-        total > 0 && total === selected
-    );
-});
-
-
-                
-$(document).on('click', '.save-settlement', function () {
-    const $btn = $(this);
-    const $row = $btn.closest('tr');
-    const $select = $row.find('.settlement-status');
-    const amount = $row.find('.settlement-amount-input').val();
-    const rs  = n => '₹ ' + amt(n);
-
-    if (amount === '' || !Number.isFinite(Number(amount)) || Number(amount) < 0) {
-        alert('Please enter a valid settlement amount.');
-        return;
-    }
-
-    $.ajax({
-        url: "{{ route('accountant.tally.ledger.save-settlement') }}",
-        method: "POST",
-        dataType: "json",
-        data: {
-            _token: "{{ csrf_token() }}",
-            voucher_id: $select.data('voucher-id'),
-            inv_no: $select.data('inv-no'),
-            settlement_status: 'settled',
-            settlement_amount: amount
-        },
-        success: function (res) {
-            console.log('AJAX response:', res);
-
-            if (res.success) {
-                // Update the amount displayed in the row
-                $row.find('.settlement-amount-cell').html(
-                    $('<span>', {
-                        class: 'fw-bold',
-                        text: amount
-                    })
-                );
-
-                // Replace the status dropdown
-                $select.replaceWith(
-                    '<span class="badge bg-success">Settled</span>'
-                );
-
-                // Hide the Save button if required
-                $btn.hide();
-            } else {
-                alert(res.message || 'Could not save settlement.');
-            }
-        },
-        error: function (xhr) {
-            console.error('AJAX error:', xhr.responseText);
-            alert('Could not save settlement. Please try again.');
-        }
-    });
-});
+                // wrappers for the old function names (in case they are called from elsewhere)
+                function refreshReceivedInvoiceList() { refreshInterestInvoiceLists(); }
+                function refreshPendingInvoiceList()  { refreshInterestInvoiceLists(); }
             </script>
         </div>
