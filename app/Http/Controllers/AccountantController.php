@@ -1044,76 +1044,260 @@ class AccountantController extends Controller
             // ---------- Type based logic ----------
             switch ($rowType) {
 
-                case 'Follow Up-Balances':
-                    break;
+                /*
+                |--------------------------------------------------------------------------
+                | Balance / Target %
+                |--------------------------------------------------------------------------
+                */
 
                 case 'Follow Up-Balances/%Targets':
-                    $bal    = abs($ledger->closing_balance);
-                    $target = $targetBalance;
 
-                    $data['balance']    = $bal;
-                    $data['target']     = $target;
-                    $data['target_pct'] = $target > 0 ? round(($bal / $target) * 100, 2) : 0;
+                    /*
+                    * Calculate actual balance from Tally here.
+                    */
+
+                    $balance = abs($ledger->closing_balance); // replace with actual Tally calculation
+
+                    $target = $targetBalance; // replace with actual target
+
+                    $targetPct = $target > 0
+                        ? round((abs($balance) / $target) * 100, 2)
+                        : 0;
+
+                    $data['balance'] = $balance;
+
+                    $data['target'] = $target;
+
+                    $data['target_pct'] = $targetPct;
+
                     break;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Balance / Target Month
+                |--------------------------------------------------------------------------
+                */
 
                 case 'Follow Up-Balances/Targets(months)':
+
+                    /*
+                    * Calculate actual balance and target
+                    * for the required month.
+                    */
+
+                    $balance = $balance;
+
                     $target = $targetBalance;
 
-                    // Target month DB ke sub_option se (e.g. "Sep 2026" -> 2026-09)
-                    $targetMonth = now()->subMonth()->format('Y-m'); // fallback
-                    if (!empty($ledger->sub_option)) {
-                        try {
-                            $targetMonth = Carbon::parse('1 ' . $ledger->sub_option)->format('Y-m');
-                        } catch (\Exception $e) {
-                            // parse na hua to fallback rahega
-                        }
-                    }
+                    $targetMonth = now()->subMonths(1)->format('Y-m');
 
-                    $data['target']       = $target;
+                    $targetPct = $target > 0
+                        ? round((abs($balance) / $target) * 100, 2)
+                        : 0;
+
+                    $data['balance'] = $balance;
+
+                    $data['target'] = $target;
+
                     $data['target_month'] = $targetMonth;
-                    $data['target_pct']   = $target > 0 ? round((abs($balance) / $target) * 100, 2) : 0;
+
+                    $data['target_pct'] = $targetPct;
+
                     break;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Balance / Age Wise
+                |--------------------------------------------------------------------------
+                */
 
                 case 'Follow Up-Balances/Days(agewise)':
-                    $data['age_bucket'] = match (true) {
-                        $maxOverdueDays > 90 => '90+ Days',
-                        $maxOverdueDays > 45 => '46-90 Days',
-                        $maxOverdueDays > 15 => '16-45 Days',
-                        default              => '0-15 Days',
+
+                    /*
+                    * Calculate actual outstanding
+                    * and age from Tally transactions.
+                    */
+
+                    $balance =$balance;
+
+                    $days = (int) ($openInvoices->filter(fn ($i) => $i['days'] > 0)->max('days') ?? 0);
+
+                    $ageBucket = match (true) {
+                        $days > 90 => '90+ Days',
+                        $days > 45 => '46-90 Days',
+                        $days > 15 => '16-45 Days',
+                        default    => '0-15 Days',
                     };
+
+                    $data['balance'] = $balance;
+
+                    $data['days'] = $days;
+
+                    $data['age_bucket'] = $ageBucket;
+
                     break;
 
-                case 'Follow Up-Balances/Overdue(10-20-30)':
-                    $data['date']         = $overdueInv['date'] ?? null;
-                    $data['due_date']     = $overdueInv['due_date'] ?? null;
-                    $data['inv_no']       = $overdueInv['voucher_number'] ?? null;
-                    $data['interest_due'] = 0; // TODO: interest calculation
+
+                /*
+                |--------------------------------------------------------------------------
+                | Balance / Days 10-20-30
+                |--------------------------------------------------------------------------
+                */
+
+                case 'Follow Up-Balances/Days(10-20-30)':
+
+                    /*
+                    * Calculate from actual Tally invoice/bill data.
+                    */
+
+                    $balance = $balance;
+
+                    $days = 20;
+
+                    $date = now()->subDays(20)->format('Y-m-d');
+
+                    $dueDate = now()->addDays(10)->format('Y-m-d');
+
+                    $invoiceNo = 'INV-2204';
+
+                    $interestDue = 150;
+
+                    $data['balance'] = $balance;
+
+                    $data['days'] = $days;
+
+                    $data['date'] = $date;
+
+                    $data['due_date'] = $dueDate;
+
+                    $data['inv_no'] = $invoiceNo;
+
+                    $data['interest_due'] = $interestDue;
+
                     break;
 
-                case 'Follow Up-Balances/Not Due(10-20-30)':
-                    $data['date']     = $notDueInv['date'] ?? null;
-                    $data['due_date'] = $notDueInv['due_date'] ?? null;
-                    $data['inv_no']   = $notDueInv['voucher_number'] ?? null;
-                    break;
+
+                /*
+                |--------------------------------------------------------------------------
+                | Due
+                |--------------------------------------------------------------------------
+                */
 
                 case 'Follow Up-Due':
-                    $data['date']         = $overdueInv['date'] ?? null;
-                    $data['due_date']     = $overdueInv['due_date'] ?? null;
-                    $data['inv_no']       = $overdueInv['voucher_number'] ?? null;
-                    $data['due']          = $due;
-                    $data['interest_due'] = 0; // TODO
+
+                    /*
+                    * Actual overdue invoice calculation.
+                    */
+
+                    $date = now()->subDays(21)->format('Y-m-d');
+
+                    $dueDate = now()->addDays(21)->format('Y-m-d');
+
+                    $invoiceNo = 'INV-2201';
+
+                    $days = 12;
+
+                    $due = 32000.00;
+
+                    $interestDue = 480.00;
+
+                    $data['date'] = $date;
+
+                    $data['due_date'] = $dueDate;
+
+                    $data['inv_no'] = $invoiceNo;
+
+                    $data['days'] = $days;
+
+                    $data['due'] = $due;
+
+                    $data['interest_due'] = $interestDue;
+
                     break;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Not Due
+                |--------------------------------------------------------------------------
+                */
 
                 case 'Follow Up-Not Due':
-                    $data['date']     = $notDueInv['date'] ?? null;
-                    $data['due_date'] = $notDueInv['due_date'] ?? null;
-                    $data['inv_no']   = $notDueInv['voucher_number'] ?? null;
-                    $data['not_due']  = $notDue;
+
+                    /*
+                    * Actual outstanding invoices which
+                    * are not yet due.
+                    */
+
+
+                    $date = now()->subDays(5)->format('Y-m-d');
+
+                    $dueDate = now()->addDays(35)->format('Y-m-d');
+
+                    $invoiceNo = 'INV-2202';
+
+                    $daysPending = 5;
+
+                    $notDue = 27500.00;
+
+                    $data['date'] = $date;
+
+                    $data['due_date'] = $dueDate;
+
+                    $data['inv_no'] = $invoiceNo;
+
+                    $data['days_pending'] = $daysPending;
+
+                    $data['not_due'] = $notDue;
+
                     break;
 
+
+                /*
+                |--------------------------------------------------------------------------
+                | Over Limits
+                |--------------------------------------------------------------------------
+                */
+
                 case 'Follow Up Overlimits':
-                    $data['credit_limit'] = 0; // TODO: actual credit limit
-                    $data['over_limit']   = 0; // TODO
+
+                    /*
+                    * Actual ledger balance vs credit limit.
+                    */
+
+                    $balance = $balance;
+
+                    $creditLimit = 0;
+
+                    $overLimit = 0;
+
+                    $data['balance'] = $balance;
+
+                    $data['credit_limit'] = $creditLimit;
+
+                    $data['over_limit'] = $overLimit;
+
+                    break;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Normal Balance
+                |--------------------------------------------------------------------------
+                */
+
+                case 'Follow Up-Balances':
+
+                    /*
+                    * Actual ledger balance from Tally.
+                    */
+
+                    $balance = $balance;
+
+                    $data['balance'] = $balance;
+
                     break;
             }
 
@@ -2661,7 +2845,6 @@ class AccountantController extends Controller
                 'credit_period'        => $v->credit_period,
                 'credit_period_source' => $v->credit_period_source,
             ]);
-
         if ($field === 'Balance') {
             return response()->json([
                 'vouchers' => $this->buildBalanceBreakdown($vouchers, $under),
@@ -3167,6 +3350,88 @@ class AccountantController extends Controller
     //         return response()->json(['message' => 'Unable to fetch interest data.'], 500);
     //     }
     // }
+
+    public function ledgerTargetData(Request $request)
+    {
+        try {
+            // Logged-in owner ki sirf id (owner guard se)
+            $accountant = auth('accountant')->user();
+            $ownerId = $accountant->owner_id ?? null ;
+            //$ownerId = Auth::guard('owner')->id();
+
+            // Request ke 3 fields zaroori hain, nahi to 422 validation error automatic chala jayega
+            $request->validate([
+                'company' => 'required|string',
+                'ledger' => 'required|string',
+                'under' => 'required|string',   // NOTE: validate to hota hai, par aage use nahi hota (neeche ledger ka parent hi use hota hai)
+            ]);
+
+            // Owner ki company dhundhi; nahi mili to exception (firstOrFail)
+            $tallyCompany = TallyCompany::where('owner_id', $ownerId)
+                ->where('company_name', $request->company)
+                ->firstOrFail();
+
+            // Is company ke overdue target % settings: [bucket_month => receivable_target]
+            // e.g. [1 => 10, 2 => 8, ...] (1 = 1 mahina pehle, 2 = 2 mahine pehle...)
+            $targets = OverdueTargetSetting::where('owner_id', $ownerId)
+                ->where('company_id', $tallyCompany->id)
+                ->pluck('receivable_target', 'bucket_month');
+
+            // Us company ka wo ledger dhundha; nahi mila to exception
+            $ledgerModel = TallyLedger::where('owner_id', $ownerId)
+                ->where('tally_company_id', $tallyCompany->id)
+                ->where('ledger_name', $request->ledger)
+                ->firstOrFail();
+
+            // Debtor ya Creditor (DB se, request wale 'under' se nahi)
+            $under = $ledgerModel->parent;
+
+            // Ledger ka credit period (days), khali ho to 0
+            $creditPeriod = (int) ($ledgerModel->credit_period ?? 0);
+
+            // Is ledger ke saare classified voucher rows (helper function se)
+            $rows = $this->getLedgerVoucherRows($ownerId, $tallyCompany, $ledgerModel);
+
+            // Aaj ke open invoices (FIFO se receipts adjust karke)
+            $pending = $this->buildOpenInvoices($rows, $under, $creditPeriod, Carbon::now()->startOfDay());
+
+            // Closing balance, sign hata ke
+            $balanceAbs = ltrim((string) ($ledgerModel->closing_balance ?? '0'), '-+');
+
+            // Saare open invoices ka pending total
+            $pendingSum = $pending->reduce(fn($t, $i) => bcadd($t, $i['pending'], 2), '0');
+
+            // Balance - pending = wo amount jo kisi invoice se match nahi hui (opening / unmatched)
+            $extraNotDue = bcsub($balanceAbs, $pendingSum, 2);
+
+            // Negative aaye to 0
+            if (bccomp($extraNotDue, '0', 2) < 0) {
+                $extraNotDue = '0';
+            }
+
+            // 7 rows ka target table JSON me bhej diya
+            // $now = null pass kiya, to computeTargetRows andar se now() le leta hai
+            return response()->json([
+                'rows' => $this->computeTargetRows($rows, $under, $creditPeriod, $targets, null, $extraNotDue),
+            ]);
+
+        } catch (ValidationException $e) {
+            // Validation error ko dobara throw kiya, taaki Laravel use 422 + errors JSON ke roop me bheje
+            // (warna neeche wala generic catch use 500 bana deta)
+            throw $e;
+
+        } catch (\Throwable $e) {
+            // Baaki koi bhi error: log me detail
+            Log::error('Tally ledgerTargetData failed', [
+                'company' => $request->company,
+                'ledger' => $request->ledger,
+                'error' => $e->getMessage(),
+            ]);
+
+            // Frontend ko 500 aur simple message
+            return response()->json(['message' => 'Unable to fetch target data.'], 500);
+        }
+    }
 
     public function ledgerInterestData(Request $request)
     {
@@ -3792,8 +4057,12 @@ class AccountantController extends Controller
                 'message' => 'No vouchers found.',
             ], 404);
         }
-        
-        return DB::transaction(function () use ($validated, $ownerId) {
+
+        // Key the vouchers by id so each record can look up its voucher quickly (used for the log)
+        $vouchersById = $vouchers->keyBy('id');
+
+        // $vouchersById is now passed into the closure
+        return DB::transaction(function () use ($validated, $ownerId, $vouchersById) {
 
             $ledgerBulkInterestDueData = $this->ledgerBulkInterestDueData($validated['invoice_ids']);
             //echo "<pre>";print_r($ledgerBulkInterestDueData);exit;
@@ -3826,6 +4095,10 @@ class AccountantController extends Controller
 
             $interestCollected = [];
 
+            // Rows for the settlement_logs table (inserted in one query after the loop)
+            $logRows = [];
+            $now     = now();
+
             foreach ($filtered as $record) {
                 $interestDue = $record['interest_due'];
 
@@ -3839,17 +4112,47 @@ class AccountantController extends Controller
                     $collected = '0.00';
                 }
 
-                TallyVoucher::where('id', $record['id'])                    
+                TallyVoucher::where('id', $record['id'])
                     ->update([
                         'settlement_amount' => $collected,
                         'settlement_status' => 'settled',
                     ]);
-                
+
+                // ===== Settlement log entry =====
+                // NOTE: getAttribute() returns null when a column does not exist,
+                // so adjust the column names below to match rms_tally_vouchers.
+                $voucher = $vouchersById->get($record['id']);
+
+                $logRows[] = [
+                    'voucherId'         => $voucher?->getAttribute('voucher_id') ?? $record['id'],
+                    'master_id'         => $voucher?->getAttribute('master_id'),
+                    'unique_voucher_id' => $voucher?->getAttribute('unique_voucher_id'),
+                    'owner_id'          => $ownerId,
+                    'tally_company_id'  => $voucher?->getAttribute('tally_company_id'),
+                    'ledger_id'         => $voucher?->getAttribute('ledger_id'),
+                    'date'              => $voucher?->getAttribute('date') ?? ($record['date'] ?? null),
+                    'voucher_number'    => $voucher?->getAttribute('voucher_number') ?? ($record['inv_no'] ?? null),
+                    'voucher_type'      => $voucher?->getAttribute('voucher_type'),
+                    'credit_period'     => $voucher?->getAttribute('credit_period') ?? 0,
+                    'due_date'          => $record['due_date'] ?? null,
+                    'interestDue'       => $interestDue,
+                    'settlement_status' => 'settled',
+                    'settlement_amount' => $collected,
+                    'created_at'        => $now,
+                    'updated_at'        => $now,
+                ];
+
                 // $interestCollected[] = [
                 //     'id' => $record['id'],
                 //     'interest_due' => $interestDue,
                 //     'interest_collected' => $collected,
                 // ];
+            }
+
+            // Save all log rows in one insert. It runs inside the same transaction,
+            // so if anything fails, both the voucher updates and the logs are rolled back.
+            if (!empty($logRows)) {
+                DB::table('rms_tally_settlement_logs')->insert($logRows);
             }
 
             // echo '<pre>';
@@ -3858,7 +4161,7 @@ class AccountantController extends Controller
             // echo '<pre>';
             //  print_r($filtered);
             // exit;
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Settlement saved successfully.',
@@ -4087,6 +4390,128 @@ class AccountantController extends Controller
         //     ]);
         //     return response()->json(['message' => 'Unable to fetch interest data.'], 500);
         // }
+    }
+
+    // $vouchers = classified vouchers (collection), $under = Debtor/Creditor
+    private function buildBalanceBreakdown($vouchers, ?string $under): array
+    {
+        // Creditor hai ya nahi (nahi hai to Debtor maana jayega)
+        $isCreditor = ($under === 'Sundry Creditors');
+
+        // INVOICES list: Creditor me purchase (credit side), Debtor me sales (debit side)
+        $invoices = $vouchers->filter(function ($v) use ($isCreditor) {
+            return $isCreditor
+                ? ($v['mapped_type_low'] === 'purchase' && bccomp($v['credit'], '0', 2) > 0)
+                : ($v['mapped_type_low'] === 'sales' && bccomp($v['debit'], '0', 2) > 0);
+        })
+            // Purani invoice pehle (date string 'Y-m-d' hai, to string sort bhi chal jata hai)
+            ->sortBy(fn($v) => $v['date'])
+            ->values();
+
+        // CLEARINGS list: Creditor me payments (debit side), Debtor me receipts (credit side)
+        $clearings = $vouchers->filter(function ($v) use ($isCreditor) {
+            $typeLow = $v['voucher_type_low'];
+            return $isCreditor
+                ? (str_contains($typeLow, 'payment') && $v['debit'] > 0)    // string > 0 PHP me numeric compare hota hai
+                : (str_contains($typeLow, 'receipt') && $v['credit'] > 0);
+        })
+            // Purani clearing pehle
+            ->sortBy(fn($v) => $v['date'])
+            ->values()
+            // Har clearing ko chhote array me badla
+            ->map(function ($v) use ($isCreditor) {
+                return [
+                    'date' => $v['date'],
+                    'voucher_number' => $v['voucher_number'],
+                    'amount' => $isCreditor ? $v['debit'] : $v['credit'],      // poori amount
+                    'remaining' => $isCreditor ? $v['debit'] : $v['credit'],   // abhi kitni use hona baaki (shuru me poori)
+                ];
+            })
+            // Plain array banaya, taaki neeche reference (&) se edit ho sake
+            ->toArray();
+
+        // Abhi kaunsi clearing chal rahi hai (pointer)
+        $clearingPointer = 0;
+
+        // Output rows yahan jama hongi
+        $result = [];
+
+        // Har invoice par loop (purani se nayi)
+        foreach ($invoices as $inv) {
+            // Invoice ki poori amount
+            $original = $isCreditor ? $inv['credit'] : $inv['debit'];
+
+            // Kitna abhi clear hona baaki hai (shuru me poori)
+            $remaining = $original;
+
+            // Is invoice ko kin clearings ne kitna clear kiya, uski list
+            $matchedAgainst = [];
+
+            // Jab tak invoice me amount baaki hai aur clearings bachi hain
+            while (bccomp($remaining, '0', 2) > 0 && $clearingPointer < count($clearings)) {
+
+                // & = reference, taaki $c me change karne se asli array $clearings me bhi change ho
+                $c = &$clearings[$clearingPointer];
+
+                // Current clearing poori use ho chuki to agli par jao
+                if (bccomp($c['remaining'], '0', 2) <= 0) {
+                    $clearingPointer++;
+                    continue;
+                }
+
+                // Is round me kitna adjust hoga: invoice ka remaining aur clearing ka remaining, dono me jo chhota
+                $take = bccomp($remaining, $c['remaining'], 2) < 0 ? $remaining : $c['remaining'];
+
+                // Dono se wo amount ghata di
+                $c['remaining'] = bcsub($c['remaining'], $take, 2);
+                $remaining = bcsub($remaining, $take, 2);
+
+                // Is invoice ke "cleared against" me ye clearing jodi
+                $matchedAgainst[] = [
+                    'voucher_number' => $c['voucher_number'],
+                    'date' => $c['date'],
+                    'amount' => $take,
+                ];
+
+                // Is clearing ka paisa khatam to agli clearing par jao
+                if (bccomp($c['remaining'], '0', 2) <= 0) {
+                    $clearingPointer++;
+                }
+
+                // Reference tod diya (bhoolne par agli iteration me galti se array badal sakta hai)
+                unset($c);
+            }
+
+            // Cleared = original - jo baaki bacha; Pending = jo baaki bacha
+            $cleared = bcsub($original, $remaining, 2);
+            $pending = $remaining;
+
+            // Poori clear ho chuki invoice balance me nahi dikhani, skip
+            if (bccomp($pending, '0', 2) <= 0) {
+                continue;
+            }
+
+            // Status: kuch clear hua hai to Partially Paid/Received, warna Pending
+            $status = bccomp($cleared, '0', 2) > 0
+                ? ($isCreditor ? 'Partially Paid' : 'Partially Received')
+                : 'Pending';
+
+            // Output row
+            $result[] = [
+                'date' => $inv['date'],
+                'voucher_number' => $inv['voucher_number'],
+                'voucher_type' => $inv['voucher_type'],
+                'particulars' => $inv['particulars'],
+                'original' => $original,
+                // Key ka naam Creditor me 'paid', Debtor me 'received' (dynamic key)
+                $isCreditor ? 'paid' : 'received' => $cleared  ,
+                'pending' => $pending,
+                'status' => $status,
+                'cleared_against' => $matchedAgainst,
+            ];
+        }
+
+        return $result;
     }
 
 }

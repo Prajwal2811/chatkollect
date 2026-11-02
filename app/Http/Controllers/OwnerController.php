@@ -2721,7 +2721,7 @@ class OwnerController extends Controller
                 'particulars' => $inv['particulars'],
                 'original' => $original,
                 // Key ka naam Creditor me 'paid', Debtor me 'received' (dynamic key)
-                $isCreditor ? 'paid' : 'received' => $cleared,
+                $isCreditor ? 'paid' : 'received' => $h,
                 'pending' => $pending,
                 'status' => $status,
                 'cleared_against' => $matchedAgainst,
