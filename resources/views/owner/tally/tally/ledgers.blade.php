@@ -466,8 +466,15 @@
 
                     <!-- Sundry Debtors Summary (visible only when Debtors tab is active) -->
                     <div id="summaryCardsSectionDebtor" class="summary-cards-section" data-scope="debtor" style="display:none;">
-                        <div class="d-flex align-items-center mb-2">
+                       <div class="d-flex align-items-center justify-content-between mb-2">
                             <h6 class="text-uppercase text-success fw-bold mb-0">Sundry Debtors Summary</h6>
+                            <select class="form-select form-select-sm summary-collector-filter" data-scope="debtor" style="width:auto; min-width:180px;">
+                                <option value="">All Collectors</option>
+                                @foreach($collectors as $c)
+                                    <option value="{{ $c->id }}">{{ $c->name }}</option>
+                                @endforeach
+                                <option value="none">Unassigned</option>
+                            </select>
                         </div>
                         <div class="accordion mb-4" id="summaryAccordionDebtor">
                             @forelse ($totalsDebtor as $label => $value)
@@ -500,8 +507,15 @@
 
                     <!-- Sundry Creditors Summary (visible only when Creditors tab is active) -->
                     <div id="summaryCardsSectionCreditor" class="summary-cards-section" data-scope="creditor" style="display:none;">
-                        <div class="d-flex align-items-center mb-2">
+                        <div class="d-flex align-items-center justify-content-between mb-2">
                             <h6 class="text-uppercase text-danger fw-bold mb-0">Sundry Creditors Summary</h6>
+                            <select class="form-select form-select-sm summary-collector-filter" data-scope="creditor" style="width:auto; min-width:180px;">
+                                <option value="">All Collectors</option>
+                                @foreach($collectors as $c)
+                                    <option value="{{ $c->id }}">{{ $c->name }}</option>
+                                @endforeach
+                                <option value="none">Unassigned</option>
+                            </select>
                         </div>
                         <div class="accordion mb-4" id="summaryAccordionCreditor">
                             @forelse ($totalsCreditor as $label => $value)
@@ -1154,14 +1168,6 @@
                                                     <option value="1">🟣 Overlimit Only</option>
                                                 </select>
 
-                                                <select class="form-select form-select-sm filter-collector">
-                                                    <option value="">All Collectors</option>
-                                                    @foreach($collectors as $c)
-                                                        <option value="{{ $c->id }}">{{ $c->name }}</option>
-                                                    @endforeach
-                                                    <option value="none">Unassigned</option>
-                                                </select>
-
                                                 <button type="button" class="btn btn-sm btn-outline-secondary filter-reset-btn">
                                                     <i class="fa fa-times me-1"></i>Reset
                                                 </button>
@@ -1309,15 +1315,6 @@
                                                 <select class="form-select form-select-sm filter-overlimit">
                                                     <option value="">All (Overlimit)</option>
                                                     <option value="1">🟣 Overlimit Only</option>
-                                                </select>
-
-
-                                                <select class="form-select form-select-sm filter-collector">
-                                                    <option value="">All Collectors</option>
-                                                    @foreach($collectors as $c)
-                                                        <option value="{{ $c->id }}">{{ $c->name }}</option>
-                                                    @endforeach
-                                                    <option value="none">Unassigned</option>
                                                 </select>
 
                                                 <button type="button" class="btn btn-sm btn-outline-secondary filter-reset-btn">
@@ -1508,7 +1505,7 @@
 
                 // ===== Collector helpers =====
                 function getScopeCollector(scope) {
-                    return $('.ledger-filter-bar[data-scope="' + scope + '"] .filter-collector').val() || '';
+                    return $('.summary-collector-filter[data-scope="' + scope + '"]').val() || '';
                 }
 
                 function itemsByCollector(items, cv) {
@@ -2512,7 +2509,7 @@
                     const statusVal  = $bar.find('.filter-status').val();
                     const rankVal    = $bar.find('.filter-rank').val();
                     const overlimitV = $bar.find('.filter-overlimit').val();
-                    const collectorVal = $bar.find('.filter-collector').val();
+                    const collectorVal = getScopeCollector(scope);
                     const $accordion = scope === 'debtor' ? $('#debtorAccordion') : $('#creditorAccordion');
                     const $items     = $accordion.find('.accordion-item');
                     const total      = $items.length;
@@ -2584,11 +2581,17 @@
                     applyLedgerFilters($(this).closest('.ledger-filter-bar').data('scope'));
                 });
 
+                $(document).on('change', '.summary-collector-filter', function () {
+                    applyLedgerFilters($(this).data('scope'));
+                });
+
                 $(document).on('click', '.filter-reset-btn', function () {
-                    const $bar = $(this).closest('.ledger-filter-bar');
+                    const $bar  = $(this).closest('.ledger-filter-bar');
+                    const scope = $bar.data('scope');
                     $bar.find('select').val('');
                     $bar.find('.filter-search').val('');
-                    applyLedgerFilters($bar.data('scope'));
+                    $('.summary-collector-filter[data-scope="' + scope + '"]').val('');
+                    applyLedgerFilters(scope);
                 });
 
                 // Page load pe count dikhao

@@ -38,7 +38,7 @@ return new class extends Migration
             $table->boolean('clearStatus')->default(0);
             $table->timestamps();
 
-            $table->unique(['company_id', 'ledger_id']);     // updateOrCreate ke liye
+            $table->unique(['company_id', 'ledger_id', 'type'], 'rms_followups_company_ledger_type_unique');     // updateOrCreate ke liye   
         });
     }
 

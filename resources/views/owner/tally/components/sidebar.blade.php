@@ -61,7 +61,7 @@
                         <li><a href="{{  route('owner.collectors.index') }}"><i class="fas fa-list"></i> All Collectors</a></li>
                         <li><a href="{{ route('owner.collectors.create') }}"><i class="fas fa-user-plus"></i> Add Collector </a></li>
                         @if(!empty($company))
-                            {{-- <li><a href="{{ route('owner.collectors.assign', ['company' => urlencode($company)]) }}"><i class="fas fa-user-tag"></i>Assign Collector </a></li> --}}
+                            <li><a href="{{ route('owner.collectors.assign', ['company' => urlencode($company)]) }}"><i class="fas fa-user-tag"></i>Assign Collector </a></li>
                         @endif
                     </ul>
                 </li>

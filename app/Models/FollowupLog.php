@@ -22,6 +22,7 @@ class FollowupLog extends Model
         'solution',
         'admin_solution',
         'responded_by',
+        'sub_option'
     ];
 
     protected $casts = [
