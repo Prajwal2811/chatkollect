@@ -1224,10 +1224,10 @@ class OwnerController extends Controller
         $t = $v['voucher_type_low'];
 
         return bccomp($v['credit'], '0', 2) > 0
-            && !str_contains($t, 'purchase')
-            && !str_contains($t, 'sale')
-            && !str_contains($t, 'receipt')
-            && !str_contains($t, 'credit note');
+            && $v['mapped_type_low'] !== 'purchase'   // Purchase nahi
+            && $v['mapped_type_low'] !== 'sales'      // Sales nahi
+            && !str_contains($t, 'sale')              // naam me sale nahi
+            && !str_contains($t, 'receipt');          // Receipt nahi
     }
 
     public function companyLedgers($company)
@@ -2081,6 +2081,7 @@ class OwnerController extends Controller
                             'id'                => $inv['id'],          // invoice ka id
                             'inv_no'            => $inv['voucher_number'],
                             'recd_date'         => $recdDate->toDateString(),
+                            'due_date'          => $dueDate->toDateString(),
                             'amount'            => $take,
                             'days'              => $delayDays,
                             'days_since'        => $daysSince,
@@ -2310,7 +2311,7 @@ class OwnerController extends Controller
             'settlement_amount' => 'required|numeric|gt:0',
             'invoice_ids'       => 'required|array|min:1',
             'invoice_ids.*'     => 'required|integer|distinct|exists:rms_tally_vouchers,id',
-            'type'              => 'required|in:received,pending',
+            'type'              => 'required|in:received,pending,all',
         ]);
 
 
@@ -2344,9 +2345,11 @@ class OwnerController extends Controller
             $data = $this->interestDataForVouchers($validated['invoice_ids'], $ownerId);
 
 
-            $list = $validated['type'] === 'received'
-                ? collect($data['received'] ?? [])
-                : collect($data['pending'] ?? []);
+            $list = match ($validated['type']) {
+                'received' => collect($data['received'] ?? []),
+                'pending'  => collect($data['pending'] ?? []),
+                default    => collect($data['received'] ?? [])->merge($data['pending'] ?? []),
+            };
 
 
             $filtered = $list
@@ -2777,7 +2780,7 @@ class OwnerController extends Controller
                 'particulars' => $inv['particulars'],
                 'original' => $original,
                 // Key ka naam Creditor me 'paid', Debtor me 'received' (dynamic key)
-                $isCreditor ? 'paid' : 'received' => $h,
+                $isCreditor ? 'paid' : 'received' => $cleared,
                 'pending' => $pending,
                 'status' => $status,
                 'cleared_against' => $matchedAgainst,
@@ -2973,9 +2976,7 @@ class OwnerController extends Controller
             // OTHER DEBITS: sales ke alawa wo vouchers jinka debit hai,
             // aur voucher type me "payment" nahi hona chahiye
             'Other Debits' => $vouchers->filter(fn($v) =>
-                $v['mapped_type_low'] !== 'sales'
-                && $pos($v['debit'])
-                && !str_contains($v['voucher_type_low'], 'payment')),
+                            $v['mapped_type_low'] !== 'sales' && $pos($v['debit'])),
 
             // OTHER CREDITS: purchase ke alawa wo vouchers jinka credit hai
             // (logic isOtherCredit() helper me hai)
@@ -3013,7 +3014,7 @@ class OwnerController extends Controller
 
             // Voucher type -> mapped type dictionary
             // NOTE: yahan $com (raw) use hua hai, jabki baaki functions decoded naam use karte hain
-            $voucherMappings = VoucherMapping::where('company', $com)
+            $voucherMappings = VoucherMapping::where('company', urldecode($com))
                 ->pluck('mapped_to', 'voucher_type')
                 ->toArray();
 
@@ -4383,6 +4384,7 @@ public function followupHistory()
 
         $ledgers = TallyLedger::where('owner_id', $owner->id)
             ->where('tally_company_id', $tallyCompany->id)
+            ->where('parent', 'Sundry Debtors') 
             ->orderBy('ledger_name')
             ->get(['id', 'ledger_name', 'parent', 'unique_ledger_id', 'ledger_mobile_number'])
             ->map(function ($l) use ($assignMap, $collectorNames) {

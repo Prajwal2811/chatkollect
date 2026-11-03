@@ -800,61 +800,87 @@
                                             </tbody>
                                         </table>
 
-                                        <!-- Tabs -->
-                                        <ul class="nav nav-pills mb-3" id="interestTabs" role="tablist">
-                                            <li class="nav-item me-2" role="presentation">
-                                                <button class="nav-link active" id="intTabReceivedBtn" type="button" role="tab"
-                                                        data-bs-toggle="pill" data-bs-target="#intTabReceived"
-                                                        aria-controls="intTabReceived" aria-selected="true">
-                                                    Interest Due Invoices <span id="intReceivedLabel">Received</span>
-                                                    <span class="badge bg-primary ms-1" id="intReceivedCount">0</span>
-                                                </button>
-                                            </li>
-                                            <li class="nav-item me-2" role="presentation" id="intTabPendingLi">
+
+                                        <div id="intTabsWrap">
+                                            <ul class="nav nav-pills mb-3" id="interestTabs" role="tablist">
+                                                <li class="nav-item me-2" role="presentation">
+                                                    <button class="nav-link active" id="intTabReceivedBtn" type="button" role="tab"
+                                                            data-bs-toggle="pill" data-bs-target="#intTabReceived"
+                                                            aria-controls="intTabReceived" aria-selected="true">
+                                                        Interest Due Invoices <span id="intReceivedLabel">Received</span>
+                                                        <span class="badge bg-primary ms-1" id="intReceivedCount">0</span>
+                                                    </button>
+                                                </li>
+                                                <li class="nav-item me-2" role="presentation" id="intTabPendingLi">
                                                     <button class="nav-link" id="intTabPendingBtn" type="button" role="tab"
-                                                        data-bs-toggle="pill" data-bs-target="#intTabPending"
-                                                        aria-controls="intTabPending" aria-selected="false">
-                                                    Interest Due Invoices Pending
-                                                    <span class="badge bg-primary ms-1" id="intPendingCount">0</span>
-                                                </button>
-                                            </li>
-                                        </ul>
-
-                                        <div class="tab-content">
-                                            <!-- Tab 1 -->
-                                            <div class="tab-pane fade show active" id="intTabReceived" role="tabpanel" aria-labelledby="intTabReceivedBtn">
-                                                <div class="d-flex justify-content-end mb-3" id="receivedBtnWrap" style="display: none !important;">
-                                                    <button type="button" class="btn btn-primary" onclick="showBulkSettlementForm('received')">
-                                                        <i class="ri-money-dollar-circle-line me-1"></i> Received Settlement Amount
+                                                            data-bs-toggle="pill" data-bs-target="#intTabPending"
+                                                            aria-controls="intTabPending" aria-selected="false">
+                                                        Interest Due Invoices Pending
+                                                        <span class="badge bg-primary ms-1" id="intPendingCount">0</span>
                                                     </button>
-                                                </div>
-                                                <table class="table table-bordered table-hover align-middle mb-0 text-end" id="intReceivedPendingBody">
-                                                    <thead id="intReceivedHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
-                                                    <tbody id="intReceivedBody">
-                                                        <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
-                                                    </tbody>
-                                                    <tfoot id="intReceivedFoot"></tfoot>
-                                                </table>
-                                            </div>
+                                                </li>
+                                            </ul>
 
-                                            <!-- Tab 2 -->
-                                            <div class="tab-pane fade" id="intTabPending" role="tabpanel" aria-labelledby="intTabPendingBtn">
-                                                <div class="d-flex justify-content-end mb-3" id="pendingBtnWrap" style="display: none !important;">
-                                                    <button type="button" class="btn btn-warning" onclick="showBulkSettlementForm('pending')">
-                                                        <i class="ri-money-dollar-circle-line me-1"></i> Pending Settlement Amount
-                                                    </button>
+                                            <div class="tab-content">
+                                                <div class="tab-pane fade show active" id="intTabReceived" role="tabpanel" aria-labelledby="intTabReceivedBtn">
+                                                    <div class="d-flex justify-content-end mb-3" id="receivedBtnWrap" style="display: none !important;">
+                                                        <button type="button" class="btn btn-primary" onclick="showBulkSettlementForm('received')">
+                                                            <i class="ri-money-dollar-circle-line me-1"></i> Received Settlement Amount
+                                                        </button>
+                                                    </div>
+                                                    <table class="table table-bordered table-hover align-middle mb-0 text-end" id="intReceivedPendingBody">
+                                                        <thead id="intReceivedHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
+                                                        <tbody id="intReceivedBody">
+                                                            <tr><td colspan="10" class="text-center text-muted">No data loaded</td></tr>
+                                                        </tbody>
+                                                        <tfoot id="intReceivedFoot"></tfoot>
+                                                    </table>
                                                 </div>
-                                                <table class="table table-bordered table-hover align-middle mb-0 text-end" id="intReceivedPendingBody2">
-                                                    <thead id="intPendingHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
-                                                    <tbody id="intPendingBody">
-                                                        <tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>
-                                                    </tbody>
-                                                    <tfoot id="intPendingFoot"></tfoot>
-                                                </table>
+
+                                                <div class="tab-pane fade" id="intTabPending" role="tabpanel" aria-labelledby="intTabPendingBtn">
+                                                    <div class="d-flex justify-content-end mb-3" id="pendingBtnWrap" style="display: none !important;">
+                                                        <button type="button" class="btn btn-warning" onclick="showBulkSettlementForm('pending')">
+                                                            <i class="ri-money-dollar-circle-line me-1"></i> Pending Settlement Amount
+                                                        </button>
+                                                    </div>
+                                                    <table class="table table-bordered table-hover align-middle mb-0 text-end" id="intReceivedPendingBody2">
+                                                        <thead id="intPendingHead" style="position: sticky; top: 0; background: #fff; z-index: 1;"></thead>
+                                                        <tbody id="intPendingBody">
+                                                            <tr><td colspan="9" class="text-center text-muted">No data loaded</td></tr>
+                                                        </tbody>
+                                                        <tfoot id="intPendingFoot"></tfoot>
+                                                    </table>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                </div>
+                                        <!-- intTabsWrap yahan band hua. Merged iske BAHAR hai -->
+
+                                        <div id="intMergedWrap" class="d-none">
+                                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                                <div class="d-flex align-items-center gap-2">
+                                                    <strong class="small">Filter:</strong>
+                                                    <select id="intMergeFilter" class="form-select form-select-sm" style="min-width:200px;">
+                                                        <option value="all">All</option>
+                                                        <option value="mar">Till 31 March (last year)</option>
+                                                        <option value="jun">Till 30 June</option>
+                                                        <option value="sep">Till 30 Sep</option>
+                                                        <option value="dec">Till 31 Dec</option>
+                                                    </select>
+                                                    <span class="small text-muted"><span id="intMergedSelCount">0</span> selected</span>
+                                                    <span class="small text-muted">| Total: ₹ <strong id="intMergedSelTotal">0</strong></span>
+                                                </div>
+                                                <button type="button" class="btn btn-primary btn-sm" onclick="showBulkSettlementForm('merged')">
+                                                    Settlement Amount
+                                                </button>
+                                            </div>
+                                            <table class="table table-bordered table-hover align-middle mb-0 text-end">
+                                                <thead id="intMergedHead"></thead>
+                                                <tbody id="intMergedBody"></tbody>
+                                                <tfoot id="intMergedFoot"></tfoot>
+                                            </table>
+                                        </div>
+                                        </div> <!-- ledgerVoucherInterestWrap band -->
+                                        </div> <!-- modal-body band --> 
                                 <div class="modal-footer justify-content-between">
                                     <a href="javascript:void(0);" id="ledgerVoucherViewAllLink" target="_blank" class="btn btn-outline-primary btn-sm">
                                         <i class="fa fa-external-link-alt me-1"></i> View Full Ledger Vouchers
@@ -992,7 +1018,14 @@
                                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                                 </div>
                                 <form id="receivedSettlementForm">
+                                    
                                     <div class="modal-body">
+                                        <div class="alert alert-info py-2 px-3 mb-3 bulk-sel-summary">
+                                            <div class="d-flex justify-content-between">
+                                                <span>Selected Invoices: <strong class="bulk-sel-count">0</strong></span>
+                                                <span>Total Interest Due: <strong>₹ <span class="bulk-sel-total">0</span></strong></span>
+                                            </div>
+                                        </div>
                                         <label for="receivedSettlementAmount" class="form-label">Settlement Amount</label>
                                         <input type="number" class="form-control" id="receivedSettlementAmount"
                                             name="settlement_amount" min="0.01" step="0.01" required
@@ -1017,7 +1050,14 @@
                                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                                 </div>
                                 <form id="pendingSettlementForm">
+                                    
                                     <div class="modal-body">
+                                        <div class="alert alert-info py-2 px-3 mb-3 bulk-sel-summary">
+                                            <div class="d-flex justify-content-between">
+                                                <span>Selected Invoices: <strong class="bulk-sel-count">0</strong></span>
+                                                <span>Total Interest Due: <strong>₹ <span class="bulk-sel-total">0</span></strong></span>
+                                            </div>
+                                        </div>
                                         <label for="pendingSettlementAmount" class="form-label">Settlement Amount</label>
                                         <input type="number" class="form-control" id="pendingSettlementAmount"
                                             name="settlement_amount" min="0.01" step="0.01" required
@@ -1896,8 +1936,10 @@
                             if (k === 'select') {
                                 const isSettled = r.settlement_status === 'settled';
                                 value = `<input type="checkbox" class="${type}-invoice-checkbox"
-                                            value="${escHtml(r.id ?? '')}" data-inv-no="${escHtml(r.inv_no ?? '')}"
-                                            ${isSettled ? 'disabled title="Already settled"' : ''}>`;
+                                    value="${escHtml(r.id ?? '')}" data-inv-no="${escHtml(r.inv_no ?? '')}"
+                                    data-interest="${escHtml(r.interest_due ?? 0)}"
+                                    ${isSettled ? 'disabled title="Already settled"' : ''}>`;
+                                    
                             } else {
                                 value = c.v(r, index);
                             }
@@ -1958,6 +2000,16 @@
                     $('#intReceivedCount, #intPendingCount').text('0');
                     bootstrap.Tab.getOrCreateInstance(document.getElementById('intTabReceivedBtn')).show();
 
+
+                    const isCostField = (field === 'Interest Cost');
+                    $('#intTabsWrap').toggleClass('d-none', isCostField);
+                    $('#intMergedWrap').toggleClass('d-none', !isCostField);
+                    $('#intMergeFilter').val('all');
+                    $('#intMergedSelCount').text(0);
+                    $('#intMergedSelCount').text(0);
+                    $('#intMergedSelTotal').text(0);
+                    if (isCostField) $('#intMergedBody').html('<tr><td colspan="14" class="text-center text-muted">No data loaded</td></tr>');
+
                     $('#ledgerVoucherLoading').removeClass('d-none');
 
                     $.ajax({
@@ -1976,7 +2028,72 @@
 
                             // Top summary table
                             fillInterestSummary(res, isCreditor);
+                            
 
+                            if (isCostField) {
+                                const rows = [];
+                                (res.received || []).forEach(r => rows.push(Object.assign({}, r, { _type: 'received' })));
+                                (res.pending  || []).forEach(r => rows.push(Object.assign({}, r, { _type: 'pending'  })));
+                                rows.sort((a, b) => String(a.due_date || '').localeCompare(String(b.due_date || '')));
+
+                                const mKeys = ['select','type','inv','dueDate','recdDate','days','due','status','settle','waived','dueB','settleB','waivedB'];
+                                const mHead = {
+                                    select: '<input type="checkbox" id="selectAllMerged">', type: 'Type', inv: 'INV No', dueDate: 'Due Date',
+                                    recdDate: `Inv ${clr} Date`, days: 'Days', due: 'Interest Due',
+                                    status: 'Settlement Status', settle: `${settleWord} Amount`, waived: 'Interest Waived',
+                                    dueB: 'Interest Due (Base)', settleB: `${settleWord} Amt (Base)`, waivedB: 'Interest Waived (Base)'
+                                };
+                                const isGrey = k => ['dueB','settleB','waivedB'].includes(k);
+
+                                $('#intMergedHead').html('<tr>' + mKeys.map(k =>
+                                    `<th class="${isGrey(k) ? 'int-grey' : ''}">${mHead[k]}</th>`).join('') + '</tr>');
+
+                                const cellFor = (k, r, i) => {
+                                    switch (k) {
+                                        case 'select': {
+                                            const done = r.settlement_status === 'settled';
+                                            return `<td class="text-center"><input type="checkbox" class="merged-invoice-checkbox"
+                                                value="${escHtml(r.id ?? '')}" data-due="${escHtml(r.due_date ?? '')}"
+                                                data-interest="${escHtml(r.interest_due ?? 0)}"
+                                                ${done ? 'disabled title="Already settled"' : ''}></td>`;
+                                        }
+                                        case 'type':
+                                            return `<td class="text-center">${r._type === 'received'
+                                                ? `<span class="badge bg-success">${cleared}</span>`
+                                                : '<span class="badge bg-warning text-dark">Pending</span>'}</td>`;
+                                        case 'inv':      return `<td class="text-start">${escHtml(r.inv_no ?? '-')}</td>`;
+                                        case 'dueDate':  return `<td>${fmtD(r.due_date)}</td>`;
+                                        case 'recdDate': return `<td>${r._type === 'received' ? fmtD(r.recd_date) : '-'}</td>`;
+                                        case 'days':     return `<td class="text-center"><span class="badge bg-danger">${escHtml(r.days ?? '-')} days</span></td>`;
+                                        case 'amount':   return `<td>${rs(r.amount)}</td>`;
+                                        case 'due':      return `<td class="fw-bold">${rs(r.interest_due)}</td>`;
+                                        case 'status':   return `<td class="text-center">${colDefs.status.v(r, i)}</td>`;
+                                        case 'settle':   return `<td class="settlement-amount-cell">${rs(r.settlement_amount)}</td>`;
+                                        case 'waived':   return `<td class="fw-bold">${rs(r.interest_waived)}</td>`;
+                                        case 'dueB':     return `<td class="int-grey fw-bold">${rs(r.interest_due_b)}</td>`;
+                                        case 'settleB':  return `<td class="int-grey">${rs(r.settlement_amount_b)}</td>`;
+                                        case 'waivedB':  return `<td class="int-grey fw-bold">${rs(r.interest_waived_b)}</td>`;
+                                    }
+                                };
+
+                                $('#intMergedBody').html(rows.length
+                                    ? rows.map((r, i) =>
+                                        `<tr data-voucher-id="${escHtml(r.id ?? '')}" data-inv-no="${escHtml(r.inv_no ?? '')}">`
+                                        + mKeys.map(k => cellFor(k, r, i)).join('') + '</tr>').join('')
+                                    : '<tr><td colspan="14" class="text-center text-muted">No data found</td></tr>');
+
+                                const sumK = k => rows.reduce((t, r) => t + num(r[k]), 0);
+                                $('#intMergedFoot').html(`<tr>
+                                    <th colspan="6" class="text-end">Total Interest Due</th>
+                                    <th>${rs(sumK('interest_due').toFixed(2))}</th>
+                                    <th colspan="3"></th>
+                                    <th class="int-grey">${rs(sumK('interest_due_b').toFixed(2))}</th>
+                                    <th class="int-grey" colspan="2"></th></tr>`);
+
+                                $('#intReceivedCount').text((res.received || []).length);
+                                $('#intPendingCount').text((res.pending || []).length);
+                                return;
+                            }
                             // Tab footers
                             $('#intReceivedTotal').text(rs(ft.rec[0] ?? 0));
                             $('#intReceivedTotalB').text(rs(ft.rec[1] ?? 0));
@@ -2676,6 +2793,7 @@
                     if (!$('#ledgerVoucherInterestWrap').hasClass('d-none')) {
                         filterModalTableRows('ledgerVoucherSearch', 'intReceivedBody');
                         filterModalTableRows('ledgerVoucherSearch', 'intPendingBody');
+                        filterModalTableRows('ledgerVoucherSearch', 'intMergedBody');
                         return;
                     }
                     let tbodyId = 'ledgerVoucherBody';
@@ -2829,19 +2947,48 @@
                 });
 
                 // ===== Bulk settlement modal open =====
-                function showBulkSettlementForm(type) {
-                    const modalId = type === 'received' ? 'receivedSettlementModal' : 'pendingSettlementModal';
-                    const inputId = type === 'received' ? 'receivedSettlementAmount' : 'pendingSettlementAmount';
+                let bulkMergedMode = false;
 
-                    const selector = type === 'received'
-                        ? '#intReceivedBody .received-invoice-checkbox:not(:disabled):checked'
-                        : '#intPendingBody .pending-invoice-checkbox:not(:disabled):checked';
+
+                // Selected checkboxes ka total interest (paise me sum, float error nahi)
+                function calcSelectedInterest(selector) {
+                    let paise = 0, count = 0;
+                    $(selector).each(function () {
+                        paise += Math.round((parseFloat($(this).attr('data-interest')) || 0) * 100);
+                        count++;
+                    });
+                    return { count: count, total: (paise / 100).toFixed(2) };
+                }
+
+                function fillBulkSummary(modalId, selector) {
+                    const s = calcSelectedInterest(selector);
+                    const $m = $('#' + modalId);
+                    $m.find('.bulk-sel-count').text(s.count);
+                    $m.find('.bulk-sel-total').text(fmtExact(s.total));
+                    // settlement amount total interest se zyada nahi ho sakta (controller bhi yehi check karta hai)
+                    $m.find('input[type="number"]').attr('max', s.total);
+                }
+
+                function showBulkSettlementForm(type) {
+                    bulkMergedMode = (type === 'merged');
+                    const modalId = (type === 'pending') ? 'pendingSettlementModal' : 'receivedSettlementModal';
+                    const inputId = (type === 'pending') ? 'pendingSettlementAmount' : 'receivedSettlementAmount';
+
+                    const selector = bulkMergedMode
+                        ? '#intMergedBody .merged-invoice-checkbox:not(:disabled):checked'
+                        : (type === 'received'
+                            ? '#intReceivedBody .received-invoice-checkbox:not(:disabled):checked'
+                            : '#intPendingBody .pending-invoice-checkbox:not(:disabled):checked');
 
                     if ($(selector).length === 0) {
                         alert('Please select at least one invoice.');
                         return;
                     }
 
+                    $('#receivedSettlementModal .modal-title').text(
+                        bulkMergedMode ? 'Interest Cost Invoices - Bulk Settlement' : 'Received Invoices - Bulk Settlement');
+
+                    fillBulkSummary(modalId, selector);
                     document.getElementById(inputId).value = '';
                     bootstrap.Modal.getOrCreateInstance(document.getElementById(modalId)).show();
                 }
@@ -2850,9 +2997,13 @@
                 $('#receivedSettlementForm').on('submit', function (e) {
                     e.preventDefault();
                     const amount = $('#receivedSettlementAmount').val();
-                    const invoiceIds = $('#intReceivedBody .received-invoice-checkbox:not(:disabled):checked').map(function () { return $(this).val(); }).get();
+                    const sel = bulkMergedMode
+                        ? '#intMergedBody .merged-invoice-checkbox:not(:disabled):checked'
+                        : '#intReceivedBody .received-invoice-checkbox:not(:disabled):checked';
+                    let invoiceIds = $(sel).map(function () { return $(this).val(); }).get();
+                    invoiceIds = [...new Set(invoiceIds)];
 
-                    saveBulkSettlementAmount(amount, invoiceIds, 'received', $(this));
+                    saveBulkSettlementAmount(amount, invoiceIds, bulkMergedMode ? 'all' : 'received', $(this));
                 });
 
                 $('#pendingSettlementForm').on('submit', function (e) {
@@ -2892,7 +3043,7 @@
                         },
                         success: function (res) {
                             if (res.success) {
-                                const modalId = type === 'received' ? 'receivedSettlementModal' : 'pendingSettlementModal';
+                                const modalId = type === 'pending' ? 'pendingSettlementModal' : 'receivedSettlementModal';
                                 bootstrap.Modal.getOrCreateInstance(document.getElementById(modalId)).hide();
                                 refreshInterestLists();
                             } else {
@@ -2975,5 +3126,43 @@
                         const parentEl = document.getElementById('ledgerVoucherModal');
                         bootstrap.Modal.getOrCreateInstance(parentEl).show();
                     });
+
+                    // ===== Interest Cost merged: filter => auto check =====
+                    function intCutoff(key) {
+                        const now = new Date();
+                        const y = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+                        const m = { mar: [y, 2, 31], jun: [y, 5, 30], sep: [y, 8, 30], dec: [y, 11, 31] }[key];
+                        return m ? new Date(m[0], m[1], m[2], 23, 59, 59) : null;
+                    }
+
+                    function updateMergedSelCount() {
+                        const sel = '#intMergedBody .merged-invoice-checkbox:not(:disabled):checked';
+                        const n = $(sel).length;
+                        const t = $('#intMergedBody .merged-invoice-checkbox:not(:disabled)').length;
+                        $('#intMergedSelCount').text(n);
+                        $('#intMergedSelTotal').text(fmtExact(calcSelectedInterest(sel).total));
+                        $('#selectAllMerged').prop('checked', t > 0 && t === n);
+                    }
+
+                    $(document).on('change', '#intMergeFilter', function () {
+                        const key = $(this).val();
+                        const cutoff = intCutoff(key);
+
+                        $('#intMergedBody .merged-invoice-checkbox:not(:disabled)').each(function () {
+                            let ok = (key === 'all');
+                            if (cutoff) {
+                                const d = $(this).attr('data-due');
+                                ok = !!d && new Date(d + 'T00:00:00') <= cutoff;
+                            }
+                            $(this).prop('checked', ok);
+                        });
+                        updateMergedSelCount();
+                    });
+
+                    $(document).on('change', '#selectAllMerged', function () {
+                        $('#intMergedBody .merged-invoice-checkbox:not(:disabled)').prop('checked', this.checked);
+                        updateMergedSelCount();
+                    });
+                    $(document).on('change', '.merged-invoice-checkbox', updateMergedSelCount);
             </script>
         </div>

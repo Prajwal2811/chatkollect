@@ -61,20 +61,13 @@
                     {{-- Step 2: Filters --}}
                     <div class="assign-bar mb-3">
                         <div class="row g-2 align-items-center">
-                            <div class="col-md-4">
+                            <div class="col-md-5">
                                 <div class="input-group input-group-sm">
                                     <span class="input-group-text"><i class="fa fa-search"></i></span>
                                     <input type="text" id="fSearch" class="form-control" placeholder="Search name / mobile / #id...">
                                 </div>
                             </div>
-                            <div class="col-md-2">
-                                <select id="fUnder" class="form-select form-select-sm">
-                                    <option value="">All Types</option>
-                                    <option value="Sundry Debtors">Sundry Debtors</option>
-                                    <option value="Sundry Creditors">Sundry Creditors</option>
-                                </select>
-                            </div>
-                            <div class="col-md-3">
+                            <div class="col-md-4">
                                 <select id="fAssign" class="form-select form-select-sm">
                                     <option value="">All Ledgers</option>
                                     <option value="unassigned">Unassigned only</option>
@@ -192,7 +185,6 @@
             const q        = ($('#fSearch').val() || '').toLowerCase().trim();
             const qDigits  = q.replace(/\D/g, '');
             const qId      = q.replace(/^#/, '');
-            const under    = $('#fUnder').val();
             const assign   = $('#fAssign').val();
             const selColl  = $('#collectorSelect').val();
 
@@ -209,7 +201,6 @@
                       || (qId && ($r.attr('data-uid') || '').indexOf(qId) !== -1)
                       || (qDigits && ($r.attr('data-mobile') || '').indexOf(qDigits) !== -1);
                 }
-                if (ok && under)  ok = $r.attr('data-under') === under;
                 if (ok && assign === 'unassigned') ok = (coll === ',,');
                 if (ok && assign === 'assigned')   ok = (coll !== ',,');
                 if (ok && assign === 'selected')   ok = selColl ? coll.indexOf(',' + selColl + ',') !== -1 : true;
@@ -225,9 +216,10 @@
         }
 
         $('#fSearch').on('input', applyFilters);
-        $('#fUnder, #fAssign, #collectorSelect').on('change', applyFilters);
+        $('#fAssign, #collectorSelect').on('change', applyFilters);
         $('#fReset').on('click', function () {
-            $('#fSearch').val(''); $('#fUnder').val(''); $('#fAssign').val('');
+            $('#fSearch').val('');
+            $('#fAssign').val('');
             applyFilters();
         });
 
