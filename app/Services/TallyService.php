@@ -38,7 +38,9 @@ class TallyService
         Log::info('Tally Request XML', ['xml' => $xml]);
 
         try {
-            $response = Http::timeout(120)
+            @set_time_limit(0);
+
+            $response = Http::timeout(600)
                 ->withHeaders(['Content-Type' => 'text/xml'])
                 ->withBody($xml, 'text/xml')
                 ->post($this->getTallyUrl());
