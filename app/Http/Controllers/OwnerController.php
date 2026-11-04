@@ -21,7 +21,7 @@ use App\Models\TallyCompany;
  
 use App\Models\TallyResponse;
 use App\Models\TallySolution;
-
+use App\Models\TallySettlementLog;
  
 use App\Models\Followup;
 use App\Models\FollowupLog;
@@ -2253,13 +2253,14 @@ class OwnerController extends Controller
     {
         $validated = $request->validate([
             'voucher_id'        => 'required|integer',
+            'company'           => 'required|string',   // NEW
+            'ledger'            => 'required|string',   // NEW
             'inv_no'            => 'nullable|string',
             'settlement_status' => 'required|in:settled',
             'settlement_amount' => 'required|numeric|min:0',
         ]);
 
-
-        $owner = auth('owner')->user();   // apna owner guard
+        $owner = auth('owner')->user();
         if (!$owner) {
             return response()->json([
                 'success' => false,
@@ -2267,15 +2268,21 @@ class OwnerController extends Controller
             ], 401);
         }
 
+        // Jis ledger ke modal se save ho raha hai uski id
+        $ledgerId = $this->resolveLedgerId($owner->id, $validated['company'], $validated['ledger']);
+        if (!$ledgerId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Ledger not found.',
+            ], 404);
+        }
 
-        return DB::transaction(function () use ($validated, $owner) {
-
+        return DB::transaction(function () use ($validated, $owner, $ledgerId) {
 
             $voucher = TallyVoucher::where('owner_id', $owner->id)
                 ->where('id', $validated['voucher_id'])
                 ->lockForUpdate()
                 ->first();
-
 
             if (!$voucher) {
                 throw ValidationException::withMessages([
@@ -2283,11 +2290,37 @@ class OwnerController extends Controller
                 ]);
             }
 
+            // ===== GUARD: voucher abhi bhi isi ledger ka hai aur voucher number wahi hai? =====
+            $invNoChanged = !empty($validated['inv_no'])
+                && (string) $validated['inv_no'] !== (string) $voucher->voucher_number;
+
+            if ((int) $voucher->ledger_id !== (int) $ledgerId || $invNoChanged) {
+                throw ValidationException::withMessages([
+                    'voucher_id' => ['This invoice is no longer under this ledger. Please reload the page.'],
+                ]);
+            }
 
             $voucher->settlement_status = $validated['settlement_status'];
             $voucher->settlement_amount = $validated['settlement_amount'];
             $voucher->save();
 
+            // ===== Settlement log (voucherId = voucher table ki id, ledger_id = verified ledger) =====
+            TallySettlementLog::create([
+                'voucherId'         => $voucher->id,
+                'master_id'         => $voucher->getAttribute('master_id'),
+                'unique_voucher_id' => $voucher->getAttribute('unique_voucher_id'),
+                'owner_id'          => $owner->id,
+                'tally_company_id'  => $voucher->getAttribute('tally_company_id'),
+                'ledger_id'         => $voucher->ledger_id,
+                'date'              => $voucher->getAttribute('date'),
+                'voucher_number'    => $voucher->getAttribute('voucher_number'),
+                'voucher_type'      => $voucher->getAttribute('voucher_type'),
+                'credit_period'     => $voucher->getAttribute('credit_period') ?? 0,
+                'due_date'          => $voucher->getAttribute('due_date'),
+                'interestDue'       => 0, // single flow me interest due request me nahi aata
+                'settlement_status' => $voucher->settlement_status,
+                'settlement_amount' => $voucher->settlement_amount,
+            ]);
 
             return response()->json([
                 'success' => true,
@@ -2303,17 +2336,105 @@ class OwnerController extends Controller
     }
 
 
+    // Is ledger ke naam par hui wo settlements jo ab voucher table se match nahi karti
+    // Log table + voucher table join karke is ledger ki mismatch settlements (dono taraf ka data ke saath)
+    public function ledgerMismatchSettlements(Request $request)
+    {
+        try {
+            $ownerId = Auth::guard('owner')->id();
+
+            $request->validate([
+                'company' => 'required|string',
+                'ledger'  => 'required|string',
+            ]);
+
+            $ledgerId = $this->resolveLedgerId($ownerId, $request->company, $request->ledger);
+            if (!$ledgerId) {
+                return response()->json(['message' => 'Ledger not found.'], 404);
+            }
+
+            $rows = DB::table('rms_tally_settlement_logs as s')
+                ->leftJoin('rms_tally_vouchers as v', 'v.id', '=', 's.voucherId')
+                ->leftJoin('rms_tally_ledgers as sl', 'sl.id', '=', 's.ledger_id')   // log wala ledger
+                ->leftJoin('rms_tally_ledgers as vl', 'vl.id', '=', 'v.ledger_id')   // voucher table wala ledger
+                ->where('s.owner_id', $ownerId)
+                ->where('s.ledger_id', $ledgerId)
+                ->where(function ($q) {
+                    // aapki SQL ka "Mismatch" condition
+                    $q->whereNull('v.id')
+                    ->orWhereColumn('s.voucher_number', '!=', 'v.voucher_number')
+                    ->orWhereColumn('s.ledger_id', '!=', 'v.ledger_id');
+                })
+                ->orderByDesc('s.id')
+                ->get([
+                    // ---- LOG TABLE ----
+                    's.id as log_id',
+                    's.voucherId',
+                    's.voucher_number as log_voucher_number',
+                    's.ledger_id as log_ledger_id',
+                    'sl.ledger_name as log_ledger_name',
+                    's.settlement_status as log_status',
+                    's.settlement_amount as log_amount',
+                    's.interestDue as interest_due',
+                    's.created_at as settled_on',
+                    // ---- VOUCHER TABLE ----
+                    'v.id as voucher_id',
+                    'v.voucher_number as vch_voucher_number',
+                    'v.ledger_id as vch_ledger_id',
+                    'vl.ledger_name as vch_ledger_name',
+                    'v.settlement_status as vch_status',
+                    'v.settlement_amount as vch_amount',
+                ])
+                ->map(function ($r) {
+                    $problems = [];
+
+                    if (!$r->voucher_id) {
+                        $problems[] = "Voucher #{$r->voucherId} voucher table me mila hi nahi";
+                    } else {
+                        if ((int) $r->log_ledger_id !== (int) $r->vch_ledger_id) {
+                            $problems[] = "Ledger mismatch: log me \"{$r->log_ledger_name}\" (#{$r->log_ledger_id}), "
+                                        . "voucher table me ab \"" . ($r->vch_ledger_name ?? '-') . "\" (#{$r->vch_ledger_id})";
+                        }
+                        if ((string) $r->log_voucher_number !== (string) $r->vch_voucher_number) {
+                            $problems[] = "Voucher no mismatch: log me \"{$r->log_voucher_number}\", "
+                                        . "voucher table me \"{$r->vch_voucher_number}\"";
+                        }
+                    }
+
+                    $r->match_status = 'Mismatch';
+                    $r->message      = implode(' | ', $problems);
+                    return $r;
+                })
+                ->values();
+
+            return response()->json([
+                'count' => $rows->count(),
+                'rows'  => $rows,
+            ]);
+
+        } catch (ValidationException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('Tally ledgerMismatchSettlements failed', [
+                'company' => $request->company,
+                'ledger'  => $request->ledger,
+                'error'   => $e->getMessage(),
+            ]);
+            return response()->json(['message' => 'Unable to fetch mismatch settlements.'], 500);
+        }
+    }
 
     public function saveBulkLedgerSettlement(Request $request)
     {
         $validated = $request->validate([
             'settlement_status' => 'required|in:settled',
             'settlement_amount' => 'required|numeric|gt:0',
+            'company'           => 'required|string',   // NEW
+            'ledger'            => 'required|string',   // NEW
             'invoice_ids'       => 'required|array|min:1',
             'invoice_ids.*'     => 'required|integer|distinct|exists:rms_tally_vouchers,id',
             'type'              => 'required|in:received,pending,all',
         ]);
-
 
         $owner = auth('owner')->user();
         if (!$owner) {
@@ -2324,26 +2445,39 @@ class OwnerController extends Controller
         }
         $ownerId = $owner->id;
 
+        // Jis ledger ke modal se save ho raha hai uski id
+        $ledgerId = $this->resolveLedgerId($ownerId, $validated['company'], $validated['ledger']);
+        if (!$ledgerId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Ledger not found.',
+            ], 404);
+        }
 
-        // Sirf is owner ke vouchers allowed
-        $ownedCount = TallyVoucher::where('owner_id', $ownerId)
+        // Sirf is owner ke vouchers (log ke liye keyBy bhi yahin se)
+        $vouchersById = TallyVoucher::where('owner_id', $ownerId)
             ->whereIn('id', $validated['invoice_ids'])
-            ->count();
+            ->get()
+            ->keyBy('id');
 
-
-        if ($ownedCount !== count($validated['invoice_ids'])) {
+        if ($vouchersById->count() !== count($validated['invoice_ids'])) {
             return response()->json([
                 'success' => false,
                 'message' => 'Invalid vouchers selected.',
             ], 403);
         }
 
+        // ===== GUARD: saare vouchers abhi bhi isi ledger ke hain? =====
+        if ($vouchersById->contains(fn($v) => (int) $v->ledger_id !== (int) $ledgerId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Some invoices are no longer under this ledger. Please reload the page.',
+            ], 422);
+        }
 
-        return DB::transaction(function () use ($validated, $ownerId) {
-
+        return DB::transaction(function () use ($validated, $ownerId, $vouchersById) {
 
             $data = $this->interestDataForVouchers($validated['invoice_ids'], $ownerId);
-
 
             $list = match ($validated['type']) {
                 'received' => collect($data['received'] ?? []),
@@ -2351,12 +2485,10 @@ class OwnerController extends Controller
                 default    => collect($data['received'] ?? [])->merge($data['pending'] ?? []),
             };
 
-
             $filtered = $list
                 ->whereIn('id', $validated['invoice_ids'])
                 ->values()
                 ->all();
-
 
             if (empty($filtered)) {
                 return response()->json([
@@ -2365,15 +2497,12 @@ class OwnerController extends Controller
                 ], 422);
             }
 
-
             $interestTotal = collect($filtered)->reduce(
                 fn ($t, $r) => bcadd($t, (string) $r['interest_due'], 2),
                 '0'
             );
             $receivedTotal = (string) $validated['settlement_amount'];
 
-
-            // Optional: settlement amount selected invoices ke interest se zyada na ho
             if (bccomp($receivedTotal, $interestTotal, 2) > 0) {
                 return response()->json([
                     'success' => false,
@@ -2381,31 +2510,34 @@ class OwnerController extends Controller
                 ], 422);
             }
 
-
-            // Proportional split
-            $allocations = [];
-            $allocated   = '0';
-
+            // ===== Proportional split (voucher id ke hisaab se) =====
+            $allocations  = [];   // id => settlement amount
+            $interestById = [];   // id => us voucher ka total interest due (log ke liye)
+            $dueDateById  = [];   // id => due_date (log ke liye)
+            $allocated    = '0';
 
             foreach ($filtered as $record) {
+                $id = $record['id'];
+
                 $collected = bccomp($interestTotal, '0', 2) > 0
                     ? bcmul(bcdiv((string) $record['interest_due'], $interestTotal, 8), $receivedTotal, 2)
                     : '0.00';
 
+                $allocations[$id]  = bcadd($allocations[$id] ?? '0', $collected, 2);
+                $interestById[$id] = bcadd($interestById[$id] ?? '0', (string) $record['interest_due'], 2);
+                $dueDateById[$id]  = $dueDateById[$id] ?? ($record['due_date'] ?? null);
 
-                $allocations[$record['id']] = bcadd($allocations[$record['id']] ?? '0', $collected, 2);
                 $allocated = bcadd($allocated, $collected, 2);
             }
 
-
-            // Rounding ka farq (paise) last invoice mein adjust
+            // Rounding ka farq (paise) last invoice me adjust
             $diff = bcsub($receivedTotal, $allocated, 2);
             if (bccomp($diff, '0', 2) !== 0) {
                 $lastId = array_key_last($allocations);
                 $allocations[$lastId] = bcadd($allocations[$lastId], $diff, 2);
             }
 
-
+            // ===== Voucher update + Settlement log =====
             foreach ($allocations as $id => $amount) {
                 TallyVoucher::where('owner_id', $ownerId)
                     ->where('id', $id)
@@ -2413,8 +2545,26 @@ class OwnerController extends Controller
                         'settlement_amount' => $amount,
                         'settlement_status' => 'settled',
                     ]);
-            }
 
+                $voucher = $vouchersById->get($id);
+
+                TallySettlementLog::create([
+                    'voucherId'         => $id,   // voucher table ki id
+                    'master_id'         => $voucher?->getAttribute('master_id'),
+                    'unique_voucher_id' => $voucher?->getAttribute('unique_voucher_id'),
+                    'owner_id'          => $ownerId,
+                    'tally_company_id'  => $voucher?->getAttribute('tally_company_id'),
+                    'ledger_id'         => $voucher?->getAttribute('ledger_id'),
+                    'date'              => $voucher?->getAttribute('date'),
+                    'voucher_number'    => $voucher?->getAttribute('voucher_number'),
+                    'voucher_type'      => $voucher?->getAttribute('voucher_type'),
+                    'credit_period'     => $voucher?->getAttribute('credit_period') ?? 0,
+                    'due_date'          => $dueDateById[$id] ?? null,
+                    'interestDue'       => $interestById[$id],
+                    'settlement_status' => 'settled',
+                    'settlement_amount' => $amount,
+                ]);
+            }
 
             return response()->json([
                 'success'       => true,
@@ -2433,34 +2583,70 @@ class OwnerController extends Controller
     
 
 
+    // company naam + ledger naam se is owner ka ledger id nikalta hai (nahi mila to null)
+    private function resolveLedgerId(int $ownerId, string $companyName, string $ledgerName): ?int
+    {
+        $companyId = TallyCompany::where('owner_id', $ownerId)
+            ->where('company_name', $companyName)
+            ->value('id');
+
+        if (!$companyId) {
+            return null;
+        }
+
+        $ledgerId = TallyLedger::where('owner_id', $ownerId)
+            ->where('tally_company_id', $companyId)
+            ->where('ledger_name', $ledgerName)
+            ->value('id');
+
+        return $ledgerId ? (int) $ledgerId : null;
+    }
     
     // naya helper: raw classified rows
     // $ownerId = owner ki id, $tallyCompany = TallyCompany model, $ledgerModel = TallyLedger model
+    // $ownerId = owner ki id, $tallyCompany = TallyCompany model, $ledgerModel = TallyLedger model
     private function getLedgerVoucherRows(int $ownerId, $tallyCompany, $ledgerModel)
     {
-        // Voucher type -> mapped type ka dictionary, e.g. ["Sales GST" => "Sales"]
-        // classifyVoucherRow ko ye chahiye, taaki wo Sales/Purchase pehchan sake
+        // Voucher type -> mapped type dictionary
         $voucherMappings = VoucherMapping::where('company', $tallyCompany->company_name)
             ->pluck('mapped_to', 'voucher_type')
             ->toArray();
 
-        return TallyVoucher::where('owner_id', $ownerId)                  // sirf is owner ke vouchers
-            ->where('tally_company_id', $tallyCompany->id)               // sirf is company ke
-            ->where('ledger_id', $ledgerModel->id)                       // sirf is ledger ke
-            ->get()                                                      // saare vouchers collection me
-            ->map(fn($v) => $this->classifyVoucherRow($v, $ledgerModel->parent, $voucherMappings) + [
-                // classifyVoucherRow se aaya array (date, debit, credit, mapped_type...) + neeche ki extra fields
+        // Is ledger ke saare vouchers
+        $vouchers = TallyVoucher::where('owner_id', $ownerId)
+            ->where('tally_company_id', $tallyCompany->id)
+            ->where('ledger_id', $ledgerModel->id)
+            ->get();
 
-                'id' => $v->id,                                          // voucher ka DB id
-                'due_date' => $v->due_date ?? null,                      // voucher me saved due date, na ho to null
-                'voucher_number' => $v->voucher_number,                  // invoice/voucher number
-                'credit_period' => $v->credit_period,                    // voucher ka apna credit period (agar set hai)
-                'credit_period_source' => $v->credit_period_source,      // wo kahan se aaya: 'voucher' / 'tally' / etc.
+        // In vouchers ki settlement logs (kisi bhi ledger ki), purani se nayi.
+        // keyBy me baad wali row purani ko overwrite karti hai => har voucher ki LATEST log milti hai
+        $latestLogByVoucher = TallySettlementLog::where('owner_id', $ownerId)
+            ->whereIn('voucherId', $vouchers->pluck('id'))
+            ->orderBy('id')
+            ->get(['voucherId', 'voucher_number', 'ledger_id'])
+            ->keyBy('voucherId');
 
-                // Settlement fields (interest me chhoot wali info)
-                'settlement_status'    => $v->settlement_status ?? null,             // 'settled' ya null
-                'settlement_amount'    => (string) ($v->settlement_amount ?? '0'),   // settlement amount string me, na ho to '0'
-            ]);
+        return $vouchers->map(function ($v) use ($ledgerModel, $voucherMappings, $latestLogByVoucher) {
+
+            $log = $latestLogByVoucher->get($v->id);
+
+            // MATCH = latest settlement isi voucher id + isi voucher number + isi ledger ke naam par hui thi
+            $match = $log
+                && (int) $log->ledger_id === (int) $ledgerModel->id
+                && (string) $log->voucher_number === (string) $v->voucher_number;
+
+            return $this->classifyVoucherRow($v, $ledgerModel->parent, $voucherMappings) + [
+                'id'                   => $v->id,
+                'due_date'             => $v->due_date ?? null,
+                'voucher_number'       => $v->voucher_number,
+                'credit_period'        => $v->credit_period,
+                'credit_period_source' => $v->credit_period_source,
+
+                // Match nahi to settlement is ledger ke liye hai hi nahi (null / 0)
+                'settlement_status'    => $match ? ($v->settlement_status ?? null) : null,
+                'settlement_amount'    => $match ? (string) ($v->settlement_amount ?? '0') : '0',
+            ];
+        });
     }
 
     // purana method ab helper use karega

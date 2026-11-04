@@ -4034,6 +4034,7 @@ class AccountantController extends Controller
             'type'              => 'required|in:received,pending',
         ]);
 
+        
         $accountant = auth('accountant')->user();
 
         if (!$accountant || !$accountant->owner_id) {
@@ -4078,7 +4079,8 @@ class AccountantController extends Controller
                 // Get the pending records
                 $received = collect($data['pending'] ?? []);
             }
-//print_R($received);exit ;
+            
+            //print_R($received);exit ;
             // Get selected invoice IDs
             $invoiceIds = $validated['invoice_ids'];
 

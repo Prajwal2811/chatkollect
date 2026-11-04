@@ -768,9 +768,43 @@
                                     <!-- ===== INTEREST COST table ===== -->
                                     <div class="table-responsive d-none" id="ledgerVoucherInterestWrap" style="max-height: 55vh; overflow: auto;">
 
-                                        <div class="d-flex gap-4 small mb-2">
-                                            <span>Rate Of Interest: <strong id="intPartyRate">-</strong></span>
-                                            <span>Base Rate Of Interest: <strong id="intBaseRate">-</strong></span>
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <div class="d-flex gap-4 small">
+                                                <span>Rate Of Interest: <strong id="intPartyRate">-</strong></span>
+                                                <span>Base Rate Of Interest: <strong id="intBaseRate">-</strong></span>
+                                            </div>
+                                            <button type="button" id="intMismatchBtn" class="btn btn-outline-danger btn-sm d-none">
+                                                <i class="fa fa-exclamation-triangle me-1"></i> Mismatch Settlements
+                                                <span class="badge bg-danger ms-1" id="intMismatchCount">0</span>
+                                            </button>
+                                        </div>
+
+                                        <!-- Mismatch panel -->
+                                        <div id="intMismatchWrap" class="d-none mb-3">
+                                            <div class="alert alert-warning py-2 small mb-2">
+                                                These settlements were saved under this ledger, but the invoice no longer matches
+                                                (moved to another ledger / number changed). They are <strong>not counted</strong> here.
+                                            </div>
+                                            <div class="table-responsive" style="max-height: 40vh; overflow:auto;">
+                                                <table class="table table-bordered table-sm align-middle mb-0 text-end">
+                                                    <thead style="position: sticky; top: 0; background: #fff; z-index: 1;">
+                                                        <tr>
+                                                            <th rowspan="2" class="text-start">Log #</th>
+                                                            <th colspan="3" class="text-center table-primary">Settlement Log</th>
+                                                            <th colspan="2" class="text-center table-secondary">Voucher Table (now)</th>
+                                                            <th rowspan="2" class="text-center">Match</th>
+                                                        </tr>
+                                                        <tr>
+                                                            <th class="text-start table-primary">Inv No</th>
+                                                            <th class="table-primary">Settlement Amt</th>
+                                                            <th class="table-primary">Settled On</th>
+                                                            <th class="text-start table-secondary">Ledger</th>
+                                                            <th class="table-secondary">Settlement Amt</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody id="intMismatchBody"></tbody>
+                                                </table>
+                                            </div>
                                         </div>
                                         <!-- Summary (single table) -->
                                         <table class="table table-bordered text-center align-middle mb-3 int-summary-table">
@@ -1781,6 +1815,7 @@
                 // ===== INTEREST modal: field ke hisaab se columns (Party + Base[grey]) =====
                 function renderInterestData(ledger, under, field = 'Interest Cost', token) {
                     currentInterestCtx = { ledger, under, field };
+                    loadMismatchSettlements(ledger);
                     const amt = n => (n === null || n === undefined || n === '') ? '-' : fmtExact(n);
                     const rs  = n => '₹ ' + amt(n);
                     const num = v => parseFloat(String(v ?? 0).replace(/,/g, '')) || 0;
@@ -2926,6 +2961,8 @@
                         dataType: "json",
                         data: {
                             _token: "{{ csrf_token() }}",
+                            company: currentCompanyName,            // NEW
+                            ledger: currentInterestCtx.ledger,      // NEW
                             voucher_id: voucherId,
                             inv_no: invNo,
                             settlement_status: 'settled',
@@ -3033,6 +3070,8 @@
                         dataType: "json",
                         data: {
                             _token: "{{ csrf_token() }}",
+                            company: currentCompanyName,            // NEW
+                            ledger: currentInterestCtx.ledger,      // NEW
                             settlement_amount: amount,
                             settlement_status: 'settled',
                             type: type,
@@ -3164,5 +3203,60 @@
                         updateMergedSelCount();
                     });
                     $(document).on('change', '.merged-invoice-checkbox', updateMergedSelCount);
+
+                    // ===== Mismatch settlements (log vs voucher table) =====
+                    function loadMismatchSettlements(ledger) {
+                        $('#intMismatchBtn').addClass('d-none');
+                        $('#intMismatchWrap').addClass('d-none');
+                        $('#intMismatchCount').text(0);
+                        $('#intMismatchBody').empty();
+
+                        $.ajax({
+                            url: "{{ route('owner.tally.ledger.mismatch-settlements') }}",
+                            method: "GET",
+                            dataType: "json",
+                            data: { company: currentCompanyName, ledger: ledger },
+                            success: function (res) {
+                                // modal kisi aur ledger par chala gaya ho to ignore
+                                if (currentInterestCtx.ledger !== ledger) return;
+
+                                const rows = res.rows || [];
+                                $('#intMismatchCount').text(rows.length);
+                                if (!rows.length) return;
+
+                                const fmtD = d => {
+                                    if (!d) return '-';
+                                    const o = new Date(d);
+                                    return isNaN(o.getTime()) ? escHtml(d) : fmtDateShared(o);
+                                };
+
+                                $('#intMismatchBody').html(rows.map(r => {
+                                    const same = (a, b) => String(a ?? '') === String(b ?? '');
+                                    const invBad    = !r.voucher_id || !same(r.log_voucher_number, r.vch_voucher_number);
+                                    const ledgerBad = !r.voucher_id || !same(r.log_ledger_id, r.vch_ledger_id);
+                                    const bad = 'text-danger fw-bold';
+
+                                    return `<tr>
+                                        <td class="text-start">#${escHtml(r.log_id)}</td>
+                                        <td class="text-start">${escHtml(r.log_voucher_number ?? '-')}</td>
+                                        <td class="fw-bold">₹ ${fmtExact(r.log_amount ?? 0)}</td>
+                                        <td>${fmtD(r.settled_on)}</td>
+
+                                        <td class="text-start ${ledgerBad ? bad : ''}">${r.voucher_id ? escHtml(r.vch_ledger_name ?? '-') : '-'}</td>
+                                        <td>${r.voucher_id ? '₹ ' + fmtExact(r.vch_amount ?? 0) : '-'}</td>
+
+                                        <td class="text-center"><span class="badge bg-danger">${escHtml(r.match_status)}</span></td>
+                                    </tr>`;
+                                }).join(''));
+
+                                $('#intMismatchBtn').removeClass('d-none');
+                            }
+                            // error par button hidden hi rahega
+                        });
+                    }
+
+                    $(document).on('click', '#intMismatchBtn', function () {
+                        $('#intMismatchWrap').toggleClass('d-none');
+                    });
             </script>
         </div>

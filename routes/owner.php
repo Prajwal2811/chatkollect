@@ -110,6 +110,10 @@ Route::prefix('owner')->middleware(['auth:owner', 'owner.subscription'])->group(
 
         Route::post('/tally/ledger/save-bulk-settlement', [OwnerController::class, 'saveBulkLedgerSettlement'])->name('owner.tally.ledger.save-bulk-settlement');
 
+        Route::get('/ledger/mismatch-settlements', [OwnerController::class, 'ledgerMismatchSettlements'])->name('owner.tally.ledger.mismatch-settlements');
+
+
+
         // Followup Actions
         Route::get( '/tally/company/{company}/followup-action/telecaller', [OwnerController::class, 'telecaller'])->name('owner.tally.company.followup-action.telecaller');
 
