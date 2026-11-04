@@ -3997,6 +3997,9 @@ class AccountantController extends Controller
                 ->lockForUpdate()
                 ->first();
 
+                
+            
+
             if (!$voucher) {
                 throw ValidationException::withMessages([
                     'voucher_id' => [
@@ -4010,6 +4013,38 @@ class AccountantController extends Controller
             $voucher->settlement_amount = $validated['settlement_amount'];
             $voucher->save();
 
+            $now     = now();
+            $logRows[] = [
+                'voucherId'         => $voucher->voucher_id ?? $validated['voucher_id'],
+                'master_id'         => $voucher->master_id,
+                'unique_voucher_id' => $voucher->unique_voucher_id,
+                'owner_id'          => $ownerId,
+                'tally_company_id'  => $voucher->tally_company_id,
+                'ledger_id'         => $voucher->ledger_id,
+                'date'              => $voucher->date ,
+                'voucher_number'    => $voucher->voucher_number ,
+                'voucher_type'      => $voucher->voucher_type,
+                'credit_period'     => $voucher->credit_period ?? 0,
+                'due_date'          => $voucher->due_date ?? null,
+                'interestDue'       => $interestDue ?? '0.00',
+                'settlement_status' => 'settled',
+                'settlement_amount' => $validated['settlement_amount'],
+                'created_at'        => $now,
+                'updated_at'        => $now,
+            ];
+
+            // $interestCollected[] = [
+            //     'id' => $record['id'],
+            //     'interest_due' => $interestDue,
+            //     'interest_collected' => $collected,
+            // ];
+            
+
+            // Save all log rows in one insert. It runs inside the same transaction,
+            // so if anything fails, both the voucher updates and the logs are rolled back.
+            if (!empty($logRows)) {
+                DB::table('rms_tally_settlement_logs')->insert($logRows);
+            }
             return response()->json([
                 'success' => true,
                 'message' => 'Settlement saved successfully.',

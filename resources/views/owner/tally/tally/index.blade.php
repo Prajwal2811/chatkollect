@@ -1095,7 +1095,6 @@
 						},
 
 						success: function (response) {
-
 							// Stop fake progress
 							clearInterval(progressInterval);
 
